@@ -1,0 +1,101 @@
+worker_processes  auto;
+
+events {
+    worker_connections  1024;
+    use epoll;
+    multi_accept on;
+}
+http {
+
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    # Log format
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log  /dev/stdout  main;
+	error_log   stderr debug;
+
+    sendfile        on;
+    tcp_nopush      on;
+    tcp_nodelay     on;
+    keepalive_timeout  65;
+
+    aws_auth $aws_token {
+        access_key ${AWS_ACCESS_KEY};
+        secret_key ${AWS_SECRET_KEY};
+        service s3;
+        region ${AWS_REGION};
+    }
+
+    secure_token_akamai $token {
+		key ${VOD_TOKEN_SECRET};
+        acl "$secure_token_baseuri_comma*";
+	}
+
+    upstream jsonupstream {
+        server ${API_UPSTREAM_HOST};
+    }
+
+    server {
+        vod_mode mapped;
+        vod_max_mapping_response_size 2k;
+
+        vod_upstream_location /json;
+        vod_remote_upstream_location /proxy/;
+        vod_last_modified 'Sun, 19 Nov 2000 08:52:00 GMT';
+        vod_last_modified_types *;
+
+        vod_segment_duration ${VOD_SEGMENT_DURATION};
+        vod_align_segments_to_key_frames on;
+        vod_manifest_segment_durations_mode accurate;
+
+        vod_metadata_cache metadata_cache ${VOD_METADATA_CACHE_SIZE};
+        vod_response_cache response_cache ${VOD_RESPONSE_CACHE_SIZE};
+        vod_mapping_cache mapping_cache ${VOD_MAPPING_CACHE_SIZE};
+
+        gzip on;
+        gzip_types application/vnd.apple.mpegurl;
+
+        open_file_cache	  max=1000 inactive=5m;
+        open_file_cache_valid    2m;
+        open_file_cache_min_uses 1;
+        open_file_cache_errors   on;
+        aio on;
+
+        location ^~ /json/hls/ {
+            internal;
+            proxy_pass http://jsonupstream/api/vod/config/;
+            proxy_set_header Host $http_host;
+        }
+
+        location /proxy/ {
+            proxy_pass ${S3_PROXY_URL}/${S3_BUCKET_NAME}/;
+            proxy_set_header X-Amz-Date $aws_auth_date;
+            proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
+            proxy_set_header Authorization $aws_token;
+        }
+
+        location ~ ^/hls/ {
+            vod hls;
+
+            secure_token $token;
+			secure_token_types application/vnd.apple.mpegurl video/mp2t;
+
+            secure_token_expires_time ${SECURE_TOKEN_EXPIRES_TIME};
+			secure_token_query_token_expires_time ${SECURE_TOKEN_QUERY_EXPIRES_TIME};
+
+
+			akamai_token_validate $arg___hdnea__;
+			akamai_token_validate_key ${VOD_TOKEN_SECRET};
+
+            add_header Access-Control-Allow-Headers '*';
+            add_header Access-Control-Expose-Headers 'Server,range,Content-Length,Content-Range';
+            add_header Access-Control-Allow-Methods 'GET, HEAD, OPTIONS';
+            add_header Access-Control-Allow-Origin '*';
+        }
+
+    }
+}

@@ -1,0 +1,49 @@
+services:
+  nukevideo-api:
+    image: nukevideo
+    build:
+      context: .
+    profiles:
+      - api
+    volumes:
+      - ./:/var/www/html
+
+  nukevideo-queue:
+    image: nukevideo
+    command: "php artisan horizon -n"
+    restart: unless-stopped
+    profiles:
+      - api
+    volumes:
+      - ".:/var/www/html"
+
+  nukevideo-worker:
+    image: nukevideo-worker
+    build:
+      context: .
+    command: ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
+    stop_signal: SIGTERM
+    profiles:
+      - worker
+    healthcheck:
+      test: ["CMD", "healthcheck-queue"]
+      start_period: 10s
+    volumes:
+      - ./:/var/www/html
+      - shared-storage:/var/www/html/storage/shared
+  nukevideo-cdn:
+    image: nukevideo-cdn
+    build:
+      context: ./vod
+    env_file:
+      - ./vod/.env
+    profiles:
+      - cdn
+volumes:
+  shared-storage:
+    driver: local
+
+networks:
+  default:
+    external: true
+    name: local
