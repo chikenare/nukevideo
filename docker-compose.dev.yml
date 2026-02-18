@@ -3,8 +3,6 @@ services:
     image: nukevideo
     build:
       context: .
-    profiles:
-      - api
     volumes:
       - ./:/var/www/html
 
@@ -12,8 +10,6 @@ services:
     image: nukevideo
     command: "php artisan horizon -n"
     restart: unless-stopped
-    profiles:
-      - api
     volumes:
       - ".:/var/www/html"
 
@@ -23,8 +19,6 @@ services:
       context: .
     command: ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
     stop_signal: SIGTERM
-    profiles:
-      - worker
     healthcheck:
       test: ["CMD", "healthcheck-queue"]
       start_period: 10s
@@ -37,10 +31,37 @@ services:
       context: ./vod
     env_file:
       - ./vod/.env
-    profiles:
-      - cdn
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE}
+      MARIADB_USER: ${DB_USERNAME}
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    volumes:
+      - rustfs-data:/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
 volumes:
   shared-storage:
+    driver: local
+  mariadb-data:
+    driver: local
+  rustfs-data:
+    driver: local
+  redis-data:
     driver: local
 
 networks:
