@@ -14,11 +14,9 @@ function getXsrfToken(): Record<string, string> {
 }
 
 export const useUploadStore = defineStore('upload', () => {
-  // State
   const files = ref<FileUpload[]>([])
   const selectedTemplate = ref<string>('')
 
-  // Initialize Uppy instance
   const uppy = new Uppy<Meta, AwsBody>({
     debug: true,
     autoProceed: false,
@@ -26,11 +24,6 @@ export const useUploadStore = defineStore('upload', () => {
     endpoint: import.meta.env.VITE_URL_API,
     headers: getXsrfToken(),
     cookiesRule: 'include',
-  })
-
-  // Uppy event listeners
-  uppy.on('file-added', (uppyFile) => {
-    console.log('Uppy file added:', uppyFile.id)
   })
 
   uppy.on('upload-progress', (uppyFile, progress) => {
@@ -56,11 +49,9 @@ export const useUploadStore = defineStore('upload', () => {
     }
   })
 
-  // Computed
   const hasFiles = computed(() => files.value.length > 0)
   const isUploading = computed(() => files.value.some(f => f.progress > 0 && f.progress < 100))
 
-  // Actions
   function addFiles(newFiles: FileUpload[]) {
     files.value.push(...newFiles)
   }
@@ -79,7 +70,6 @@ export const useUploadStore = defineStore('upload', () => {
   }
 
   function startUpload() {
-    // Add all pending files to Uppy
     files.value.forEach(file => {
       if (!file.uppyFileId && file.status === 'pending') {
         const uppyFileId = uppy.addFile({
@@ -97,7 +87,6 @@ export const useUploadStore = defineStore('upload', () => {
       }
     })
 
-    // Start the upload
     uppy.upload()
   }
 
