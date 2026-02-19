@@ -6,18 +6,37 @@ services:
     volumes:
       - ./:/var/www/html
 
-  nukevideo-queue:
+  nukevideo-schedule:
     image: nukevideo
-    command: "php artisan horizon -n"
-    restart: unless-stopped
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      start_period: 10s
     volumes:
       - ".:/var/www/html"
 
+  nukevideo-horizon:
+    image: nukevideo
+    command: ["php", "/var/www/html/artisan", "horizon"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-horizon"]
+      start_period: 10s
+    volumes:
+      - ".:/var/www/html"
   nukevideo-worker:
     image: nukevideo-worker
     build:
       context: .
-    command: ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
+    command:
+      [
+        "php",
+        "/var/www/html/artisan",
+        "queue:work",
+        "--queue=streams",
+        "--timeout=3200",
+      ]
     stop_signal: SIGTERM
     healthcheck:
       test: ["CMD", "healthcheck-queue"]
