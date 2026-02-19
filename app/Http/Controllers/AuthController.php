@@ -40,7 +40,7 @@ class AuthController extends Controller
             'password' => 'required',
         ]);
 
-        if (! Auth::attempt($validated)) {
+        if (! Auth::attempt($validated, true)) {
             throw ValidationException::withMessages([
                 'email' => ['The provided credentials do not match our records.'],
             ]);
