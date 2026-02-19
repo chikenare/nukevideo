@@ -79,9 +79,6 @@ export const useUploadStore = defineStore('upload', () => {
   }
 
   function startUpload() {
-    // Update XSRF token before each upload
-    uppy.getPlugin('AwsS3Multipart')!.setOptions({ headers: getXsrfToken() })
-
     // Add all pending files to Uppy
     files.value.forEach(file => {
       if (!file.uppyFileId && file.status === 'pending') {
