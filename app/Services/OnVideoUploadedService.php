@@ -36,7 +36,7 @@ class OnVideoUploadedService
      * eTag: string,
      * contentType: string,
      * userMetadata: array{
-     * "X-Amz-Meta-User-Uuid": string,
+     * "X-Amz-Meta-User": string,
      * "X-Amz-Meta-Template": string,
      * "X-Amz-Meta-Filename": string,
      * "content-disposition": string,
@@ -59,6 +59,8 @@ class OnVideoUploadedService
         $outputFormat = $template->query['output_format'] ?? 'hls';
         $isMuxed = in_array($outputFormat, ['mp4', 'mkv']);
 
+        $filename = $object['userMetadata']['X-Amz-Meta-Filename'] ?? $object['userMetadata']['filename'];
+
         DB::beginTransaction();
 
         try {
@@ -72,7 +74,7 @@ class OnVideoUploadedService
                 'user_id' => $user->id,
                 'template_id' => $template->id,
                 'node_id' => $node->id,
-                'name' => $object['userMetadata']['X-Amz-Meta-Filename'],
+                'name' => $filename,
                 'duration' => $mediaInfo['duration'],
                 'aspect_ratio' => $mediaInfo['aspectRatio'],
                 'output_format' => $outputFormat,
@@ -112,14 +114,14 @@ class OnVideoUploadedService
 
     private function resolveUserAndTemplate(array $metadata): array
     {
-        $userUuid = $metadata['X-Amz-Meta-User-Uuid'];
+        $userUuid = $metadata['X-Amz-Meta-User'] ?? $metadata['user'];
         $user = User::where('uuid', $userUuid)->first();
 
         if (!$user) {
             throw new Exception("User with uuid $userUuid not found");
         }
 
-        $templateUlid = $metadata['X-Amz-Meta-Template'];
+        $templateUlid = $metadata['X-Amz-Meta-Template'] ?? $metadata['template'];
         $template = $user->templates()->where('ulid', $templateUlid)->first();
 
         if (!$template) {

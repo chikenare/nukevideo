@@ -12,11 +12,13 @@ class VideoWebhookController extends Controller
      */
     public function handle(Request $request)
     {
-        $records = $request->json('Records');
+        if ($request->json('EventName') == 's3:ObjectCreated:CompleteMultipartUpload') {
+            $records = $request->json('Records');
 
-        foreach ($records as $record) {
-            $object = $record['s3']['object'];
-            OnVideoUploaded::dispatch($object);
+            foreach ($records as $record) {
+                $object = $record['s3']['object'];
+                OnVideoUploaded::dispatch($object);
+            }
         }
 
         return response()->noContent();

@@ -31,7 +31,7 @@ class OnVideoUploaded implements ShouldQueue
 
         Log::critical('Video upload job failed permanently after all retries', [
             'file_path' => $key,
-            'user_uuid' => $this->object['userMetadata']['X-Amz-Meta-User-Uuid'] ?? null,
+            'user_uuid' => $this->object['userMetadata']['X-Amz-Meta-User'] ?? null,
             'template_ulid' => $this->object['userMetadata']['X-Amz-Meta-Template'] ?? null,
             'error' => $exception->getMessage(),
             'attempts' => $this->attempts()

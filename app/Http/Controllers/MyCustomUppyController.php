@@ -71,7 +71,7 @@ class MyCustomUppyController extends UppyS3MultipartController
             'method' => 'PUT',
             'url' => (string) $signedRequest->getUri(),
             'headers' => [
-                'X-Amz-Meta-User-Uuid' => $request->user()->uuid,
+                'X-Amz-Meta-User' => $request->user()->uuid,
                 'X-Amz-Meta-Template' => $template,
                 'X-Amz-Meta-Filename' => $request->query('x-amz-meta-Filename') ?? $request->input('filename'),
                 'Content-Type' => $type
@@ -83,7 +83,7 @@ class MyCustomUppyController extends UppyS3MultipartController
     private function buildMetadata(Request $request)
     {
         return [
-            'User-Uuid' => $request->user()->uuid,
+            'User' => $request->user()->uuid,
             'Template' => $request->input('metadata.template'),
             'Filename' => $request->query('x-amz-meta-Filename') ?? $request->input('filename')
         ];
