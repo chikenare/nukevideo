@@ -12,7 +12,7 @@ return new class extends Migration {
     {
         Schema::create('nodes', function (Blueprint $table) {
             $table->id();
-            $table->string('name')->unique();
+            $table->string('name');
             $table->string('container_id')->nullable();
             $table->string('host')->nullable();
             $table->string('type')->default('worker');
