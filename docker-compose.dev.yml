@@ -50,7 +50,7 @@ services:
     image: nukevideo
     build:
       context: .
-    command: ["sh", "-c", "while true; do php /var/www/html/artisan workers:sync; sleep 60; done"]
+    command: ["sh", "-c", "while true; do php /var/www/html/artisan nodes:sync; sleep 60; done"]
     user: root
     volumes:
       - ./:/var/www/html

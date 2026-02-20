@@ -6,11 +6,11 @@ use App\Models\Node;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Process;
 
-class SyncNode extends Command
+class SyncNodes extends Command
 {
-    protected $signature = 'node:sync';
+    protected $signature = 'nodes:sync';
 
-    protected $description = 'Sync node information and metrics from Docker containers';
+    protected $description = 'Sync nodes information and metrics from Docker containers';
 
     public function handle()
     {
