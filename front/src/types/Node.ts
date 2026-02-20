@@ -1,18 +1,25 @@
 export type NodeType = 'worker' | 'proxy'
 
+export type NodeMetrics = {
+  cpu_percent: number
+  memory_usage: number
+  memory_limit: number
+  disk_read: number
+  disk_write: number
+  network_rx: number
+  network_tx: number
+}
+
 export type Node = {
   id: number
   name: string
   type: NodeType
   host: string
   isActive: boolean
-  maxWorkers: number
-  currentLoad: number
-  availableCapacity: number
-  latitude: number | null
-  longitude: number | null
-  country: string | null
-  city: string | null
+  status: string
+  location: string
+  uptime: string | null
+  metrics: NodeMetrics | null
   lastSeenAt: string | null
 }
 
@@ -30,17 +37,12 @@ export type CreateNodePayload = {
   name: string
   type: NodeType
   host: string
-  max_workers: number
 }
 
 export type UpdateNodePayload = {
   name?: string
   type?: NodeType
   host?: string
-  max_workers?: number
   is_active?: boolean
-  latitude?: number | null
-  longitude?: number | null
-  country?: string | null
-  city?: string | null
+  location?: string
 }

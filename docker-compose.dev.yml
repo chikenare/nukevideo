@@ -23,6 +23,8 @@ services:
     healthcheck:
       test: ["CMD", "healthcheck-horizon"]
       start_period: 10s
+    depends_on:
+      - redis
     volumes:
       - ".:/var/www/html"
   nukevideo-worker:
@@ -44,6 +46,15 @@ services:
     volumes:
       - ./:/var/www/html
       - shared-storage:/var/www/html/storage/shared
+  nukevideo-worker-manager:
+    image: nukevideo
+    build:
+      context: .
+    command: ["sh", "-c", "while true; do php /var/www/html/artisan workers:sync; sleep 60; done"]
+    user: root
+    volumes:
+      - ./:/var/www/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
   nukevideo-cdn:
     image: nukevideo-cdn
     build:

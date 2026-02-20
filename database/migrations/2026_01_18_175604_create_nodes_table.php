@@ -13,12 +13,14 @@ return new class extends Migration {
         Schema::create('nodes', function (Blueprint $table) {
             $table->id();
             $table->string('name')->unique();
+            $table->string('container_id')->nullable();
             $table->string('host')->nullable();
-            $table->integer('max_workers')->default(3);
-            $table->boolean('is_active')->default(true);
-            $table->timestamp('last_seen_at')->nullable();
             $table->string('type')->default('worker');
             $table->string('location');
+            $table->boolean('is_active')->default(true);
+            $table->string('status')->default('unknown');
+            $table->string('uptime')->nullable();
+            $table->json('metrics')->nullable();
             $table->timestamps();
         });
     }

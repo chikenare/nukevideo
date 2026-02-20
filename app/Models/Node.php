@@ -10,11 +10,13 @@ class Node extends Model
 {
     protected $fillable = [
         'name',
+        'container_id',
         'type',
         'host',
-        'max_workers',
         'is_active',
-        'last_seen_at',
+        'status',
+        'uptime',
+        'metrics',
         'location',
     ];
 
@@ -23,8 +25,7 @@ class Node extends Model
         return [
             'type' => NodeType::class,
             'is_active' => 'boolean',
-            'last_seen_at' => 'datetime',
-            'max_workers' => 'integer',
+            'metrics' => 'array',
         ];
     }
 
@@ -54,11 +55,8 @@ class Node extends Model
             ->count();
     }
 
-    /**
-     * Update the last seen timestamp
-     */
     public function markAsSeen(): void
     {
-        $this->update(['last_seen_at' => now()]);
+        $this->touch();
     }
 }

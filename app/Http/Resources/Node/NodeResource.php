@@ -20,11 +20,11 @@ class NodeResource extends JsonResource
             'type' => $this->type,
             'host' => $this->host,
             'isActive' => $this->is_active,
-            'maxWorkers' => $this->max_workers,
-            'currentLoad' => $this->getCurrentLoad(),
-            'availableCapacity' => $this->max_workers - $this->getCurrentLoad(),
+            'status' => $this->status,
             'location' => $this->location,
-            'lastSeenAt' => $this->last_seen_at?->diffForHumans(),
+            'uptime' => $this->uptime,
+            'metrics' => $this->metrics,
+            'lastSeenAt' => $this->updated_at?->diffForHumans(),
         ];
     }
 }

@@ -29,9 +29,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('templates', TemplateController::class);
 
     // Node Management API
-    Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class);
-    Route::post('nodes/{id}/heartbeat', [\App\Http\Controllers\Api\NodeController::class, 'heartbeat']);
-    Route::post('nodes/{id}/deploy', [\App\Http\Controllers\Api\NodeController::class, 'deploy']);
+    Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class)->except('store');
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);
     Route::apiResource('/streams', StreamController::class)->except(['show', 'index']);

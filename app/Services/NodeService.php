@@ -63,7 +63,6 @@ class NodeService
             'host' => gethostname(),
             'max_workers' => 3,
             'is_active' => true,
-            'last_seen_at' => now(),
         ], $attributes));
 
         $node->save();
