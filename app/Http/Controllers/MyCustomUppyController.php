@@ -17,21 +17,13 @@ class MyCustomUppyController extends UppyS3MultipartController
         $type = $request->input('type');
         $key = FileService::generateKey($request->input('filename'));
 
-        try {
-            $result = $this->client->createMultipartUpload([
-                'Bucket' => $this->bucket,
-                'Key' => $key,
-                'ContentType' => $type,
-                'ContentDisposition' => 'inline',
-                'Metadata' => $this->buildMetadata($request)
-            ]);
-        } catch (Throwable $exception) {
-            return response()
-                ->json([
-                    'message' => $exception->getMessage(),
-                ], $exception->getStatusCode());
-        }
-
+        $result = $this->client->createMultipartUpload([
+            'Bucket' => $this->bucket,
+            'Key' => $key,
+            'ContentType' => $type,
+            'ContentDisposition' => 'inline',
+            'Metadata' => $this->buildMetadata($request)
+        ]);
         return response()
             ->json([
                 'uploadId' => $result['UploadId'],
