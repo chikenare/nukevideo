@@ -61,6 +61,14 @@ services:
       context: ./vod
     env_file:
       - ./vod/.env
+  nukevideo-front:
+    image: nukevideo-front
+    build:
+      context: ./front
+    volumes:
+      - ./front:/app
+      - pnpm_store:/pnpm
+
   db:
     image: mariadb:11
     restart: unless-stopped
@@ -92,6 +100,8 @@ volumes:
   rustfs-data:
     driver: local
   redis-data:
+    driver: local
+  pnpm_store:
     driver: local
 
 networks:
