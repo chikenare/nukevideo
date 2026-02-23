@@ -27,40 +27,25 @@ class ProcessStreamJob implements ShouldQueue
 
     public function handle(): void
     {
-        $this->stream = Stream::with('video')->find($this->streamId);
-
         try {
+            $this->stream = Stream::with('video')->find($this->streamId);
+
             $service = new StreamService($this->stream);
             $service->handle();
+
+            $this->updateVideoStatus($this->stream);
         } catch (Exception $e) {
-            Log::error('Stream processing failed', [
+            Log::error('Stream job permanently failed after all retries', [
                 'stream_id' => $this->stream->id,
                 'stream_type' => $this->stream->type,
                 'video_id' => $this->stream->video_id,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
             ]);
 
             $this->markStreamFailed($this->stream, $e->getMessage());
-
-            throw $e;
         } finally {
             $this->updateVideoStatus($this->stream);
         }
-    }
 
-    public function failed(Exception $exception): void
-    {
-        Log::error('Stream job permanently failed after all retries', [
-            'stream_id' => $this->stream->id,
-            'stream_type' => $this->stream->type,
-            'video_id' => $this->stream->video_id,
-            'error' => $exception->getMessage(),
-        ]);
-
-        $this->markStreamFailed($this->stream, 'Job failed after ' . $this->tries . ' attempts: ' . $exception->getMessage());
-        $this->updateVideoStatus($this->stream);
-
-        $this->delete();
     }
 }

@@ -39,28 +39,11 @@ class ProcessMuxedVideoJob implements ShouldQueue
                 'video_id' => $this->stream->video_id,
                 'output_format' => $this->outputFormat,
                 'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
             ]);
 
             $this->markStreamFailed($this->stream, $e->getMessage());
-
-            throw $e;
         } finally {
             $this->updateVideoStatus($this->stream);
         }
-    }
-
-    public function failed(Exception $exception): void
-    {
-        Log::error('Muxed video job permanently failed', [
-            'stream_id' => $this->stream->id,
-            'video_id' => $this->stream->video_id,
-            'error' => $exception->getMessage(),
-        ]);
-
-        $this->markStreamFailed($this->stream, 'Job failed after all attempts: ' . $exception->getMessage());
-        $this->updateVideoStatus($this->stream);
-
-        $this->delete();
     }
 }
