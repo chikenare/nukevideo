@@ -32,7 +32,7 @@ class VodController extends Controller
         $service = new VodService;
 
         $signedUrl = $service->generateVodSignedUrl(
-            "http://vod.lan/hls/$ulid/master.m3u8",
+            "http://cdn.nukevideo.forge.tibibyte.com/hls/$ulid/master.m3u8",
             $ulid,
         );
 
