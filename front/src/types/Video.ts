@@ -40,7 +40,6 @@ enum StreamType {
 
 type Stream = {
   id: number
-  parentId?: number | null
   ulid: string
   name: string | null
   type: StreamType

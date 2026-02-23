@@ -15,9 +15,10 @@ import {
 } from '@/components/ui/select'
 import Spinner from '@/components/ui/spinner/Spinner.vue'
 import VariantForm from './components/VariantForm.vue'
+import AudioChannelForm from './components/AudioChannelForm.vue'
 import { useCodecConfig } from '@/composables/useCodecConfig'
 import TemplateService from '@/services/TemplateService'
-import type { Template, CreateTemplateDto, UpdateTemplateDto, OutputFormat } from '@/types/Template'
+import type { Template, CreateTemplateDto, UpdateTemplateDto, OutputFormat, AudioConfig } from '@/types/Template'
 import { Plus, Save, ArrowLeft } from 'lucide-vue-next'
 import { ApiException } from '@/exceptions/ApiException'
 import { toast } from 'vue-sonner'
@@ -32,6 +33,7 @@ const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Templa
 const templateName = ref('')
 const outputFormat = ref<OutputFormat>('hls')
 const variants = ref<Record<string, unknown>[]>([{}])
+const audioConfig = ref<AudioConfig>({ channels: [{ channels: '', audio_bitrate: '' }] })
 const loading = ref(false)
 const saving = ref(false)
 
@@ -64,6 +66,7 @@ const loadTemplate = async () => {
     variants.value = template.query.variants.length > 0
       ? template.query.variants
       : [{}]
+    audioConfig.value = template.query.audio ?? { channels: [{ channels: '', audio_bitrate: '' }] }
   } catch (error) {
     console.error('Error loading template:', error)
   } finally {
@@ -82,13 +85,24 @@ const saveTemplate = async () => {
     return
   }
 
+  if (!audioConfig.value.audio_codec) {
+    toast.info('Please select an audio codec')
+    return
+  }
+
+  if (!audioConfig.value.channels || audioConfig.value.channels.length === 0) {
+    toast.info('Please configure at least one audio channel')
+    return
+  }
+
   saving.value = true
   try {
     const data: CreateTemplateDto | UpdateTemplateDto = {
       name: templateName.value,
       query: {
         output_format: outputFormat.value,
-        variants: variants.value
+        variants: variants.value,
+        audio: audioConfig.value
       }
     }
 
@@ -151,7 +165,6 @@ onMounted(async () => {
       <Card>
         <CardHeader>
           <CardTitle>Template Information</CardTitle>
-          <!-- <CardDescription>Basic information about this template</CardDescription> -->
         </CardHeader>
         <CardContent>
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -173,15 +186,12 @@ onMounted(async () => {
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <!-- <p v-if="isMuxedFormat" class="text-xs text-muted-foreground">
-                Single file output with video, audio and subtitles embedded.
-              </p> -->
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <!-- Variants -->
+      <!-- Video Variants -->
       <div class="space-y-4">
         <div>
           <h2 class="text-xl font-semibold">Quality Variants</h2>
@@ -201,6 +211,10 @@ onMounted(async () => {
           Add Variant
         </Button>
       </div>
+
+      <!-- Audio Configuration -->
+      <AudioChannelForm v-if="config" :model-value="audioConfig"
+        @update:model-value="audioConfig = $event" :config="config" />
 
       <!-- Save Button (Bottom) -->
       <div class="flex justify-end gap-2 pt-4 border-t">

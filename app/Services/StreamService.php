@@ -2,16 +2,11 @@
 
 namespace App\Services;
 
-use App\Enums\VideoStatus;
-use App\Models\Stream;
-
 class StreamService extends BaseStreamService
 {
     public function handle(): void
     {
         parent::handle();
-
-        $this->updateSharedPathStreams();
     }
 
     protected function getCompletionData(): array
@@ -67,17 +62,4 @@ class StreamService extends BaseStreamService
         };
     }
 
-    private function updateSharedPathStreams(): void
-    {
-        Stream::where('path', $this->stream->path)
-            ->where('video_id', $this->stream->video_id)
-            ->where('type', $this->stream->type)
-            ->where('status', VideoStatus::PENDING->value)
-            ->update([
-                'size' => filesize($this->streamLocalPath),
-                'status' => VideoStatus::COMPLETED->value,
-                'progress' => 100,
-                'completed_at' => now(),
-            ]);
-    }
 }

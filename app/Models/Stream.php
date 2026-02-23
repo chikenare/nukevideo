@@ -11,8 +11,6 @@ use Illuminate\Support\Str;
 class Stream extends Model
 {
     protected $fillable = [
-        'parent_id',
-
         'name',
         'path',
         'type',
@@ -49,16 +47,6 @@ class Stream extends Model
             'meta' => 'array',
             'input_params' => 'array'
         ];
-    }
-
-    public function parent()
-    {
-        return $this->belongsTo(self::class);
-    }
-
-    public function children()
-    {
-        return $this->hasMany(self::class, 'parent_id');
     }
 
     public function video()

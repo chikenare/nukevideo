@@ -17,8 +17,6 @@ return new class extends Migration {
 
             $table->foreignId('video_id')->constrained()->cascadeOnDelete();
 
-            $table->foreignId('parent_id')->nullable()->constrained('streams')->cascadeOnDelete();
-
             $table->string('path');
             $table->string('name')->nullable();
             $table->enum('type', ['original', 'download', 'video', 'audio', 'subtitle']);

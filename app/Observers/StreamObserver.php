@@ -15,11 +15,5 @@ class StreamObserver
                 throw new Exception("Delete stream $stream->id failed");
             }
         }
-
-        $children = $stream->children()->get();
-
-        foreach ($children as $child) {
-            $child->delete();
-        }
     }
 }

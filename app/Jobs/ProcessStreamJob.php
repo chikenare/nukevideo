@@ -24,7 +24,8 @@ class ProcessStreamJob implements ShouldQueue
 
     public function __construct(
         public int $streamId
-    ) {}
+    ) {
+    }
 
     public function handle(NodeService $nodeService): void
     {
@@ -46,7 +47,6 @@ class ProcessStreamJob implements ShouldQueue
                 'trace' => $e->getTraceAsString(),
             ]);
 
-            $this->makeChildrenFail($this->stream, $e->getMessage());
             $this->markStreamFailed($this->stream, $e->getMessage());
 
             throw $e;
@@ -65,23 +65,8 @@ class ProcessStreamJob implements ShouldQueue
         ]);
 
         $this->markStreamFailed($this->stream, 'Job failed after ' . $this->tries . ' attempts: ' . $exception->getMessage());
-        $this->makeChildrenFail($this->stream, $exception->getMessage());
         $this->updateVideoStatus($this->stream);
 
         $this->delete();
-    }
-
-    private function makeChildrenFail(Stream $stream, string $errorMessage): void
-    {
-        if ($stream->type !== 'video') {
-            return;
-        }
-
-        foreach ($stream->children as $child) {
-            $child->update([
-                'status' => VideoStatus::FAILED->value,
-                'error_log' => "Parent stream (ID: {$stream->id}) failed: {$errorMessage}",
-            ]);
-        }
     }
 }

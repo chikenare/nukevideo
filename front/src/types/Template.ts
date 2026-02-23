@@ -7,11 +7,22 @@ export type Template = {
   query: {
     output_format: OutputFormat
     variants: TemplateVariant[]
+    audio: AudioConfig
   }
   createdAt: string
 }
 
 export type TemplateVariant = Record<string, unknown>
+
+export type AudioChannelEntry = {
+  channels: string
+  audio_bitrate: string
+}
+
+export type AudioConfig = {
+  channels: AudioChannelEntry[]
+  [key: string]: unknown
+}
 
 export type CreateTemplateDto = Omit<Template, 'ulid' | 'createdAt'>
 export type UpdateTemplateDto = Omit<Template, 'ulid' | 'createdAt'>

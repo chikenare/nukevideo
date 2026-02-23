@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Template;
 
+use App\Rules\TemplateAudioRule;
 use App\Rules\TemplateFormatRule;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -26,7 +27,8 @@ class UpdateTemplateRequest extends FormRequest
             'name' => 'sometimes|string|max:255',
             'query.output_format' => 'sometimes|string|in:hls,mp4,mkv',
             'query.variants' => 'array',
-            'query.variants.*' => new TemplateFormatRule
+            'query.variants.*' => new TemplateFormatRule,
+            'query.audio' => ['array', new TemplateAudioRule]
         ];
     }
 }

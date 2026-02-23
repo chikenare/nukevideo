@@ -10,7 +10,6 @@ use App\Jobs\GenerateVideoStoryboard;
 use App\Jobs\ProcessMuxedVideoJob;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
-use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
@@ -56,6 +55,7 @@ class OnVideoUploadedService
         $mediaInfo = $this->probeMedia($key);
 
         $variants = $template->query['variants'] ?? [];
+        $audioConfig = $template->query['audio'] ?? [];
         $outputFormat = $template->query['output_format'] ?? 'hls';
         $isMuxed = in_array($outputFormat, ['mp4', 'mkv']);
 
@@ -96,7 +96,7 @@ class OnVideoUploadedService
             if ($isMuxed) {
                 $this->createMuxedStream($video, $mediaInfo['streamCollection'], $variants, $outputFormat);
             } else {
-                $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants);
+                $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants, $audioConfig);
             }
 
             DB::commit();
@@ -202,7 +202,6 @@ class OnVideoUploadedService
         $ulid = Str::ulid();
 
         $video->streams()->create([
-            'parent_id' => null,
             'path' => "$video->ulid/download/$ulid.$outputFormat",
             'type' => 'download',
             'size' => 0,
@@ -234,43 +233,42 @@ class OnVideoUploadedService
             ->dispatch();
     }
 
-    private function createProcessingStreams(Video $video, StreamCollection $streamCollection, array $variants): void
+    private function createProcessingStreams(Video $video, StreamCollection $streamCollection, array $variants, array $audioConfig): void
     {
-        $audioStreamCache = [];
-
         foreach ($variants as $formatConfig) {
-            ksort($formatConfig);
-
             if ($streamCollection->videos()->first()->get('height') < $formatConfig['resolution']) {
                 continue;
             }
 
-            $qualityStream = $this->createStreamNode(
+            $this->createStreamNode(
                 video: $video,
-                parentId: null,
                 stream: $streamCollection->videos()->first(),
                 codecType: 'video',
                 inputParams: $formatConfig
             );
+        }
 
-            foreach ($streamCollection->audios() as $stream) {
-                $paramsHash = $this->getAudioHash($formatConfig, $stream->get('index'));
+        $channelConfigsList = $audioConfig['channels'] ?? [];
+        $channelConfigs = collect($channelConfigsList)->keyBy('channels');
+        $singleConfig = count($channelConfigsList) === 1 ? $channelConfigsList[0] : null;
+        $sharedAudioParams = collect($audioConfig)->except('channels')->toArray();
 
-                $reusePath = $audioStreamCache[$paramsHash] ?? null;
+        foreach ($streamCollection->audios() as $stream) {
+            $sourceChannels = (string) $stream->get('channels');
+            $channelConfig = $singleConfig ?? $channelConfigs->get($sourceChannels);
 
-                $audioStream = $this->createStreamNode(
-                    video: $video,
-                    parentId: $qualityStream->id,
-                    stream: $stream,
-                    codecType: $stream->get('codec_type'),
-                    inputParams: $formatConfig,
-                    reusePath: $reusePath
-                );
-
-                if (!$reusePath) {
-                    $audioStreamCache[$paramsHash] = $audioStream->path;
-                }
+            if (!$channelConfig) {
+                continue;
             }
+
+            $inputParams = array_merge($sharedAudioParams, $channelConfig);
+
+            $this->createStreamNode(
+                video: $video,
+                stream: $stream,
+                codecType: $stream->get('codec_type'),
+                inputParams: $inputParams,
+            );
         }
 
         $this->createSubtitleStreams($video, $streamCollection->all());
@@ -282,7 +280,6 @@ class OnVideoUploadedService
             if ($stream->get('codec_type') === 'subtitle') {
                 $this->createStreamNode(
                     video: $video,
-                    parentId: null,
                     stream: $stream,
                     codecType: 'subtitle',
                     inputParams: null
@@ -293,20 +290,17 @@ class OnVideoUploadedService
 
     private function createStreamNode(
         Video $video,
-        ?int $parentId,
         Stream $stream,
         string $codecType,
         ?array $inputParams = null,
-        ?string $reusePath = null
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType);
         $name = $this->getStreamName($stream);
 
-        $path = $reusePath ?? "$video->ulid/$codecType/$ulid.$extension";
+        $path = "$video->ulid/$codecType/$ulid.$extension";
 
         return $video->streams()->create([
-            'parent_id' => $parentId,
             'path' => $path,
             'type' => $codecType,
             'size' => 0,
@@ -319,7 +313,7 @@ class OnVideoUploadedService
             'width' => $stream->get('width'),
             'height' => $stream->get('height'),
             'language' => $stream->get('tags')['language'] ?? null,
-            'channels' => $stream->get('tags')['channels'] ?? null,
+            'channels' => $stream->get('channels'),
         ]);
     }
 
@@ -337,21 +331,6 @@ class OnVideoUploadedService
             'subtitle' => 'vtt',
             default => 'mp4',
         };
-    }
-
-    private function getAudioHash(array $formatConfig, string $extra): string
-    {
-        $allParams = config('ffmpeg.parameters', []);
-
-        $audioParamKeys = collect($allParams)
-            ->filter(fn($config) => isset($config['type']) && $config['type'] === 'audio')
-            ->keys()
-            ->toArray();
-
-        $audioParams = array_intersect_key($formatConfig, array_flip($audioParamKeys));
-        ksort($audioParams);
-
-        return md5(json_encode($audioParams) . $extra);
     }
 
     private function validateContentType(string $contentType): void
