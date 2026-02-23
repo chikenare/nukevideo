@@ -14,7 +14,6 @@ export type Parameter = {
     type: CodecType
     input_type: InputType
     label: string
-    default?: string | number | boolean | null
     options?: string[]
     min?: number
     max?: number
