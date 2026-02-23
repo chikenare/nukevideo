@@ -14,7 +14,8 @@ abstract class BaseStreamService
 
     public function __construct(
         protected Stream $stream,
-    ) {}
+    ) {
+    }
 
     public function handle(): void
     {
@@ -165,8 +166,14 @@ abstract class BaseStreamService
 
         if ($inputType === 'boolean') {
             if ($value) {
-                $args[] = $config['template'];
+                $args[] = str_contains($config['template'], '%s')
+                    ? sprintf($config['template'], 1)
+                    : $config['template'];
             }
+            return;
+        }
+
+        if ($value === null || $value === '') {
             return;
         }
 
