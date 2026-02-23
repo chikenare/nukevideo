@@ -5,6 +5,13 @@ services:
       context: .
     volumes:
       - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
 
   nukevideo-schedule:
     image: nukevideo
@@ -15,6 +22,13 @@ services:
       start_period: 10s
     volumes:
       - ".:/var/www/html"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
 
   nukevideo-horizon:
     image: nukevideo
@@ -24,7 +38,12 @@ services:
       test: ["CMD", "healthcheck-horizon"]
       start_period: 10s
     depends_on:
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
     volumes:
       - ".:/var/www/html"
   nukevideo-worker:
@@ -46,6 +65,13 @@ services:
     volumes:
       - ./:/var/www/html
       - shared-storage:/var/www/html/storage/shared
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
   nukevideo-worker-manager:
     image: nukevideo
     build:
@@ -55,6 +81,13 @@ services:
     volumes:
       - ./:/var/www/html
       - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
   nukevideo-cdn:
     image: nukevideo-cdn
     build:
@@ -68,6 +101,7 @@ services:
     volumes:
       - ./front:/app
       - pnpm_store:/pnpm
+    
 
   db:
     image: mariadb:11
@@ -79,6 +113,12 @@ services:
       MARIADB_PASSWORD: ${DB_PASSWORD}
     volumes:
       - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   rustfs:
     image: rustfs/rustfs:latest
@@ -91,6 +131,11 @@ services:
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
   shared-storage:
