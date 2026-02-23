@@ -64,7 +64,7 @@ services:
       start_period: 10s
     volumes:
       - ./:/var/www/html
-      - shared-storage:/var/www/html/storage/shared
+      - shared-storage:/var/www/html/storage/app/private/tmp
     depends_on:
       db:
         condition: service_healthy

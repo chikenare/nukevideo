@@ -19,7 +19,7 @@ abstract class BaseStreamService
 
     public function handle(): void
     {
-        $this->streamLocalPath = Storage::disk('local')->path($this->stream->path);
+        $this->streamLocalPath = Storage::disk('tmp')->path($this->stream->path);
 
         $this->ensureOutputDirectory();
 
@@ -53,7 +53,7 @@ abstract class BaseStreamService
             throw new Exception("Original video file not found");
         }
 
-        return Storage::disk('local')->path($originalStream->path);
+        return Storage::disk('tmp')->path($originalStream->path);
     }
 
     protected function process(string $inputPath): void

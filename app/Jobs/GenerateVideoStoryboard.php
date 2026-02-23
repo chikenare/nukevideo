@@ -55,7 +55,7 @@ class GenerateVideoStoryboard implements ShouldQueue
 
     private function validateAndGetLocalPath(): string
     {
-        $inputLocalPath = Storage::disk('local')->path($this->originalPath);
+        $inputLocalPath = Storage::disk('tmp')->path($this->originalPath);
 
         if (!file_exists($inputLocalPath)) {
             throw new Exception("Local file $inputLocalPath not found. File should have been downloaded before processing.");
@@ -131,7 +131,7 @@ class GenerateVideoStoryboard implements ShouldQueue
         int $duration,
         int $thumbWidth
     ): void {
-        $spriteLocalPath = Storage::disk('local')->path($spriteName);
+        $spriteLocalPath = Storage::disk('tmp')->path($spriteName);
 
         $command = [
             'ffmpeg',

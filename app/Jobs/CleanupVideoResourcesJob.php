@@ -27,7 +27,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
             ?->streams()->where('type', 'original')->first()
             ?->delete();
 
-        $disk = Storage::disk('local');
+        $disk = Storage::disk('tmp');
 
         if ($disk->exists($this->videoUlid)) {
             if (!$disk->deleteDirectory($this->videoUlid)) {

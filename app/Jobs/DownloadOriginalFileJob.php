@@ -29,7 +29,7 @@ class DownloadOriginalFileJob implements ShouldQueue
         }
 
         // Path includes video ULID as root
-        $inputLocalPath = Storage::disk('local')->path($inputPath);
+        $inputLocalPath = Storage::disk('tmp')->path($inputPath);
 
         // Check if already downloaded
         if (file_exists($inputLocalPath)) {

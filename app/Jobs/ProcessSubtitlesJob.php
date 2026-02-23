@@ -46,7 +46,7 @@ class ProcessSubtitlesJob implements ShouldQueue
         }
 
         try {
-            $inputLocalPath = Storage::disk('local')->path($this->originalPath);
+            $inputLocalPath = Storage::disk('tmp')->path($this->originalPath);
             if (!file_exists($inputLocalPath)) {
                 throw new Exception("Original video file not found at: $inputLocalPath");
             }
@@ -63,7 +63,7 @@ class ProcessSubtitlesJob implements ShouldQueue
 
             foreach ($subtitleStreams as $stream) {
                 // Stream path already includes video ULID as root
-                $localPath = Storage::disk('local')->path($stream->path);
+                $localPath = Storage::disk('tmp')->path($stream->path);
 
                 if (file_exists($localPath)) {
                     $this->uploadSubtitle($stream, $localPath);
@@ -111,7 +111,7 @@ class ProcessSubtitlesJob implements ShouldQueue
             $streamIndex = $stream->meta['index'] ?? 0;
 
             // Stream path already includes video ULID as root
-            $streamLocalPath = Storage::disk('local')->path($stream->path);
+            $streamLocalPath = Storage::disk('tmp')->path($stream->path);
 
             // Create output directory if not exists
             $outputDir = dirname($streamLocalPath);

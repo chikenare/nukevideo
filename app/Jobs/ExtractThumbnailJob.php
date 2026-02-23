@@ -30,7 +30,7 @@ class ExtractThumbnailJob implements ShouldQueue
             throw new Exception("Video {$this->videoId} not found");
         }
 
-        $inputLocalPath = Storage::disk('local')->path($this->originalPath);
+        $inputLocalPath = Storage::disk('tmp')->path($this->originalPath);
 
         if (!file_exists($inputLocalPath)) {
             throw new Exception("Local file $inputLocalPath not found. File should have been downloaded before processing.");
@@ -39,7 +39,7 @@ class ExtractThumbnailJob implements ShouldQueue
         $thumbnailService = new ThumbnailService();
 
         $thumbnailFilename = $video->ulid . '/thumbnail.jpg';
-        $thumbnailLocalPath = Storage::disk('local')->path($thumbnailFilename);
+        $thumbnailLocalPath = Storage::disk('tmp')->path($thumbnailFilename);
 
         $percentage = 30;
         $timeInSeconds = ($percentage / 100) * $video->duration;
