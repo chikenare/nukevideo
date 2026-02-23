@@ -45,13 +45,16 @@ class ProcessSubtitlesJob implements ShouldQueue
         }
 
         try {
-            // Get original stream to generate temporary URL
+            // Get original stream local path (already downloaded by DownloadOriginalFileJob)
             $originalStream = $video->streams()->where('type', 'original')->first();
-            if (!$originalStream || !Storage::exists($originalStream->path)) {
+            if (!$originalStream) {
                 throw new Exception("Original video file not found");
             }
 
-            $temporaryUrl = Storage::temporaryUrl($originalStream->path, now()->addDay());
+            $inputLocalPath = Storage::disk('local')->path($originalStream->path);
+            if (!file_exists($inputLocalPath)) {
+                throw new Exception("Original video file not found at: $inputLocalPath");
+            }
 
             // Mark all streams as running
             foreach ($subtitleStreams as $stream) {
@@ -61,7 +64,7 @@ class ProcessSubtitlesJob implements ShouldQueue
                 ]);
             }
 
-            $this->processAllSubtitles($subtitleStreams, $temporaryUrl);
+            $this->processAllSubtitles($subtitleStreams, $inputLocalPath);
 
             foreach ($subtitleStreams as $stream) {
                 // Stream path already includes video ULID as root
@@ -104,9 +107,9 @@ class ProcessSubtitlesJob implements ShouldQueue
     /**
      * Process all subtitle streams in a single FFmpeg command
      */
-    private function processAllSubtitles($subtitleStreams, string $temporaryUrl): void
+    private function processAllSubtitles($subtitleStreams, string $inputLocalPath): void
     {
-        $commandParts = ['ffmpeg', '-hide_banner', '-y', '-i', "\"{$temporaryUrl}\""];
+        $commandParts = ['ffmpeg', '-hide_banner', '-y', '-i', "\"{$inputLocalPath}\""];
 
         // Build command with all subtitle outputs
         foreach ($subtitleStreams as $stream) {
