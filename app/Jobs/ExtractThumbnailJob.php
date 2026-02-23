@@ -17,7 +17,8 @@ class ExtractThumbnailJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
-        public int $videoId
+        public int $videoId,
+        public string $originalPath,
     ) {
     }
 
@@ -29,14 +30,7 @@ class ExtractThumbnailJob implements ShouldQueue
             throw new Exception("Video {$this->videoId} not found");
         }
 
-        $originalStream = $video->streams()->where('type', 'original')->first();
-
-        if (!$originalStream) {
-            throw new Exception("Original stream not found for video {$video->id}");
-        }
-
-        $inputPath = $originalStream->path;
-        $inputLocalPath = Storage::disk('local')->path($inputPath);
+        $inputLocalPath = Storage::disk('local')->path($this->originalPath);
 
         if (!file_exists($inputLocalPath)) {
             throw new Exception("Local file $inputLocalPath not found. File should have been downloaded before processing.");

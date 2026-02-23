@@ -2,14 +2,12 @@
 
 namespace App\Jobs;
 
-use App\Models\Video;
 use Exception;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 class DownloadOriginalFileJob implements ShouldQueue
@@ -17,25 +15,14 @@ class DownloadOriginalFileJob implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
-        public int $videoId
+        public int $videoId,
+        public string $originalPath,
     ) {
     }
 
     public function handle(): void
     {
-        $video = Video::find($this->videoId);
-
-        if (!$video) {
-            throw new Exception("Video {$this->videoId} not found");
-        }
-
-        $originalStream = $video->streams()->where('type', 'original')->first();
-
-        if (!$originalStream) {
-            throw new Exception("Original stream not found for video {$video->id}");
-        }
-
-        $inputPath = $originalStream->path;
+        $inputPath = $this->originalPath;
 
         if (!Storage::exists($inputPath)) {
             throw new Exception("Original file $inputPath does not exist in storage");

@@ -22,7 +22,8 @@ class ProcessSubtitlesJob implements ShouldQueue
     public $timeout = 700;
 
     public function __construct(
-        public int $videoId
+        public int $videoId,
+        public string $originalPath,
     ) {
     }
 
@@ -45,13 +46,7 @@ class ProcessSubtitlesJob implements ShouldQueue
         }
 
         try {
-            // Get original stream local path (already downloaded by DownloadOriginalFileJob)
-            $originalStream = $video->streams()->where('type', 'original')->first();
-            if (!$originalStream) {
-                throw new Exception("Original video file not found");
-            }
-
-            $inputLocalPath = Storage::disk('local')->path($originalStream->path);
+            $inputLocalPath = Storage::disk('local')->path($this->originalPath);
             if (!file_exists($inputLocalPath)) {
                 throw new Exception("Original video file not found at: $inputLocalPath");
             }

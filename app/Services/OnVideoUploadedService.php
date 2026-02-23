@@ -102,9 +102,9 @@ class OnVideoUploadedService
             DB::commit();
 
             if ($isMuxed) {
-                $this->dispatchMuxedJobs($video, $outputFormat);
+                $this->dispatchMuxedJobs($video, $key, $outputFormat);
             } else {
-                $this->dispatchHlsJobs($video);
+                $this->dispatchHlsJobs($video, $key);
             }
         } catch (Exception $e) {
             DB::rollBack();
@@ -156,7 +156,7 @@ class OnVideoUploadedService
         ];
     }
 
-    private function dispatchHlsJobs(Video $video): void
+    private function dispatchHlsJobs(Video $video, string $originalPath): void
     {
         $jobs = $video->streams()
             ->whereIn('type', ['video', 'audio'])
@@ -164,17 +164,17 @@ class OnVideoUploadedService
             ->map(fn($stream) => new ProcessStreamJob($stream->id));
 
         $parallelGroup = $jobs->all();
-        $parallelGroup[] = new ProcessSubtitlesJob($video->id);
+        $parallelGroup[] = new ProcessSubtitlesJob($video->id, $originalPath);
 
         Bus::chain([
-            new DownloadOriginalFileJob($video->id),
-            new ExtractThumbnailJob($video->id),
+            new DownloadOriginalFileJob($video->id, $originalPath),
+            new ExtractThumbnailJob($video->id, $originalPath),
 
             Bus::batch($parallelGroup)
                 ->name("Processing video: {$video->id}")
                 ->onQueue('streams'),
 
-            new GenerateVideoStoryboard($video->id),
+            new GenerateVideoStoryboard($video->id, $originalPath),
 
             new CleanupVideoResourcesJob($video->ulid)
         ])
@@ -214,13 +214,13 @@ class OnVideoUploadedService
         ]);
     }
 
-    private function dispatchMuxedJobs(Video $video, string $outputFormat): void
+    private function dispatchMuxedJobs(Video $video, string $originalPath, string $outputFormat): void
     {
         $downloadStream = $video->streams()->where('type', 'download')->first();
 
         Bus::chain([
-            new DownloadOriginalFileJob($video->id),
-            new ExtractThumbnailJob($video->id),
+            new DownloadOriginalFileJob($video->id, $originalPath),
+            new ExtractThumbnailJob($video->id, $originalPath),
 
             new ProcessMuxedVideoJob($downloadStream->id, $outputFormat),
 

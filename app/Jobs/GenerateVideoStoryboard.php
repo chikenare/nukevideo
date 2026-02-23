@@ -23,14 +23,16 @@ class GenerateVideoStoryboard implements ShouldQueue
     private const FFMPEG_QUALITY = 3;
     private const FFMPEG_LOWRES = 2;
 
-    public function __construct(private int $videoId)
-    {
+    public function __construct(
+        private int $videoId,
+        private string $originalPath,
+    ) {
     }
 
     public function handle(): void
     {
         $video = $this->getVideo();
-        $inputLocalPath = $this->validateAndGetLocalPath($video);
+        $inputLocalPath = $this->validateAndGetLocalPath();
 
         $config = $this->calculateStoryboardConfig($video);
         $sprites = $this->generateSprites($video, $inputLocalPath, $config);
@@ -51,16 +53,9 @@ class GenerateVideoStoryboard implements ShouldQueue
         return $video;
     }
 
-    private function validateAndGetLocalPath(Video $video): string
+    private function validateAndGetLocalPath(): string
     {
-        $originalStream = $video->streams()->where('type', 'original')->first();
-
-        if (!$originalStream) {
-            throw new Exception("Original stream not found for video {$video->id}");
-        }
-
-        $inputPath = $originalStream->path;
-        $inputLocalPath = Storage::disk('local')->path($inputPath);
+        $inputLocalPath = Storage::disk('local')->path($this->originalPath);
 
         if (!file_exists($inputLocalPath)) {
             throw new Exception("Local file $inputLocalPath not found. File should have been downloaded before processing.");
