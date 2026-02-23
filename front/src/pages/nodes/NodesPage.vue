@@ -91,7 +91,7 @@ onUnmounted(() => {
             <TableCell>
               <div class="flex flex-col">
                 <span class="font-medium">{{ node.name }}</span>
-                <span class="text-xs text-muted-foreground">{{ node.location }} · {{ node.host }}</span>
+                <a :href="node.baseUrl" target="_blank" class="text-xs text-muted-foreground">{{ node.location }}</a>
               </div>
             </TableCell>
 
@@ -123,7 +123,8 @@ onUnmounted(() => {
                   <Progress :model-value="memoryPercent(node)" class="h-1.5 flex-1" />
                   <span class="text-xs font-medium w-10 text-right">{{ memoryPercent(node) }}%</span>
                 </div>
-                <span class="text-xs text-muted-foreground">{{ formatBytes(node.metrics.memory_usage) }} / {{ formatBytes(node.metrics.memory_limit) }}</span>
+                <span class="text-xs text-muted-foreground">{{ formatBytes(node.metrics.memory_usage) }} / {{
+                  formatBytes(node.metrics.memory_limit) }}</span>
               </template>
               <span v-else class="text-xs text-muted-foreground">-</span>
             </TableCell>
