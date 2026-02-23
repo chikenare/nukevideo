@@ -43,6 +43,9 @@ http {
         vod_mode mapped;
         vod_max_mapping_response_size 2k;
 
+        vod_base_url "";
+        vod_segments_base_url "";
+
         vod_upstream_location /json;
         vod_remote_upstream_location /proxy/;
         vod_last_modified 'Sun, 19 Nov 2000 08:52:00 GMT';
