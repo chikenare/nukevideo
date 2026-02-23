@@ -25,8 +25,8 @@ use Throwable;
 class OnVideoUploadedService
 {
     public function __construct(
-        private NodeService $nodeService
-    ) {}
+    ) {
+    }
 
     /**
      * @param array{
@@ -64,11 +64,6 @@ class OnVideoUploadedService
         DB::beginTransaction();
 
         try {
-            $node = $this->nodeService->selectNode();
-
-            if (!$node) {
-                throw new Exception("Nodes not available");
-            }
 
             $video = Video::create([
                 'user_id' => $user->id,
@@ -239,7 +234,7 @@ class OnVideoUploadedService
                 continue;
             }
 
-            $this->createStreamNode(
+            $this->createStream(
                 video: $video,
                 stream: $streamCollection->videos()->first(),
                 codecType: 'video',
@@ -262,7 +257,7 @@ class OnVideoUploadedService
 
             $inputParams = array_merge($sharedAudioParams, $channelConfig);
 
-            $this->createStreamNode(
+            $this->createStream(
                 video: $video,
                 stream: $stream,
                 codecType: $stream->get('codec_type'),
@@ -277,7 +272,7 @@ class OnVideoUploadedService
     {
         foreach ($streams as $stream) {
             if ($stream->get('codec_type') === 'subtitle') {
-                $this->createStreamNode(
+                $this->createStream(
                     video: $video,
                     stream: $stream,
                     codecType: 'subtitle',
@@ -287,7 +282,7 @@ class OnVideoUploadedService
         }
     }
 
-    private function createStreamNode(
+    private function createStream(
         Video $video,
         Stream $stream,
         string $codecType,

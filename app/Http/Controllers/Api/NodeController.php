@@ -12,7 +12,8 @@ class NodeController extends Controller
 {
     public function __construct(
         private NodeService $nodeService,
-    ) {}
+    ) {
+    }
 
     public function index()
     {
@@ -51,18 +52,6 @@ class NodeController extends Controller
 
         return response()->json([
             'message' => 'Node deactivated successfully'
-        ]);
-    }
-
-    public function heartbeat(string $id)
-    {
-        $node = Node::findOrFail($id);
-
-        $this->nodeService->updateNodeHealth($node);
-
-        return response()->json([
-            'message' => 'Node health updated',
-            'updated_at' => $node->fresh()->updated_at,
         ]);
     }
 }

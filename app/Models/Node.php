@@ -44,19 +44,4 @@ class Node extends Model
     {
         return $query->where('is_active', true);
     }
-
-    /**
-     * Get the current load (pending + running jobs) for this node
-     */
-    public function getCurrentLoad(): int
-    {
-        return $this->videos()
-            ->whereIn('status', ['pending', 'running'])
-            ->count();
-    }
-
-    public function markAsSeen(): void
-    {
-        $this->touch();
-    }
 }
