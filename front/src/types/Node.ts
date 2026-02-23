@@ -14,7 +14,7 @@ export type Node = {
   id: number
   name: string
   type: NodeType
-  host: string
+  baseUrl: string
   isActive: boolean
   status: string
   location: string
@@ -36,13 +36,13 @@ export type NodesResponse = {
 export type CreateNodePayload = {
   name: string
   type: NodeType
-  host: string
+  baseUrl: string
 }
 
 export type UpdateNodePayload = {
   name?: string
   type?: NodeType
-  host?: string
+  baseUrl?: string
   is_active?: boolean
   location?: string
 }

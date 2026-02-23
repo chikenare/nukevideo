@@ -32,7 +32,7 @@ class NodeController extends Controller
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255|unique:nodes,name,' . $node->id,
             'type' => 'sometimes|string|in:worker,proxy',
-            'host' => 'nullable|string|max:255',
+            'base_url' => 'nullable|url|max:255',
             'max_workers' => 'sometimes|integer|min:1|max:100',
             'is_active' => 'sometimes|boolean',
             'location' => 'nullable|string|max:255',

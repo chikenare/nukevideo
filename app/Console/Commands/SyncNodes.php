@@ -37,7 +37,7 @@ class SyncNodes extends Command
                 [
                     'name' => $name,
                     'type' => $type,
-                    'host' => env('HOSTNAME', gethostname()),
+                    'base_url' => config('node.base_url'),
                     'location' => $location,
                     'status' => $state,
                     'is_active' => $state === 'running',

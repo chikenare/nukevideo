@@ -18,9 +18,9 @@ class VodService
      */
     public function generateVodSignedUrl(string $baseUrl, string $ulid, array $customParams = []): string
     {
-        $secretHex = config('vod.token_secret');
-        $duration = config('vod.token_window');
-        $tokenName = config('vod.token_name');
+        $secretHex = config('node.vod.token_secret');
+        $duration = config('node.vod.token_window');
+        $tokenName = config('node.vod.token_name');
         $endTime = time() + $duration;
 
         $acl = "/hls/{$ulid}/*";

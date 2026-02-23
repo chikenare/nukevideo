@@ -12,7 +12,7 @@ class Node extends Model
         'name',
         'container_id',
         'type',
-        'host',
+        'base_url',
         'is_active',
         'status',
         'uptime',

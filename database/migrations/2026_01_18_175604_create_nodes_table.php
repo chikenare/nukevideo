@@ -14,7 +14,7 @@ return new class extends Migration {
             $table->id();
             $table->string('name');
             $table->string('container_id')->nullable();
-            $table->string('host')->nullable();
+            $table->string('base_url')->nullable();
             $table->string('type')->default('worker');
             $table->string('location');
             $table->boolean('is_active')->default(true);

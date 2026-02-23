@@ -60,7 +60,7 @@ class NodeService
         $node = Node::firstOrNew(['name' => $name]);
 
         $node->fill(array_merge([
-            'host' => gethostname(),
+            'base_url' => config('node.base_url'),
             'max_workers' => 3,
             'is_active' => true,
         ], $attributes));
