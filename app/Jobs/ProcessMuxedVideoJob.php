@@ -5,7 +5,6 @@ namespace App\Jobs;
 use App\Jobs\Concerns\HandlesStreamProcessing;
 use App\Models\Stream;
 use App\Services\MuxedStreamService;
-use App\Services\NodeService;
 use Exception;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -24,23 +23,20 @@ class ProcessMuxedVideoJob implements ShouldQueue
     public function __construct(
         public int $streamId,
         public string $outputFormat,
-    ) {}
+    ) {
+    }
 
-    public function handle(NodeService $nodeService): void
+    public function handle(): void
     {
         $this->stream = Stream::with('video')->find($this->streamId);
 
         try {
-            $this->validateNodeAssignment($this->stream);
-            $this->updateNodeHealth($nodeService, $this->stream);
-
             $service = new MuxedStreamService($this->stream, $this->outputFormat);
             $service->handle();
         } catch (Exception $e) {
             Log::error('Muxed video processing failed', [
                 'stream_id' => $this->stream->id,
                 'video_id' => $this->stream->video_id,
-                'node_id' => $this->stream->video->node_id,
                 'output_format' => $this->outputFormat,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),

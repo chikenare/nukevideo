@@ -16,7 +16,6 @@ return new class extends Migration {
             $table->ulid()->unique();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
             $table->foreignId('template_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('node_id')->nullable()->constrained('nodes')->nullOnDelete();
 
             $table->string('name');
             $table->decimal('duration', 10, 4);

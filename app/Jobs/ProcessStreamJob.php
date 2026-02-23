@@ -2,10 +2,8 @@
 
 namespace App\Jobs;
 
-use App\Enums\VideoStatus;
 use App\Jobs\Concerns\HandlesStreamProcessing;
 use App\Models\Stream;
-use App\Services\NodeService;
 use App\Services\StreamService;
 use Exception;
 use Illuminate\Bus\Batchable;
@@ -27,14 +25,11 @@ class ProcessStreamJob implements ShouldQueue
     ) {
     }
 
-    public function handle(NodeService $nodeService): void
+    public function handle(): void
     {
         $this->stream = Stream::with('video')->find($this->streamId);
 
         try {
-            $this->validateNodeAssignment($this->stream);
-            $this->updateNodeHealth($nodeService, $this->stream);
-
             $service = new StreamService($this->stream);
             $service->handle();
         } catch (Exception $e) {
@@ -42,7 +37,6 @@ class ProcessStreamJob implements ShouldQueue
                 'stream_id' => $this->stream->id,
                 'stream_type' => $this->stream->type,
                 'video_id' => $this->stream->video_id,
-                'node_id' => $this->stream->video->node_id,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString(),
             ]);

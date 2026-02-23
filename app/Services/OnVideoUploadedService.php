@@ -73,7 +73,6 @@ class OnVideoUploadedService
             $video = Video::create([
                 'user_id' => $user->id,
                 'template_id' => $template->id,
-                'node_id' => $node->id,
                 'name' => $filename,
                 'duration' => $mediaInfo['duration'],
                 'aspect_ratio' => $mediaInfo['aspectRatio'],

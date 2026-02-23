@@ -14,7 +14,6 @@ class Video extends Model
     protected $fillable = [
         'template_id',
         'user_id',
-        'node_id',
         'name',
         'duration',
         'aspect_ratio',
