@@ -227,12 +227,12 @@ class OnVideoUploadedService
 
             new ProcessMuxedVideoJob($downloadStream->id, $outputFormat),
 
-            // new CleanupVideoResourcesJob($video->ulid)
+            new CleanupVideoResourcesJob($video->ulid)
         ])
             ->onQueue('streams')
-            // ->catch(function (Throwable $e) use ($video) {
-            //     CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
-            // })
+            ->catch(function (Throwable $e) use ($video) {
+                CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
+            })
             ->dispatch();
     }
 
