@@ -49,8 +49,8 @@ abstract class BaseStreamService
     {
         $originalStream = $this->stream->video->streams()->where('type', 'original')->first();
 
-        if (!$originalStream || !Storage::exists($originalStream->path)) {
-            throw new Exception("Original video file not found");
+        if (!$originalStream || !Storage::disk('tmp')->exists($originalStream->path)) {
+            throw new Exception("Original video file not found on local disk");
         }
 
         return Storage::disk('tmp')->path($originalStream->path);
