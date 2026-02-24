@@ -5,14 +5,12 @@ namespace App\Jobs;
 use App\Jobs\Concerns\HandlesStreamProcessing;
 use App\Models\Stream;
 use App\Services\StreamService;
-use Exception;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Log;
 use Throwable;
 
 class ProcessStreamJob implements ShouldQueue
@@ -38,13 +36,6 @@ class ProcessStreamJob implements ShouldQueue
     }
     public function failed(Throwable $e): void
     {
-        Log::error('Stream job failed', [
-            'stream_id' => $this->stream->id,
-            'stream_type' => $this->stream->type,
-            'video_id' => $this->stream->video_id,
-            'error' => $e->getMessage(),
-        ]);
-
         $this->markStreamFailed($this->stream, $e->getMessage());
     }
 }
