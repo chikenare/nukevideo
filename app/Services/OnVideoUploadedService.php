@@ -160,21 +160,30 @@ class OnVideoUploadedService
         $parallelGroup = $jobs->all();
         $parallelGroup[] = new ProcessSubtitlesJob($video->id, $originalPath);
 
+        $onQueue = 'streams';
+
         Bus::chain([
             new DownloadOriginalFileJob($video->id, $originalPath),
-            new ExtractThumbnailJob($video->id, $originalPath),
 
             Bus::batch($parallelGroup)
                 ->name("Processing video: {$video->id}")
-                ->onQueue('streams'),
-
-            new GenerateVideoStoryboard($video->id, $originalPath),
-
-            new CleanupVideoResourcesJob($video->ulid)
+                ->onQueue($onQueue)
+                ->then(function () use ($video, $originalPath, $onQueue) {
+                    Bus::chain(([
+                        new ExtractThumbnailJob($video->id, $originalPath),
+                        new GenerateVideoStoryboard($video->id, $originalPath),
+                        new CleanupVideoResourcesJob($video->ulid)
+                    ]))
+                        ->onQueue($onQueue)
+                        ->catch(function (Throwable $e) use ($video, $onQueue) {
+                            CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue($onQueue);
+                        })
+                        ->dispatch();
+                }),
         ])
-            ->onQueue('streams')
-            ->catch(function (Throwable $e) use ($video) {
-                CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
+            ->onQueue($onQueue)
+            ->catch(function (Throwable $e) use ($video, $onQueue) {
+                CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue($onQueue);
             })
             ->dispatch();
     }
@@ -218,12 +227,12 @@ class OnVideoUploadedService
 
             new ProcessMuxedVideoJob($downloadStream->id, $outputFormat),
 
-            new CleanupVideoResourcesJob($video->ulid)
+            // new CleanupVideoResourcesJob($video->ulid)
         ])
             ->onQueue('streams')
-            ->catch(function (Throwable $e) use ($video) {
-                CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
-            })
+            // ->catch(function (Throwable $e) use ($video) {
+            //     CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
+            // })
             ->dispatch();
     }
 
