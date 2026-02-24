@@ -13,10 +13,13 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class ProcessStreamJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, HandlesStreamProcessing;
+
+    public $tries = 1;
 
     private Stream $stream;
 
@@ -27,25 +30,21 @@ class ProcessStreamJob implements ShouldQueue
 
     public function handle(): void
     {
-        try {
-            $this->stream = Stream::with('video')->find($this->streamId);
+        $this->stream = Stream::with('video')->find($this->streamId);
 
-            $service = new StreamService($this->stream);
-            $service->handle();
+        $service = new StreamService($this->stream);
+        $service->handle();
+        $this->updateVideoStatus($this->stream);
+    }
+    public function failed(Throwable $e): void
+    {
+        Log::error('Stream job failed', [
+            'stream_id' => $this->stream->id,
+            'stream_type' => $this->stream->type,
+            'video_id' => $this->stream->video_id,
+            'error' => $e->getMessage(),
+        ]);
 
-            $this->updateVideoStatus($this->stream);
-        } catch (Exception $e) {
-            Log::error('Stream job permanently failed after all retries', [
-                'stream_id' => $this->stream->id,
-                'stream_type' => $this->stream->type,
-                'video_id' => $this->stream->video_id,
-                'error' => $e->getMessage(),
-            ]);
-
-            $this->markStreamFailed($this->stream, $e->getMessage());
-        } finally {
-            $this->updateVideoStatus($this->stream);
-        }
-
+        $this->markStreamFailed($this->stream, $e->getMessage());
     }
 }

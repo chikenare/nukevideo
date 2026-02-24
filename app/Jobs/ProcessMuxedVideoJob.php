@@ -13,10 +13,13 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 class ProcessMuxedVideoJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, HandlesStreamProcessing;
+
+    public $tries = 1;
 
     private Stream $stream;
 
@@ -30,20 +33,19 @@ class ProcessMuxedVideoJob implements ShouldQueue
     {
         $this->stream = Stream::with('video')->find($this->streamId);
 
-        try {
-            $service = new MuxedStreamService($this->stream, $this->outputFormat);
-            $service->handle();
-        } catch (Exception $e) {
-            Log::error('Muxed video processing failed', [
-                'stream_id' => $this->stream->id,
-                'video_id' => $this->stream->video_id,
-                'output_format' => $this->outputFormat,
-                'error' => $e->getMessage(),
-            ]);
+        $service = new MuxedStreamService($this->stream, $this->outputFormat);
+        $service->handle();
+        $this->updateVideoStatus($this->stream);
+    }
+    public function failed(Throwable $e): void
+    {
+        Log::error('Muxed video processing failed', [
+            'stream_id' => $this->stream->id,
+            'video_id' => $this->stream->video_id,
+            'output_format' => $this->outputFormat,
+            'error' => $e->getMessage(),
+        ]);
 
-            $this->markStreamFailed($this->stream, $e->getMessage());
-        } finally {
-            $this->updateVideoStatus($this->stream);
-        }
+        $this->markStreamFailed($this->stream, $e->getMessage());
     }
 }
