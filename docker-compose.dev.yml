@@ -63,7 +63,7 @@ services:
       test: ["CMD", "healthcheck-queue"]
       start_period: 10s
     deploy:
-      replicas: 2
+      replicas: 3
     volumes:
       - ./:/var/www/html
     depends_on:
