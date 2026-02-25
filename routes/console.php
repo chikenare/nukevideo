@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('nodes:prune')->everyFiveMinutes();
+Schedule::command('videos:prune')->everyThirtyMinutes();
