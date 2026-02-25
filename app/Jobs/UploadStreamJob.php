@@ -42,6 +42,20 @@ class UploadStreamJob implements ShouldQueue
             'progress' => 100,
             'completed_at' => now(),
         ], $completionData));
+
+        $this->markVideoCompletedIfReady($stream->video);
+    }
+
+    private function markVideoCompletedIfReady($video): void
+    {
+        $allCompleted = !$video->streams()
+            ->whereIn('type', ['video', 'audio'])
+            ->where('status', '!=', VideoStatus::COMPLETED->value)
+            ->exists();
+
+        if ($allCompleted) {
+            $video->update(['status' => VideoStatus::COMPLETED->value]);
+        }
     }
 
     private function upload(Stream $stream, string $localPath): void
