@@ -37,8 +37,13 @@ const formatBytes = (bytes: number): string => {
 }
 
 const memoryPercent = (node: Node): number => {
-  if (!node.metrics || !node.metrics.memory_limit) return 0
-  return Math.round((node.metrics.memory_usage / node.metrics.memory_limit) * 100)
+  if (!node.metrics || !node.metrics.memory_total) return 0
+  return Math.round((node.metrics.memory_usage / node.metrics.memory_total) * 100)
+}
+
+const diskPercent = (node: Node): number => {
+  if (!node.metrics || !node.metrics.disk_total) return 0
+  return Math.round((node.metrics.disk_usage / node.metrics.disk_total) * 100)
 }
 
 const statusVariant = (status: string) => {
@@ -49,7 +54,7 @@ const statusVariant = (status: string) => {
 
 onMounted(() => {
   fetchNodes()
-  pollInterval = setInterval(fetchNodes, 30000)
+  pollInterval = setInterval(fetchNodes, 10000)
 })
 
 onUnmounted(() => {
@@ -69,7 +74,7 @@ onUnmounted(() => {
     </div>
 
     <div v-else-if="nodesData.nodes.length === 0" class="text-center text-muted-foreground py-12">
-      No nodes found. Run <code class="bg-muted px-1.5 py-0.5 rounded text-sm">php artisan node:sync</code> to sync.
+      No nodes found. Run <code class="bg-muted px-1.5 py-0.5 rounded text-sm">php artisan nodes:sync</code> to sync.
     </div>
 
     <div v-else class="overflow-hidden rounded-lg border">
@@ -80,7 +85,7 @@ onUnmounted(() => {
             <TableHead>Status</TableHead>
             <TableHead class="w-[180px]">CPU</TableHead>
             <TableHead class="w-[180px]">Memory</TableHead>
-            <TableHead>Disk I/O</TableHead>
+            <TableHead class="w-[180px]">Disk</TableHead>
             <TableHead>Network</TableHead>
             <TableHead class="text-right">Last Seen</TableHead>
           </TableRow>
@@ -112,6 +117,9 @@ onUnmounted(() => {
                   <Progress :model-value="node.metrics.cpu_percent" class="h-1.5 flex-1" />
                   <span class="text-xs font-medium w-10 text-right">{{ node.metrics.cpu_percent }}%</span>
                 </div>
+                <span class="text-xs text-muted-foreground">
+                  Load: {{ node.metrics.load_average.join(', ') }}
+                </span>
               </template>
               <span v-else class="text-xs text-muted-foreground">-</span>
             </TableCell>
@@ -124,7 +132,7 @@ onUnmounted(() => {
                   <span class="text-xs font-medium w-10 text-right">{{ memoryPercent(node) }}%</span>
                 </div>
                 <span class="text-xs text-muted-foreground">{{ formatBytes(node.metrics.memory_usage) }} / {{
-                  formatBytes(node.metrics.memory_limit) }}</span>
+                  formatBytes(node.metrics.memory_total) }}</span>
               </template>
               <span v-else class="text-xs text-muted-foreground">-</span>
             </TableCell>
@@ -132,11 +140,12 @@ onUnmounted(() => {
             <!-- Disk -->
             <TableCell>
               <template v-if="node.metrics">
-                <div class="text-xs">
-                  <span class="text-muted-foreground">R</span> {{ formatBytes(node.metrics.disk_read) }}
-                  <span class="text-muted-foreground mx-0.5">/</span>
-                  <span class="text-muted-foreground">W</span> {{ formatBytes(node.metrics.disk_write) }}
+                <div class="flex items-center gap-2">
+                  <Progress :model-value="diskPercent(node)" class="h-1.5 flex-1" />
+                  <span class="text-xs font-medium w-10 text-right">{{ diskPercent(node) }}%</span>
                 </div>
+                <span class="text-xs text-muted-foreground">{{ formatBytes(node.metrics.disk_usage) }} / {{
+                  formatBytes(node.metrics.disk_total) }}</span>
               </template>
               <span v-else class="text-xs text-muted-foreground">-</span>
             </TableCell>

@@ -10,134 +10,131 @@ class SyncNodes extends Command
 {
     protected $signature = 'nodes:sync';
 
-    protected $description = 'Sync nodes information and metrics from Docker containers';
+    protected $description = 'Sync node information and metrics from host machine';
 
     public function handle()
     {
-        $containers = $this->getContainers();
-
-        if (empty($containers)) {
-            $this->warn('No containers found.');
-            return;
-        }
-
+        $hostname = gethostname();
         $location = env('NODE_LOCATION', 'local');
 
-        foreach ($containers as $container) {
-            $name = ltrim($container['Names'][0] ?? 'unknown', '/');
-            $containerId = $container['Id'];
-            $state = $container['State'] ?? 'unknown';
-            $uptime = $container['Status'] ?? null;
+        $metrics = $this->getHostMetrics();
+        $uptime = $this->getUptime();
 
-            $type = $this->resolveNodeType($container['Image'] ?? '');
-            $stats = $state === 'running' ? $this->getContainerStats($containerId) : [];
-
-            Node::updateOrCreate(
-                ['container_id' => $containerId],
-                [
-                    'name' => $name,
-                    'type' => $type,
-                    'base_url' => config('node.base_url'),
-                    'location' => $location,
-                    'status' => $state,
-                    'is_active' => $state === 'running',
-                    'metrics' => $stats ?: null,
-                    'uptime' => $uptime,
-                ]
-            );
-        }
-    }
-
-    private function getContainers(): array
-    {
-        $filter = http_build_query([
-            'filters' => json_encode([
-                'ancestor' => ['nukevideo-worker', 'nukevideo-cdn'],
-            ]),
-        ]);
-
-        $process = Process::run(
-            "curl -s --unix-socket /var/run/docker.sock 'http://localhost/containers/json?all=true&{$filter}'"
+        Node::updateOrCreate(
+            ['name' => $hostname],
+            [
+                'type' => env('NODE_TYPE', 'worker'),
+                'base_url' => config('node.base_url'),
+                'location' => $location,
+                'status' => 'running',
+                'is_active' => true,
+                'metrics' => $metrics,
+                'uptime' => $uptime,
+            ]
         );
 
-        if (! $process->successful()) {
-            $this->error('Failed to list containers: ' . $process->errorOutput());
-            return [];
-        }
-
-        return json_decode($process->output(), true) ?: [];
+        $this->info("Node '{$hostname}' synced successfully.");
     }
 
-    private function getContainerStats(string $containerId): array
+    private function getHostMetrics(): array
     {
-        $process = Process::run(
-            "curl -s --unix-socket /var/run/docker.sock 'http://localhost/containers/{$containerId}/stats?stream=false'"
-        );
-
-        if (! $process->successful()) {
-            return [];
-        }
-
-        $stats = json_decode($process->output(), true);
-
-        if (! $stats) {
-            return [];
-        }
-
         return [
-            'cpu_percent' => $this->calculateCpuPercent($stats),
-            'memory_usage' => $stats['memory_stats']['usage'] ?? 0,
-            'memory_limit' => $stats['memory_stats']['limit'] ?? 0,
-            'disk_read' => $this->sumBlkioField($stats, 'Read'),
-            'disk_write' => $this->sumBlkioField($stats, 'Write'),
-            'network_rx' => $this->sumNetworkField($stats, 'rx_bytes'),
-            'network_tx' => $this->sumNetworkField($stats, 'tx_bytes'),
+            'cpu_percent' => $this->getCpuPercent(),
+            'memory_usage' => $this->getMemoryUsage(),
+            'memory_total' => $this->getMemoryTotal(),
+            'disk_usage' => $this->getDiskUsage(),
+            'disk_total' => $this->getDiskTotal(),
+            'load_average' => $this->getLoadAverage(),
+            'network_rx' => $this->getNetworkBytes('rx'),
+            'network_tx' => $this->getNetworkBytes('tx'),
         ];
     }
 
-    private function calculateCpuPercent(array $stats): float
+    private function getCpuPercent(): float
     {
-        $cpuDelta = ($stats['cpu_stats']['cpu_usage']['total_usage'] ?? 0)
-            - ($stats['precpu_stats']['cpu_usage']['total_usage'] ?? 0);
+        $result = Process::run("grep 'cpu ' /proc/stat");
 
-        $systemDelta = ($stats['cpu_stats']['system_cpu_usage'] ?? 0)
-            - ($stats['precpu_stats']['system_cpu_usage'] ?? 0);
-
-        $cpuCount = $stats['cpu_stats']['online_cpus'] ?? 1;
-
-        if ($systemDelta > 0 && $cpuDelta > 0) {
-            return round(($cpuDelta / $systemDelta) * $cpuCount * 100, 2);
-        }
-
-        return 0;
-    }
-
-    private function sumBlkioField(array $stats, string $op): int
-    {
-        $entries = $stats['blkio_stats']['io_service_bytes_recursive'] ?? [];
-
-        if (! is_array($entries)) {
+        if (! $result->successful()) {
             return 0;
         }
 
-        return collect($entries)
-            ->where('op', $op)
-            ->sum('value');
-    }
+        $parts = preg_split('/\s+/', trim($result->output()));
+        // user + nice + system + idle + iowait + irq + softirq + steal
+        $idle = (int) ($parts[4] ?? 0);
+        $total = array_sum(array_map('intval', array_slice($parts, 1)));
 
-    private function sumNetworkField(array $stats, string $field): int
-    {
-        $networks = $stats['networks'] ?? [];
-
-        return collect($networks)->sum($field);
-    }
-
-    private function resolveNodeType(string $image): string
-    {
-        if (str_contains($image, 'cdn') || str_contains($image, 'proxy')) {
-            return 'proxy';
+        if ($total === 0) {
+            return 0;
         }
 
-        return 'worker';
+        return round((1 - $idle / $total) * 100, 2);
+    }
+
+    private function getMemoryUsage(): int
+    {
+        $result = Process::run("awk '/MemAvailable/ {available=$2} /MemTotal/ {total=$2} END {print (total - available) * 1024}' /proc/meminfo");
+
+        return $result->successful() ? (int) trim($result->output()) : 0;
+    }
+
+    private function getMemoryTotal(): int
+    {
+        $result = Process::run("awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo");
+
+        return $result->successful() ? (int) trim($result->output()) : 0;
+    }
+
+    private function getDiskUsage(): int
+    {
+        $result = Process::run("df -B1 / | awk 'NR==2 {print $3}'");
+
+        return $result->successful() ? (int) trim($result->output()) : 0;
+    }
+
+    private function getDiskTotal(): int
+    {
+        $result = Process::run("df -B1 / | awk 'NR==2 {print $2}'");
+
+        return $result->successful() ? (int) trim($result->output()) : 0;
+    }
+
+    private function getLoadAverage(): array
+    {
+        $result = Process::run("cat /proc/loadavg");
+
+        if (! $result->successful()) {
+            return [0, 0, 0];
+        }
+
+        $parts = explode(' ', trim($result->output()));
+
+        return [
+            (float) ($parts[0] ?? 0),
+            (float) ($parts[1] ?? 0),
+            (float) ($parts[2] ?? 0),
+        ];
+    }
+
+    private function getNetworkBytes(string $direction): int
+    {
+        $field = $direction === 'rx' ? 2 : 10;
+        $result = Process::run("awk 'NR>2 && $1 !~ /lo:/ {sum += $" . $field . "} END {print sum+0}' /proc/net/dev");
+
+        return $result->successful() ? (int) trim($result->output()) : 0;
+    }
+
+    private function getUptime(): string
+    {
+        $result = Process::run("cat /proc/uptime");
+
+        if (! $result->successful()) {
+            return 'unknown';
+        }
+
+        $seconds = (int) explode(' ', trim($result->output()))[0];
+        $days = intdiv($seconds, 86400);
+        $hours = intdiv($seconds % 86400, 3600);
+
+        return "{$days}d {$hours}h";
     }
 }

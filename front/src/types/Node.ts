@@ -3,9 +3,10 @@ export type NodeType = 'worker' | 'proxy'
 export type NodeMetrics = {
   cpu_percent: number
   memory_usage: number
-  memory_limit: number
-  disk_read: number
-  disk_write: number
+  memory_total: number
+  disk_usage: number
+  disk_total: number
+  load_average: [number, number, number]
   network_rx: number
   network_tx: number
 }

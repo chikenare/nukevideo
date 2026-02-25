@@ -63,10 +63,24 @@ services:
       test: ["CMD", "healthcheck-queue"]
       start_period: 10s
     restart: always
-    deploy:
-      replicas: 2
     volumes:
       - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+  nukevideo-node-discover:
+    image: nukevideo
+    build:
+      context: .
+    command: ["sh", "-c", "while true; do php /var/www/html/artisan nodes:sync; sleep 40; done"]
+    user: root
+    volumes:
+      - ./:/var/www/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
       db:
         condition: service_healthy
