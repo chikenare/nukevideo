@@ -29,14 +29,6 @@ class OnVideoUploaded implements ShouldQueue
     {
         $key = urldecode($this->object['key'] ?? 'unknown');
 
-        Log::critical('Video upload job failed permanently after all retries', [
-            'file_path' => $key,
-            'user_uuid' => $this->object['userMetadata']['X-Amz-Meta-User'] ?? null,
-            'template_ulid' => $this->object['userMetadata']['X-Amz-Meta-Template'] ?? null,
-            'error' => $exception->getMessage(),
-            'attempts' => $this->attempts()
-        ]);
-
         // Attempt final cleanup of uploaded file
         if (!Storage::delete($key)) {
             Log::error('Failed to delete file in job failure handler', [
