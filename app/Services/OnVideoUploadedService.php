@@ -7,7 +7,6 @@ use App\Jobs\CleanupVideoResourcesJob;
 use App\Jobs\DownloadOriginalFileJob;
 use App\Jobs\ExtractThumbnailJob;
 use App\Jobs\GenerateVideoStoryboard;
-use App\Jobs\ProcessMuxedVideoJob;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
 use App\Models\User;
@@ -55,8 +54,6 @@ class OnVideoUploadedService
 
         $variants = $template->query['variants'] ?? [];
         $audioConfig = $template->query['audio'] ?? [];
-        $outputFormat = $template->query['output_format'] ?? 'hls';
-        $isMuxed = in_array($outputFormat, ['mp4', 'mkv']);
 
         $filename = $object['userMetadata']['X-Amz-Meta-Filename'] ?? $object['userMetadata']['filename'];
 
@@ -70,7 +67,6 @@ class OnVideoUploadedService
             'name' => $filename,
             'duration' => $mediaInfo['duration'],
             'aspect_ratio' => $mediaInfo['aspectRatio'],
-            'output_format' => $outputFormat,
         ]);
 
         $video->refresh();
@@ -86,17 +82,8 @@ class OnVideoUploadedService
             'completed_at' => now(),
         ]);
 
-        if ($isMuxed) {
-            $this->createMuxedStream($video, $mediaInfo['streamCollection'], $variants, $outputFormat);
-        } else {
-            $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants, $audioConfig);
-        }
-
-        if ($isMuxed) {
-            $this->dispatchMuxedJobs($video, $key, $outputFormat);
-        } else {
-            $this->dispatchHlsJobs($video, $key);
-        }
+        $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants, $audioConfig);
+        $this->dispatchHlsJobs($video, $key);
     }
 
     private function resolveUserAndTemplate(array $metadata): array
@@ -177,49 +164,6 @@ class OnVideoUploadedService
             ->onQueue($onQueue)
             ->catch(function (Throwable $e) use ($video, $onQueue) {
                 CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue($onQueue);
-            })
-            ->dispatch();
-    }
-
-    private function createMuxedStream(Video $video, StreamCollection $streamCollection, array $variants, string $outputFormat): void
-    {
-        $formatConfig = $variants[0];
-        $videoStream = $streamCollection->videos()->first();
-
-        if ($videoStream->get('height') < $formatConfig['resolution']) {
-            $formatConfig['resolution'] = $videoStream->get('height');
-        }
-
-        $ulid = Str::ulid();
-
-        $video->streams()->create([
-            'path' => "$video->ulid/download/$ulid.$outputFormat",
-            'type' => 'download',
-            'size' => 0,
-            'meta' => [],
-            'name' => $outputFormat,
-            'input_params' => $formatConfig,
-            'status' => VideoStatus::PENDING->value,
-            'width' => $videoStream->get('width'),
-            'height' => $videoStream->get('height'),
-        ]);
-    }
-
-    private function dispatchMuxedJobs(Video $video, string $originalPath, string $outputFormat): void
-    {
-        $downloadStream = $video->streams()->where('type', 'download')->first();
-
-        Bus::chain([
-            new DownloadOriginalFileJob($video->id, $originalPath),
-            new ExtractThumbnailJob($video->id, $originalPath),
-
-            new ProcessMuxedVideoJob($downloadStream->id, $outputFormat),
-
-            new CleanupVideoResourcesJob($video->ulid)
-        ])
-            ->onQueue('streams')
-            ->catch(function (Throwable $e) use ($video) {
-                CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('streams');
             })
             ->dispatch();
     }

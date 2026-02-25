@@ -1,11 +1,8 @@
 // Server response structure - flat parameters
-export type OutputFormat = 'hls' | 'mp4' | 'mkv'
-
 export type Template = {
   ulid: string
   name: string
   query: {
-    output_format: OutputFormat
     variants: TemplateVariant[]
     audio: AudioConfig
   }

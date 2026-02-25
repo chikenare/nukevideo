@@ -48,7 +48,7 @@ const handlePlayVideo = async () => {
     <template v-if="isPlaying && videoUrl">
       <media-player :title="video.name" :src="videoUrl" class="w-full h-full">
         <media-provider />
-        <media-video-layout :thumbnails="video.outputFormat === 'hls' ? video.storyboardUrl : undefined" />
+        <media-video-layout :thumbnails="video.storyboardUrl" />
       </media-player>
     </template>
     <template v-if="video.status == 'completed' && !isPlaying && !videoUrl">

@@ -25,7 +25,6 @@ class StoreTemplateRequest extends FormRequest
     {
         return [
             'name' => 'required|string|max:255',
-            'query.output_format' => 'sometimes|string|in:hls,mp4,mkv',
             'query.variants' => 'array',
             'query.variants.*' => new TemplateFormatRule,
             'query.audio' => ['array', new TemplateAudioRule]

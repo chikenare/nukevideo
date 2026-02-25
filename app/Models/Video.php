@@ -18,7 +18,6 @@ class Video extends Model
         'duration',
         'aspect_ratio',
         'thumbnail_path',
-        'output_format',
         'status',
     ];
 

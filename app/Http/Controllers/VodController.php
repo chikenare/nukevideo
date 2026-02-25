@@ -6,7 +6,6 @@ use App\Enums\VideoStatus;
 use App\Models\Video;
 use App\Services\VodService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 
 class VodController extends Controller
 {
@@ -15,19 +14,6 @@ class VodController extends Controller
         $video = Video::with('streams')
             ->where('ulid', $ulid)
             ->firstOrFail();
-
-        if ($video->type == 'download') {
-            $downloadStream = $video->streams->where('type', 'download')->first();
-
-            if (!$downloadStream) {
-                abort(404, 'Download stream not found');
-            }
-
-            return [
-                'url' => Storage::temporaryUrl($downloadStream->path, now()->addHours(4)),
-                'type' => $video->output_format,
-            ];
-        }
 
         $service = new VodService;
 

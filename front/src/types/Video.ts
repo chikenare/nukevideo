@@ -1,5 +1,3 @@
-import type { OutputFormat } from './Template'
-
 export enum VideoStatus {
   pending = 'pending',
   running = 'running',
@@ -19,7 +17,6 @@ type Video = {
   storyboardUrl: string
   creatorId: string | null
   externalId: string | null
-  outputFormat: OutputFormat
   createdAt: string
 
   streams: Stream[]
@@ -35,7 +32,7 @@ enum StreamType {
   audio = 'audio',
   subtitle = 'subtitle',
   original = 'original',
-  download = 'download'
+  download = 'download' // legacy, may be removed
 }
 
 type Stream = {

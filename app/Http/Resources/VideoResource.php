@@ -25,8 +25,6 @@ class VideoResource extends JsonResource
             'thumbnailUrl' => $this->thumbnail_path ? url("/videos/{$this->thumbnail_path}") : null,
             'storyboardUrl' => url("/videos/{$this->ulid}/storyboard.vtt"),
 
-            'outputFormat' => $this->output_format,
-
             'streams' => StreamResource::collection($this->whenLoaded('streams')),
 
             'size' => $this->whenLoaded('streams', function () {
