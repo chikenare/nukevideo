@@ -9,7 +9,6 @@ use App\Jobs\ExtractThumbnailJob;
 use App\Jobs\GenerateVideoStoryboard;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
-use App\Jobs\UploadStreamJob;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
@@ -136,10 +135,8 @@ class OnVideoUploadedService
         $streamJobs = $video->streams()
             ->whereIn('type', ['video', 'audio'])
             ->get()
-            ->map(fn($stream) => [
-                new ProcessStreamJob($stream->id),
-                new UploadStreamJob($stream->id),
-            ])->all();
+            ->map(fn($stream) => new ProcessStreamJob($stream->id))
+            ->all();
 
 
         $onQueue = 'streams';

@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Services\StreamService;
+use App\Jobs\UploadStreamJob;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -30,6 +31,8 @@ class ProcessStreamJob implements ShouldQueue
 
         $service = new StreamService($stream);
         $service->handle();
+
+        $this->appendToChain(new UploadStreamJob($this->streamId));
     }
 
     public function failed(Throwable $e): void
