@@ -62,8 +62,9 @@ services:
     healthcheck:
       test: ["CMD", "healthcheck-queue"]
       start_period: 10s
+    restart: always
     deploy:
-      replicas: 3
+      replicas: 2
     volumes:
       - ./:/var/www/html
     depends_on:
@@ -73,22 +74,7 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_started
-  nukevideo-worker-manager:
-    image: nukevideo
-    build:
-      context: .
-    command: ["sh", "-c", "while true; do php /var/www/html/artisan nodes:sync; sleep 60; done"]
-    user: root
-    volumes:
-      - ./:/var/www/html
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rustfs:
-        condition: service_started
+
   nukevideo-cdn:
     image: nukevideo-cdn
     build:
@@ -140,6 +126,12 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+  redisinsight:
+    image: redis/redisinsight:latest
+    ports:
+      - "5540:5540"
+    volumes:
+      - redisinsight:/data
 
 volumes:
   mariadb-data:
@@ -149,6 +141,8 @@ volumes:
   redis-data:
     driver: local
   pnpm_store:
+    driver: local
+  redisinsight:
     driver: local
 
 networks:
