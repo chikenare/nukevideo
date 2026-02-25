@@ -2,7 +2,7 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\HandlesStreamProcessing;
+use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Services\StreamService;
 use Illuminate\Bus\Batchable;
@@ -15,27 +15,28 @@ use Throwable;
 
 class ProcessStreamJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, HandlesStreamProcessing;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public $tries = 1;
 
-    private Stream $stream;
-
     public function __construct(
-        public int $streamId
+        public int $streamId,
     ) {
     }
 
     public function handle(): void
     {
-        $this->stream = Stream::with('video')->find($this->streamId);
+        $stream = Stream::with('video')->findOrFail($this->streamId);
 
-        $service = new StreamService($this->stream);
+        $service = new StreamService($stream);
         $service->handle();
-        $this->updateVideoStatus($this->stream);
     }
+
     public function failed(Throwable $e): void
     {
-        $this->markStreamFailed($this->stream, $e->getMessage());
+        Stream::where('id', $this->streamId)->update([
+            'status' => VideoStatus::FAILED->value,
+            'error_log' => $e->getMessage(),
+        ]);
     }
 }

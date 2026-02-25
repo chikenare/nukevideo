@@ -9,6 +9,7 @@ use App\Jobs\ExtractThumbnailJob;
 use App\Jobs\GenerateVideoStoryboard;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
+use App\Jobs\UploadStreamJob;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
@@ -132,28 +133,30 @@ class OnVideoUploadedService
 
     private function dispatchHlsJobs(Video $video, string $originalPath): void
     {
-        $jobs = $video->streams()
+        $streamJobs = $video->streams()
             ->whereIn('type', ['video', 'audio'])
             ->get()
-            ->map(fn($stream) => new ProcessStreamJob($stream->id));
+            ->map(fn($stream) => [
+                new ProcessStreamJob($stream->id),
+                new UploadStreamJob($stream->id),
+            ])->all();
 
-        $parallelGroup = $jobs->all();
-        $parallelGroup[] = new ProcessSubtitlesJob($video->id, $originalPath);
 
         $onQueue = 'streams';
 
         Bus::chain([
             new DownloadOriginalFileJob($video->id, $originalPath),
 
-            Bus::batch($parallelGroup)
+            Bus::batch($streamJobs)
                 ->name("Processing video: {$video->id}")
                 ->onQueue($onQueue)
                 ->then(function () use ($video, $originalPath, $onQueue) {
-                    Bus::chain(([
+                    Bus::chain([
+                        new ProcessSubtitlesJob($video->id, $originalPath),
                         new ExtractThumbnailJob($video->id, $originalPath),
                         new GenerateVideoStoryboard($video->id, $originalPath),
-                        new CleanupVideoResourcesJob($video->ulid)
-                    ]))
+                        new CleanupVideoResourcesJob($video->ulid),
+                    ])
                         ->onQueue($onQueue)
                         ->catch(function (Throwable $e) use ($video, $onQueue) {
                             CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue($onQueue);
