@@ -46,16 +46,18 @@ class ProcessSubtitlesJob implements ShouldQueue
 
         $this->extractSubtitles($streams, $inputLocalPath);
 
-        $streams->each->update(['status' => VideoStatus::UPLOADING->value]);
-
         foreach ($streams as $stream) {
             $localPath = Storage::disk('tmp')->path($stream->path);
 
             if (!file_exists($localPath)) {
-                throw new Exception("Subtitle file not found after extraction: $localPath");
+                return;
             }
 
-            Storage::put($stream->path, file_get_contents($localPath));
+            $uploaded = Storage::put($stream->path, file_get_contents($localPath));
+
+            if (!$uploaded) {
+                throw new Exception("Failed to upload subtitle stream: {$stream->id}");
+            }
 
             $stream->update([
                 'size' => filesize($localPath),
