@@ -1,8 +1,6 @@
 <?php
 
 return [
-    'base_url' => env('NODE_BASE_URL'),
-
     'vod' => [
         'token_secret' => env('VOD_TOKEN_SECRET', ''),
 

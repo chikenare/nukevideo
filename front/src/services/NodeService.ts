@@ -30,9 +30,9 @@ class NodeService {
         await this.api.delete(`${this.BASE_PATH}/${id}`)
     }
 
-    async deployNode(id: number): Promise<{ success: boolean; message: string; output: string }> {
-        const res = await this.api.post(`${this.BASE_PATH}/${id}/deploy`)
-        return res.data
+    async getMetrics(id: number): Promise<Node> {
+        const res = await this.api.get(`${this.BASE_PATH}/${id}/metrics`)
+        return res.data.data
     }
 }
 

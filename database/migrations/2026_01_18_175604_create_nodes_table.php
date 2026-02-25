@@ -15,9 +15,8 @@ return new class extends Migration {
             $table->ipAddress()->unique();
             $table->string('name');
             $table->string('container_id')->nullable();
-            $table->string('base_url')->nullable();
+            $table->string('hostname')->nullable();
             $table->string('type')->default('worker');
-            $table->string('location');
             $table->boolean('is_active')->default(true);
             $table->string('status')->default('unknown');
             $table->string('uptime')->nullable();

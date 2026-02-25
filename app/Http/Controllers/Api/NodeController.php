@@ -17,7 +17,21 @@ class NodeController extends Controller
 
     public function index()
     {
-        return $this->nodeService->getNodesStats();
+        return $this->nodeService->index();
+    }
+
+    public function store(Request $request)
+    {
+        $validated = $request->validate([
+            'hostname' => 'nullable|max:255',
+            'name' => 'required|string|max:255|unique:nodes,name',
+            'ip_address' => 'required|ip',
+            'type' => 'required|string|in:worker,proxy',
+        ]);
+
+        $node = $this->nodeService->createNode($validated);
+
+        return new NodeResource($node);
     }
 
     public function show(string $id)
@@ -32,16 +46,24 @@ class NodeController extends Controller
 
         $validated = $request->validate([
             'name' => 'sometimes|string|max:255|unique:nodes,name,' . $node->id,
-            'type' => 'sometimes|string|in:worker,proxy',
-            'base_url' => 'nullable|url|max:255',
+            'ip_address' => 'sometimes|ip',
+            'hostname' => 'nullable|max:255',
             'max_workers' => 'sometimes|integer|min:1|max:100',
             'is_active' => 'sometimes|boolean',
-            'location' => 'nullable|string|max:255',
         ]);
 
         $node->update($validated);
 
         return new NodeResource($node->fresh());
+    }
+
+    public function metrics(string $id)
+    {
+        $node = Node::findOrFail($id);
+
+        $node = $this->nodeService->syncNodeMetrics($node);
+
+        return new NodeResource($node);
     }
 
     public function destroy(string $id)

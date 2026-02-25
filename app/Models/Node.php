@@ -10,14 +10,14 @@ class Node extends Model
 {
     protected $fillable = [
         'name',
+        'ip_address',
         'container_id',
         'type',
-        'base_url',
+        'hostname',
         'is_active',
         'status',
         'uptime',
         'metrics',
-        'location',
     ];
 
     protected function casts()

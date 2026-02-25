@@ -17,11 +17,11 @@ class NodeResource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
+            'ipAddress' => $this->ip_address,
             'type' => $this->type,
-            'baseUrl' => $this->base_url,
+            'hostname' => $this->hostname,
             'isActive' => $this->is_active,
             'status' => $this->status,
-            'location' => $this->location,
             'uptime' => $this->uptime,
             'metrics' => $this->metrics,
             'lastSeenAt' => $this->updated_at?->diffForHumans(),

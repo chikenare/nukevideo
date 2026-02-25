@@ -14,11 +14,11 @@ export type NodeMetrics = {
 export type Node = {
   id: number
   name: string
+  ipAddress: string
   type: NodeType
-  baseUrl: string
+  hostname?: string
   isActive: boolean
   status: string
-  location: string
   uptime: string | null
   metrics: NodeMetrics | null
   lastSeenAt: string | null
@@ -36,14 +36,13 @@ export type NodesResponse = {
 
 export type CreateNodePayload = {
   name: string
+  ip_address: string
   type: NodeType
-  baseUrl: string
 }
 
 export type UpdateNodePayload = {
   name?: string
   type?: NodeType
-  baseUrl?: string
+  hostname?: string
   is_active?: boolean
-  location?: string
 }

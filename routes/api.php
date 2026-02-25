@@ -29,7 +29,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::apiResource('templates', TemplateController::class);
 
     // Node Management API
-    Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class)->except('store');
+    Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class);
+    Route::get('nodes/{node}/metrics', [\App\Http\Controllers\Api\NodeController::class, 'metrics']);
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);
     Route::apiResource('/streams', StreamController::class)->except(['show', 'index']);
