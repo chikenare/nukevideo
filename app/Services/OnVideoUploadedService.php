@@ -17,7 +17,6 @@ use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Stream;
 use FFMpeg\FFProbe\DataMapping\StreamCollection;
 use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Throwable;
@@ -61,48 +60,39 @@ class OnVideoUploadedService
 
         $filename = $object['userMetadata']['X-Amz-Meta-Filename'] ?? $object['userMetadata']['filename'];
 
-        DB::beginTransaction();
 
-        try {
+        $video = Video::create([
+            'user_id' => $user->id,
+            'template_id' => $template->id,
+            'name' => $filename,
+            'duration' => $mediaInfo['duration'],
+            'aspect_ratio' => $mediaInfo['aspectRatio'],
+            'output_format' => $outputFormat,
+        ]);
 
-            $video = Video::create([
-                'user_id' => $user->id,
-                'template_id' => $template->id,
-                'name' => $filename,
-                'duration' => $mediaInfo['duration'],
-                'aspect_ratio' => $mediaInfo['aspectRatio'],
-                'output_format' => $outputFormat,
-            ]);
+        $video->refresh();
 
-            $video->refresh();
+        $video->streams()->create([
+            'path' => $key,
+            'name' => 'Original',
+            'type' => 'original',
+            'size' => $object['size'],
+            'meta' => [],
+            'status' => VideoStatus::COMPLETED->value,
+            'started_at' => now(),
+            'completed_at' => now(),
+        ]);
 
-            $video->streams()->create([
-                'path' => $key,
-                'name' => 'Original',
-                'type' => 'original',
-                'size' => $object['size'],
-                'meta' => [],
-                'status' => VideoStatus::COMPLETED->value,
-                'started_at' => now(),
-                'completed_at' => now(),
-            ]);
+        if ($isMuxed) {
+            $this->createMuxedStream($video, $mediaInfo['streamCollection'], $variants, $outputFormat);
+        } else {
+            $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants, $audioConfig);
+        }
 
-            if ($isMuxed) {
-                $this->createMuxedStream($video, $mediaInfo['streamCollection'], $variants, $outputFormat);
-            } else {
-                $this->createProcessingStreams($video, $mediaInfo['streamCollection'], $variants, $audioConfig);
-            }
-
-            DB::commit();
-
-            if ($isMuxed) {
-                $this->dispatchMuxedJobs($video, $key, $outputFormat);
-            } else {
-                $this->dispatchHlsJobs($video, $key);
-            }
-        } catch (Exception $e) {
-            DB::rollBack();
-            throw $e;
+        if ($isMuxed) {
+            $this->dispatchMuxedJobs($video, $key, $outputFormat);
+        } else {
+            $this->dispatchHlsJobs($video, $key);
         }
     }
 
