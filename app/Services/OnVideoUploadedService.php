@@ -251,6 +251,12 @@ class OnVideoUploadedService
             );
         }
 
+        $this->createAudiosStream($video, $streamCollection, $audioConfig);
+        $this->createSubtitleStreams($video, $streamCollection->all());
+    }
+
+    private function createAudiosStream(Video $video, StreamCollection $streamCollection, array $audioConfig): void
+    {
         $channelConfigsList = $audioConfig['channels'] ?? [];
         $channelConfigs = collect($channelConfigsList)->keyBy('channels');
         $singleConfig = count($channelConfigsList) === 1 ? $channelConfigsList[0] : null;
@@ -273,8 +279,6 @@ class OnVideoUploadedService
                 inputParams: $inputParams,
             );
         }
-
-        $this->createSubtitleStreams($video, $streamCollection->all());
     }
 
     private function createSubtitleStreams(Video $video, array $streams): void
