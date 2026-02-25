@@ -51,8 +51,7 @@ class NodeService
     {
         $ip = $node->ip_address;
 
-        // $result = $this->ssh->run($ip, 'sh /var/www/html/scripts/node-metrics.sh');
-        $result = $this->ssh->run($ip, 'sh /home/nodexd/node-metrics.sh');
+        $result = $this->ssh->run($ip, 'sh /var/www/html/scripts/node-metrics.sh');
 
         $json = json_decode($result, true);
         return $json;
