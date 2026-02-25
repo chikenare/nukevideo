@@ -60,6 +60,9 @@ class OnVideoUploadedService
 
         $filename = $object['userMetadata']['X-Amz-Meta-Filename'] ?? $object['userMetadata']['filename'];
 
+        if (empty($variants)) {
+            throw new Exception('No variants configured for template');
+        }
 
         $video = Video::create([
             'user_id' => $user->id,
@@ -180,12 +183,7 @@ class OnVideoUploadedService
 
     private function createMuxedStream(Video $video, StreamCollection $streamCollection, array $variants, string $outputFormat): void
     {
-        $formatConfig = $variants[0] ?? null;
-
-        if (!$formatConfig) {
-            throw new Exception('No variant configured for muxed output');
-        }
-
+        $formatConfig = $variants[0];
         $videoStream = $streamCollection->videos()->first();
 
         if ($videoStream->get('height') < $formatConfig['resolution']) {
