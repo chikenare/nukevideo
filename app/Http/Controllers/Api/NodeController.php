@@ -66,6 +66,14 @@ class NodeController extends Controller
         return new NodeResource($node);
     }
 
+    public function deploy(string $id)
+    {
+        $node = Node::findOrFail($id);
+
+        return $this->nodeService->deploy($node);
+
+    }
+
     public function destroy(string $id)
     {
         $node = Node::findOrFail($id);

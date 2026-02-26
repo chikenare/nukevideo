@@ -51,9 +51,22 @@ class NodeService
     {
         $ip = $node->ip_address;
 
-        $result = $this->ssh->run($ip, 'sh /var/www/html/scripts/node-metrics.sh');
+        $result = $this->ssh->run($ip, 'sh ~/apps/nukevideo/scripts/node-metrics.sh');
 
         $json = json_decode($result, true);
         return $json;
+    }
+
+    public function deploy(Node $node)
+    {
+        $ip = $node->ip_address;
+        $script = file_get_contents(base_path('scripts/deploy.sh'));
+
+        return $this->ssh->run(
+            $ip,
+            "NODE_TYPE={$node->type->value} sh -s",
+            input: $script,
+            timeout: 300,
+        );
     }
 }
