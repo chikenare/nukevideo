@@ -21,6 +21,7 @@ export type Node = {
   status: string
   uptime: string | null
   metrics: NodeMetrics | null
+  sshKeyId: number | null
   lastSeenAt: string | null
 }
 
@@ -38,6 +39,8 @@ export type CreateNodePayload = {
   name: string
   ip_address: string
   type: NodeType
+  hostname?: string
+  ssh_key_id?: number
 }
 
 export type UpdateNodePayload = {

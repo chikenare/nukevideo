@@ -34,6 +34,10 @@ class NodeService {
         const res = await this.api.get(`${this.BASE_PATH}/${id}/metrics`)
         return res.data.data
     }
+
+    async deploy(id: number): Promise<void> {
+        await this.api.post(`${this.BASE_PATH}/${id}/deploy`)
+    }
 }
 
 export default new NodeService()

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Node\NodeResource;
+use App\Jobs\DeployNodeJob;
 use App\Models\Node;
 use App\Services\NodeService;
 use Illuminate\Http\Request;
@@ -27,6 +28,7 @@ class NodeController extends Controller
             'name' => 'required|string|max:255|unique:nodes,name',
             'ip_address' => 'required|ip',
             'type' => 'required|string|in:worker,proxy',
+            'ssh_key_id' => 'nullable|exists:ssh_keys,id',
         ]);
 
         $node = $this->nodeService->createNode($validated);
@@ -50,6 +52,7 @@ class NodeController extends Controller
             'hostname' => 'nullable|max:255',
             'max_workers' => 'sometimes|integer|min:1|max:100',
             'is_active' => 'sometimes|boolean',
+            'ssh_key_id' => 'nullable|exists:ssh_keys,id',
         ]);
 
         $node->update($validated);
@@ -59,7 +62,7 @@ class NodeController extends Controller
 
     public function metrics(string $id)
     {
-        $node = Node::findOrFail($id);
+        $node = Node::with('sshKey')->findOrFail($id);
 
         $node = $this->nodeService->syncNodeMetrics($node);
 
@@ -68,10 +71,9 @@ class NodeController extends Controller
 
     public function deploy(string $id)
     {
-        $node = Node::findOrFail($id);
+        DeployNodeJob::dispatch($id);
 
-        return $this->nodeService->deploy($node);
-
+        return response()->json(['message' => 'Deploy started']);
     }
 
     public function destroy(string $id)

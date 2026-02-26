@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\NodeType;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Node extends Model
@@ -18,6 +19,7 @@ class Node extends Model
         'status',
         'uptime',
         'metrics',
+        'ssh_key_id',
     ];
 
     protected function casts()
@@ -32,6 +34,11 @@ class Node extends Model
     /**
      * Get all videos processed by this node
      */
+    public function sshKey(): BelongsTo
+    {
+        return $this->belongsTo(SshKey::class);
+    }
+
     public function videos(): HasMany
     {
         return $this->hasMany(Video::class);

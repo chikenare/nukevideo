@@ -6,6 +6,7 @@ import VideosPage from '@/pages/videos/VideosPage.vue'
 import NodesPage from '@/pages/nodes/NodesPage.vue'
 import AccountPage from '@/pages/settings/AccountPage.vue'
 import ApiKeysPage from '@/pages/settings/ApiKeysPage.vue'
+import SshKeysPage from '@/pages/settings/SshKeysPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
 import RegisterPage from '@/pages/auth/RegisterPage.vue'
 import { createRouter, createWebHistory } from 'vue-router'
@@ -25,6 +26,7 @@ const router = createRouter({
     { name: 'Nodes', path: '/nodes', component: NodesPage },
     { name: 'Account', path: '/settings/account', component: AccountPage },
     { name: 'ApiKeys', path: '/settings/api-keys', component: ApiKeysPage },
+    { name: 'SshKeys', path: '/settings/ssh-keys', component: SshKeysPage },
   ],
 })
 

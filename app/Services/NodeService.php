@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Events\NodeOutput;
 use App\Http\Resources\Node\NodeResource;
 use App\Models\Node;
 
@@ -50,23 +51,30 @@ class NodeService
     public function getNodeMetrics(Node $node): array
     {
         $ip = $node->ip_address;
+        $key = $node->sshKey->private_key;
 
-        $result = $this->ssh->run($ip, 'sh ~/apps/nukevideo/scripts/node-metrics.sh');
+        $result = $this->ssh->run($ip, $key, 'sh ~/var/www/html/scripts/node-metrics.sh');
 
         $json = json_decode($result, true);
         return $json;
     }
 
-    public function deploy(Node $node)
+    public function deploy(Node $node): void
     {
         $ip = $node->ip_address;
         $script = file_get_contents(base_path('scripts/deploy.sh'));
 
-        return $this->ssh->run(
-            $ip,
-            "NODE_TYPE={$node->type->value} sh -s",
+        $key = $node->sshKey->private_key;
+
+        $this->ssh->run(
+            ip: $ip,
+            privateKey: $key,
+            command: "NODE_TYPE={$node->type->value} sh -s",
             input: $script,
             timeout: 300,
+            onOutput: function (string $output) use ($node) {
+                broadcast(new NodeOutput($node->id, $output));
+            },
         );
     }
 }

@@ -2,41 +2,41 @@
 
 namespace App\Services;
 
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 
 class SSHService
 {
-    public function upload(string $ip, string $localPath, string $remotePath, int $timeout = 30): void
-    {
-        $result = Process::timeout($timeout)->run(
-            "scp -o StrictHostKeyChecking=no -o ConnectTimeout=5 " .
-            escapeshellarg($localPath) . " nodexd@{$ip}:" . escapeshellarg($remotePath),
-            function ($type, $output) {
-                Log::debug($output);
-            }
-        );
+    public function run(
+        string $ip,
+        string $privateKey,
+        string $command,
+        int $timeout = 15,
+        ?string $input = null,
+        ?\Closure $onOutput = null,
+    ) {
+        $keyFile = null;
 
-        $result->throw();
-    }
+        $formattedKey = trim($privateKey) . "\n";
 
-    public function run(string $ip, string $command, int $timeout = 15, ?string $input = null)
-    {
-        $process = Process::timeout($timeout);
+        $keyFile = storage_path('app/ssh_key_' . Str::random(10));
 
-        if ($input !== null) {
-            $process = $process->input($input);
-        }
+        file_put_contents($keyFile, $formattedKey);
+        chmod($keyFile, 0600);
 
-        $result = $process->run(
-            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@{$ip} " .
-            escapeshellarg($command),
-            function ($type, $output) {
-                Log::debug($output);
-            }
-        );
+        $sshFlags = "-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -i " . escapeshellarg($keyFile);
 
+        $fullCommand = "ssh {$sshFlags} root@{$ip} " . escapeshellarg($command);
+
+        $result = Process::timeout($timeout)
+            ->when($input !== null, function ($p) use ($input) {
+                return $p->input($input);
+            })
+            ->run($fullCommand, function ($type, $output) use ($onOutput) {
+                if ($onOutput) {
+                    $onOutput($output);
+                }
+            });
         return $result->output();
     }
-
 }

@@ -51,6 +51,10 @@ const data = {
           url: "/settings/api-keys",
         },
         {
+          title: "SSH Keys",
+          url: "/settings/ssh-keys",
+        },
+        {
           title: "Nodes",
           url: "/nodes",
         },

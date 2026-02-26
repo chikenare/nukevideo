@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\ApiTokenController;
 use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\SshKeyController;
 use App\Http\Controllers\MeController;
 use App\Http\Controllers\MyCustomUppyController;
 use App\Http\Controllers\StreamController;
@@ -28,10 +29,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/templates-config', [TemplateController::class, 'getConfig']);
     Route::apiResource('templates', TemplateController::class);
 
+    // SSH Keys
+    Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
+
     // Node Management API
     Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class);
     Route::get('nodes/{node}/metrics', [\App\Http\Controllers\Api\NodeController::class, 'metrics']);
-    Route::get('nodes/{node}/deploy', [\App\Http\Controllers\Api\NodeController::class, 'deploy']);
+    Route::post('nodes/{node}/deploy', [\App\Http\Controllers\Api\NodeController::class, 'deploy']);
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);
     Route::apiResource('/streams', StreamController::class)->except(['show', 'index']);
