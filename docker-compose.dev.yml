@@ -12,6 +12,13 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_started
+  reverb:
+    image: nukevideo
+    build:
+      context: .
+    volumes:
+      - ./:/var/www/html
+    command: ["php", "/var/www/html/artisan", "reverb:start"]
 
   nukevideo-schedule:
     image: nukevideo
