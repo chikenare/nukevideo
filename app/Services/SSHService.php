@@ -36,8 +36,6 @@ class SSHService
             }
         );
 
-        $result->throw();
-
         return $result->output();
     }
 
