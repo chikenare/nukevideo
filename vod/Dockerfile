@@ -55,6 +55,7 @@ ENV VOD_METADATA_CACHE_SIZE=512m
 ENV VOD_RESPONSE_CACHE_SIZE=128m
 ENV VOD_MAPPING_CACHE_SIZE=5m
 ENV API_UPSTREAM_HOST=nukevideo-api:8080
+ENV API_UPSTREAM_PROTO=http
 
 COPY nginx/nginx.conf.template /usr/local/nginx/conf/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
