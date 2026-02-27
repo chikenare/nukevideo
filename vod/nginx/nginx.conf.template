@@ -75,7 +75,7 @@ http {
         }
 
         location /proxy/ {
-            proxy_pass ${S3_PROXY_URL}/${AWS_BUCKET}/;
+            proxy_pass ${AWS_ENDPOINT}/${AWS_BUCKET}/;
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;
