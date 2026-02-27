@@ -12,9 +12,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
   nukevideo-api:
-    image: nukevideo
-    build:
-      context: .
+    image: serversideup/php:8.5-fpm-nginx
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
@@ -29,9 +27,7 @@ services:
       rustfs:
         condition: service_started
   reverb:
-    image: nukevideo
-    build:
-      context: .
+    image: serversideup/php:8.5-fpm-nginx
     volumes:
       - ./:/var/www/html
     command: ["php", "/var/www/html/artisan", "reverb:start"]
@@ -44,7 +40,7 @@ services:
       - "traefik.http.routers.reverb.rule=Host(`reverb.nukevideo.localhost`)"
       - "traefik.http.services.reverb.loadbalancer.server.port=8080"
   nukevideo-schedule:
-    image: nukevideo
+    image: serversideup/php:8.5-fpm-nginx
     command: ["php", "/var/www/html/artisan", "schedule:work"]
     stop_signal: SIGTERM
     healthcheck:
@@ -61,7 +57,7 @@ services:
         condition: service_started
 
   nukevideo-horizon:
-    image: nukevideo
+    image: serversideup/php:8.5-fpm-nginx
     command: ["php", "/var/www/html/artisan", "horizon"]
     stop_signal: SIGTERM
     healthcheck:
@@ -80,14 +76,9 @@ services:
     image: nukevideo-worker
     build:
       context: .
-    command:
-      [
-        "php",
-        "/var/www/html/artisan",
-        "queue:work",
-        "--queue=streams",
-        "--timeout=3200",
-      ]
+      target: worker
+      args:
+        FFMPEG_IMAGE: ${FFMPEG_IMAGE}
     stop_signal: SIGTERM
     healthcheck:
       test: ["CMD", "healthcheck-queue"]
@@ -106,6 +97,8 @@ services:
     image: nukevideo-proxy
     build:
       context: ./vod
+      args:
+        FFMPEG_IMAGE: ${FFMPEG_IMAGE}
     env_file:
       - .env
     labels:
