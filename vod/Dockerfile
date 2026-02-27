@@ -1,4 +1,4 @@
-FROM debian:12
+FROM alpine:3.20 AS builder
 
 ENV NGINX_VERSION=1.27.4
 ENV NGINX_VOD_MODULE_VERSION=1.33
@@ -6,29 +6,9 @@ ENV NGINX_AWS_AUTH_VERSION=1.1
 ENV NGINX_SECURE_TOKEN_VERSION=1.5
 ENV NGINX_AKAMAI_TOKEN_VALIDATE_VERSION=1.1
 
-
-ENV VOD_SEGMENT_DURATION=10000
-ENV VOD_METADATA_CACHE_SIZE=512m
-ENV VOD_RESPONSE_CACHE_SIZE=128m
-ENV VOD_MAPPING_CACHE_SIZE=5m
-
-ENV API_UPSTREAM_HOST=nukevideo-api:8080
-
-
-
-RUN apt-get update && apt-get install -y \
-    wget \
-    ca-certificates \
-    build-essential \
-    zlib1g-dev \
-    libssl-dev \
-    libpcre3-dev \
-    libxml2-dev \
-    libxslt-dev \
-    ffmpeg \
-    gettext-base \
-    && rm -rf /var/lib/apt/lists/*
-
+RUN apk add --no-cache \
+    wget ca-certificates build-base zlib-dev openssl-dev \
+    pcre-dev libxml2-dev libxslt-dev linux-headers
 
 RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -O nginx.tar.gz && \
     tar zxf nginx.tar.gz && \
@@ -40,7 +20,6 @@ RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -O nginx.tar.g
     tar zxf nsm.tar.gz && \
     wget https://github.com/kaltura/nginx-akamai-token-validate-module/archive/${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION}.tar.gz -O natvm.tar.gz && \
     tar zxf natvm.tar.gz
-
 
 RUN cd nginx-${NGINX_VERSION} && \
     ./configure \
@@ -55,8 +34,27 @@ RUN cd nginx-${NGINX_VERSION} && \
     --with-http_ssl_module \
     --with-http_secure_link_module \
     --with-cc-opt="-O3" && \
-    make && make install && \
-    rm -rf ../nginx.tar.gz ../vod.tar.gz ../aws.tar.gz ../nginx-${NGINX_VERSION} ../nginx-vod-module-${NGINX_VOD_MODULE_VERSION} ../nginx-aws-auth-module-${NGINX_AWS_AUTH_VERSION} ../nginx-secure-token-module-${NGINX_SECURE_TOKEN_VERSION} ../nginx-akamai-token-validate-module-${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION}
+    make && make install
+
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+    ca-certificates \
+    openssl \
+    pcre \
+    zlib \
+    libxml2 \
+    libxslt \
+    ffmpeg \
+    gettext
+
+COPY --from=builder /usr/local/nginx /usr/local/nginx
+
+ENV VOD_SEGMENT_DURATION=10000
+ENV VOD_METADATA_CACHE_SIZE=512m
+ENV VOD_RESPONSE_CACHE_SIZE=128m
+ENV VOD_MAPPING_CACHE_SIZE=5m
+ENV API_UPSTREAM_HOST=nukevideo-api:8080
 
 COPY nginx/nginx.conf.template /usr/local/nginx/conf/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
