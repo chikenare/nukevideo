@@ -154,6 +154,9 @@ services:
 
       - "traefik.http.routers.rustfs-9001.rule=Host(`s3-ui.nukevideo.localhost`)"
       - "traefik.http.services.rustfs-9001.loadbalancer.server.port=9001"
+    ports:
+      - 9000:9000
+      - 9001:9001
 
   redis:
     image: redis:7-alpine
