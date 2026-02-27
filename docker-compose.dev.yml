@@ -35,6 +35,10 @@ services:
     volumes:
       - ./:/var/www/html
     command: ["php", "/var/www/html/artisan", "reverb:start"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-reverb"]
+      start_period: 10s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.reverb.rule=Host(`reverb.nukevideo.localhost`)"
