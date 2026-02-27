@@ -20,7 +20,7 @@ class VideoWebhookController extends Controller
 
             foreach ($records as $record) {
                 $object = $record['s3']['object'];
-                OnVideoUploaded::dispatch($object);
+                OnVideoUploaded::dispatch($object)->onQueue('streams');
             }
         }
 
