@@ -24,10 +24,10 @@ http {
     keepalive_timeout  65;
 
     aws_auth $aws_token {
-        access_key ${AWS_ACCESS_KEY};
-        secret_key ${AWS_SECRET_KEY};
+        access_key ${AWS_ACCESS_KEY_ID};
+        secret_key ${AWS_SECRET_ACCESS_KEY};
         service s3;
-        region ${AWS_REGION};
+        region ${AWS_DEFAULT_REGION};
     }
 
     secure_token_akamai $token {
@@ -75,7 +75,7 @@ http {
         }
 
         location /proxy/ {
-            proxy_pass ${S3_PROXY_URL}/${S3_BUCKET_NAME}/;
+            proxy_pass ${S3_PROXY_URL}/${AWS_BUCKET}/;
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;

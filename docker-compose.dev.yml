@@ -102,8 +102,6 @@ services:
     image: nukevideo-cdn
     build:
       context: ./vod
-    env_file:
-      - ./vod/.env
     depends_on:
       nukevideo-api:
         condition: service_healthy
