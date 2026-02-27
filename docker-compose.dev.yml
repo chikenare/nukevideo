@@ -106,6 +106,12 @@ services:
     image: nukevideo-cdn
     build:
       context: ./vod
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-cdn.rule=Host(`cdn.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-cdn.loadbalancer.server.port=80"
     depends_on:
       nukevideo-api:
         condition: service_healthy
