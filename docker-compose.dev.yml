@@ -102,8 +102,8 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_started
-  nukevideo-cdn:
-    image: nukevideo-cdn
+  nukevideo-proxy:
+    image: nukevideo-proxy
     build:
       context: ./vod
     env_file:
