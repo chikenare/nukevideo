@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Enums\VideoStatus;
+use App\Models\Node;
 use App\Models\Video;
 use App\Services\VodService;
+use Exception;
 use Illuminate\Http\Request;
 
 class VodController extends Controller
@@ -15,10 +17,17 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
+        $node = Node::where('type', 'proxy')->first();
+
+        if (!$node) {
+            throw new Exception('Node not available');
+        }
+
+
         $service = new VodService;
 
         $signedUrl = $service->generateVodSignedUrl(
-            config('node.base_url') . "/hls/$ulid/master.m3u8",
+            "$node->hostname/hls/$ulid/master.m3u8",
             $ulid,
         );
 
