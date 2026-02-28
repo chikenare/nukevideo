@@ -150,9 +150,11 @@ services:
 
       - "traefik.http.routers.rustfs-9000.rule=Host(`s3-data.nukevideo.localhost`)"
       - "traefik.http.services.rustfs-9000.loadbalancer.server.port=9000"
+      - "traefik.http.routers.rustfs-9000.service=rustfs-9000"
 
       - "traefik.http.routers.rustfs-9001.rule=Host(`s3-ui.nukevideo.localhost`)"
       - "traefik.http.services.rustfs-9001.loadbalancer.server.port=9001"
+      - "traefik.http.routers.rustfs-9001.service=rustfs-9001"
     ports:
       - 9000:9000
       - 9001:9001
