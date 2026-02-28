@@ -35,10 +35,6 @@ http {
         acl "$secure_token_baseuri_comma*";
 	}
 
-    upstream jsonupstream {
-        server ${API_UPSTREAM_HOST};
-    }
-
     server {
         vod_mode mapped;
         vod_max_mapping_response_size 2k;
@@ -70,7 +66,7 @@ http {
 
         location ^~ /json/hls/ {
             internal;
-            proxy_pass http://jsonupstream/api/vod/config/;
+            proxy_pass ${API_UPSTREAM_PROTO}://${API_UPSTREAM_HOST}/api/vod/config/;
             proxy_set_header Host $http_host;
         }
 
