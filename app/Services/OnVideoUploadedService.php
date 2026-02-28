@@ -9,6 +9,7 @@ use App\Jobs\ExtractThumbnailJob;
 use App\Jobs\GenerateVideoStoryboard;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
+use App\Jobs\UploadStreamJob;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
@@ -132,19 +133,19 @@ class OnVideoUploadedService
 
     private function dispatchHlsJobs(Video $video, string $originalPath): void
     {
-        $streamJobs = $video->streams()
-            ->whereIn('type', ['video', 'audio'])
-            ->get()
-            ->map(fn($stream) => new ProcessStreamJob($stream->id))
-            ->all();
-
-
         $onQueue = 'streams';
+
+        $batch = [];
+        $streams = $video->streams()->whereIn('type', ['video', 'audio'])->get();
+        foreach ($streams as $stream) {
+            $batch[] = new ProcessStreamJob($stream->id);
+            $batch[] = new UploadStreamJob($stream->id);
+        }
 
         Bus::chain([
             new DownloadOriginalFileJob($video->id, $originalPath),
 
-            Bus::batch($streamJobs)
+            Bus::batch($batch)
                 ->name("Processing video: {$video->id}")
                 ->onQueue($onQueue)
                 ->then(function () use ($video, $originalPath, $onQueue) {
