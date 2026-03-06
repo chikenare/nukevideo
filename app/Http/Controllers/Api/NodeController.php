@@ -74,6 +74,13 @@ class NodeController extends Controller
         return new NodeResource($node);
     }
 
+    public function provision(string $id)
+    {
+        ProvisionNodeJob::dispatch($id);
+
+        return response()->json(['message' => 'Provisioning started']);
+    }
+
     public function deploy(string $id)
     {
         DeployNodeJob::dispatch($id);

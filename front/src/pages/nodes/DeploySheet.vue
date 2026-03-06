@@ -58,7 +58,18 @@ onUnmounted(() => {
   }
 })
 
-defineExpose({ start })
+const showLogs = (targetNode: Node) => {
+  node.value = targetNode
+  logs.value = []
+  open.value = true
+
+  echo.channel(`node.${targetNode.id}`).listen('NodeOutput', (e: { output: string }) => {
+    logs.value.push(e.output)
+    scrollToBottom()
+  })
+}
+
+defineExpose({ start, showLogs })
 </script>
 
 <template>

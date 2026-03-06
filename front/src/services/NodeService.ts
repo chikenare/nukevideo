@@ -35,6 +35,10 @@ class NodeService {
         return res.data.data
     }
 
+    async provision(id: number): Promise<void> {
+        await this.api.post(`${this.BASE_PATH}/${id}/provision`)
+    }
+
     async deploy(id: number): Promise<void> {
         await this.api.post(`${this.BASE_PATH}/${id}/deploy`)
     }

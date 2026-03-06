@@ -20,12 +20,12 @@ import {
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
 import type { Node } from '@/types/Node'
-import { EllipsisVertical, Pencil, RefreshCw, Rocket, Trash2 } from 'lucide-vue-next'
+import { EllipsisVertical, Pencil, RefreshCw, Rocket, ScrollText, Settings, Trash2 } from 'lucide-vue-next'
 import DeployConfirmDialog from './DeployConfirmDialog.vue'
 import EditNodeDialog from './EditNodeDialog.vue'
 
 const props = defineProps<{ nodes: Node[] }>()
-const emit = defineEmits<{ deploy: [node: Node]; updated: [node: Node]; deleted: [nodeId: number] }>()
+const emit = defineEmits<{ deploy: [node: Node]; updated: [node: Node]; deleted: [nodeId: number]; showLogs: [node: Node] }>()
 
 const deployDialog = ref<InstanceType<typeof DeployConfirmDialog> | null>(null)
 const editDialog = ref<InstanceType<typeof EditNodeDialog> | null>(null)
@@ -60,6 +60,14 @@ const memoryPercent = (node: Node): number => {
 const diskPercent = (node: Node): number => {
   if (!node.metrics || !node.metrics.disk_total) return 0
   return Math.round((node.metrics.disk_usage / node.metrics.disk_total) * 100)
+}
+
+const provisionNode = async (node: Node) => {
+  try {
+    await NodeService.provision(node.id)
+  } catch (error) {
+    console.error('Error provisioning node:', error)
+  }
 }
 
 const deleteNode = async (node: Node) => {
@@ -181,13 +189,21 @@ const statusVariant = (status: string) => {
                   <Pencil class="mr-2 h-4 w-4" />
                   Edit
                 </DropdownMenuItem>
-                <DropdownMenuItem @click="deployDialog?.show(node)">
+                <DropdownMenuItem v-if="['unknown', 'provision_failed', 'provisioned'].includes(node.status)" @click="provisionNode(node)">
+                  <Settings class="mr-2 h-4 w-4" />
+                  Provision
+                </DropdownMenuItem>
+                <DropdownMenuItem v-if="['provisioned', 'running', 'exited'].includes(node.status)" @click="deployDialog?.show(node)">
                   <Rocket class="mr-2 h-4 w-4" />
                   Deploy
                 </DropdownMenuItem>
-                <DropdownMenuItem @click="refreshMetrics(node.id)" :disabled="refreshingNodeId === node.id">
+                <DropdownMenuItem v-if="node.status === 'running'" @click="refreshMetrics(node.id)" :disabled="refreshingNodeId === node.id">
                   <RefreshCw class="mr-2 h-4 w-4" :class="{ 'animate-spin': refreshingNodeId === node.id }" />
                   Refresh Metrics
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="emit('showLogs', node)">
+                  <ScrollText class="mr-2 h-4 w-4" />
+                  Logs
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem class="text-destructive" @click="deleteNode(node)">

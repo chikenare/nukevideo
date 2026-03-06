@@ -35,6 +35,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // Node Management API
     Route::apiResource('nodes', \App\Http\Controllers\Api\NodeController::class);
     Route::get('nodes/{node}/metrics', [\App\Http\Controllers\Api\NodeController::class, 'metrics']);
+    Route::post('nodes/{node}/provision', [\App\Http\Controllers\Api\NodeController::class, 'provision']);
     Route::post('nodes/{node}/deploy', [\App\Http\Controllers\Api\NodeController::class, 'deploy']);
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);

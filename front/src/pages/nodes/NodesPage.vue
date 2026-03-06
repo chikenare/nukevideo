@@ -58,7 +58,7 @@ onUnmounted(() => {
       No nodes found. Click "Add Node" to get started.
     </div>
 
-    <NodeTable v-else :nodes="nodesData.nodes" @deploy="(node) => deploySheet?.start(node)" @updated="onNodeUpdated" />
+    <NodeTable v-else :nodes="nodesData.nodes" @deploy="(node) => deploySheet?.start(node)" @updated="onNodeUpdated" @deleted="fetchNodes" @show-logs="(node) => deploySheet?.showLogs(node)" />
 
     <DeploySheet ref="deploySheet" />
   </div>
