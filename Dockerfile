@@ -20,7 +20,7 @@ USER www-data
 CMD [ "php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
 
 
-FROM serversideup/php:8.5-cli-alpine as nukevideo-cli
+FROM serversideup/php:8.5-fpm-nginx-alpine AS nukevideo-api
 
 USER root
 

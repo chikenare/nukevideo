@@ -12,7 +12,10 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
   nukevideo-api:
-    image: serversideup/php:8.5-fpm-nginx
+    build:  
+      context: .
+      target: nukevideo-api
+    image: chiken/nukevideo/nukevideo-api
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
@@ -27,7 +30,7 @@ services:
       rustfs:
         condition: service_started
   reverb:
-    image: serversideup/php:8.5-cli-alpine
+    image: chiken/nukevideo/nukevideo-api
     volumes:
       - ./:/var/www/html
     command: ["php", "/var/www/html/artisan", "reverb:start"]
@@ -40,7 +43,7 @@ services:
       - "traefik.http.routers.reverb.rule=Host(`reverb.nukevideo.localhost`)"
       - "traefik.http.services.reverb.loadbalancer.server.port=8080"
   nukevideo-schedule:
-    image: serversideup/php:8.5-cli-alpine
+    image: chiken/nukevideo/nukevideo-api
     command: ["php", "/var/www/html/artisan", "schedule:work"]
     stop_signal: SIGTERM
     healthcheck:
@@ -57,10 +60,7 @@ services:
         condition: service_started
 
   nukevideo-horizon:
-    build: 
-      context: .
-      target: nukevideo-cli
-    # image: serversideup/php:8.5-fpm-nginx
+    image: chiken/nukevideo/nukevideo-api
     command: ["php", "/var/www/html/artisan", "horizon"]
     stop_signal: SIGTERM
     healthcheck:
