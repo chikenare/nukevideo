@@ -77,6 +77,9 @@ class NodeService
             command: "mkdir -p /opt/nukevideo && cat > /opt/nukevideo/.env",
             input: $env,
             timeout: 30,
+            onOutput: function (string $output) use ($node) {
+                broadcast(new NodeOutput($node->id, $output));
+            },
         );
 
         // Join the swarm
@@ -88,6 +91,9 @@ class NodeService
             privateKey: $key,
             command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
             timeout: 30,
+            onOutput: function (string $output) use ($node) {
+                broadcast(new NodeOutput($node->id, $output));
+            },
         );
 
         $node->update(['status' => 'provisioned']);
