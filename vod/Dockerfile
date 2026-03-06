@@ -57,6 +57,9 @@ ENV VOD_MAPPING_CACHE_SIZE=5m
 ENV API_UPSTREAM_HOST=nukevideo-api:8080
 ENV API_UPSTREAM_PROTO=http
 
+ENV SECURE_TOKEN_EXPIRES_TIME=100d
+ENV SECURE_TOKEN_QUERY_EXPIRES_TIME=1h
+
 COPY nginx/nginx.conf.template /usr/local/nginx/conf/nginx.conf.template
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
