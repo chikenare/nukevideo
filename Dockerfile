@@ -18,3 +18,12 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 USER www-data
 
 CMD [ "php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
+
+
+FROM serversideup/php:8.5-cli-alpine as nukevideo-cli
+
+USER root
+
+RUN apk add --no-cache openssh-client
+
+USER www-data

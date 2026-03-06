@@ -159,6 +159,6 @@ const statusVariant = (status: string) => {
         </TableRow>
       </TableBody>
     </Table>
-    <DeployConfirmDialog ref="deployDialog" @confirm="(node) => emit('deploy', node)" />
+    <DeployConfirmDialog ref="deployDialog" @confirm="(node, env) => emit('deploy', node, env)" />
   </div>
 </template>

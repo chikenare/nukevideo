@@ -63,13 +63,12 @@ class NodeService
     {
         $ip = $node->ip_address;
         $script = file_get_contents(base_path('scripts/deploy.sh'));
-
         $key = $node->sshKey->private_key;
 
         $this->ssh->run(
             ip: $ip,
             privateKey: $key,
-            command: "NODE_TYPE={$node->type->value} sh -s",
+            command: "bash -s",
             input: $script,
             timeout: 300,
             onOutput: function (string $output) use ($node) {

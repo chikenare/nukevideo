@@ -19,7 +19,7 @@ class SSHService
 
         $formattedKey = trim($privateKey) . "\n";
 
-        $keyFile = storage_path('app/ssh_key_' . Str::random(10));
+        $keyFile = '/tmp/' . Str::random(10);
 
         file_put_contents($keyFile, $formattedKey);
         chmod($keyFile, 0600);

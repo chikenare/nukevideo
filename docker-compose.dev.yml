@@ -27,7 +27,7 @@ services:
       rustfs:
         condition: service_started
   reverb:
-    image: serversideup/php:8.5-fpm-nginx
+    image: serversideup/php:8.5-cli-alpine
     volumes:
       - ./:/var/www/html
     command: ["php", "/var/www/html/artisan", "reverb:start"]
@@ -40,7 +40,7 @@ services:
       - "traefik.http.routers.reverb.rule=Host(`reverb.nukevideo.localhost`)"
       - "traefik.http.services.reverb.loadbalancer.server.port=8080"
   nukevideo-schedule:
-    image: serversideup/php:8.5-fpm-nginx
+    image: serversideup/php:8.5-cli-alpine
     command: ["php", "/var/www/html/artisan", "schedule:work"]
     stop_signal: SIGTERM
     healthcheck:
@@ -57,7 +57,10 @@ services:
         condition: service_started
 
   nukevideo-horizon:
-    image: serversideup/php:8.5-fpm-nginx
+    build: 
+      context: .
+      target: nukevideo-cli
+    # image: serversideup/php:8.5-fpm-nginx
     command: ["php", "/var/www/html/artisan", "horizon"]
     stop_signal: SIGTERM
     healthcheck:
@@ -120,7 +123,14 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-app.rule=Host(`app.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-app.loadbalancer.server.port=5173"
-    
+  docker-manager:
+    image: tecnativa/docker-socket-proxy
+    privileged: true
+    environment:
+      CONFIGS: 1
+      POST: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
   db:
     image: mariadb:11
     restart: unless-stopped

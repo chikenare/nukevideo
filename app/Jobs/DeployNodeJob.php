@@ -2,10 +2,12 @@
 
 namespace App\Jobs;
 
+use App\Events\NodeOutput;
 use App\Models\Node;
 use App\Services\NodeService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Throwable;
 
 class DeployNodeJob implements ShouldQueue
 {
@@ -24,5 +26,10 @@ class DeployNodeJob implements ShouldQueue
         if ($node) {
             $service->deploy($node);
         }
+    }
+
+    public function failed(Throwable $e)
+    {
+        broadcast(new NodeOutput($this->id, $e->getMessage()));
     }
 }
