@@ -129,6 +129,7 @@ services:
     environment:
       CONFIGS: 1
       POST: 1
+      SWARM: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
   db:

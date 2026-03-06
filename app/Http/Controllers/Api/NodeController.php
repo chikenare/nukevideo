@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Node\NodeResource;
 use App\Jobs\DeployNodeJob;
+use App\Jobs\ProvisionNodeJob;
 use App\Models\Node;
 use App\Services\NodeService;
 use Illuminate\Http\Request;
@@ -32,6 +33,10 @@ class NodeController extends Controller
         ]);
 
         $node = $this->nodeService->createNode($validated);
+
+        if ($node->ssh_key_id) {
+            ProvisionNodeJob::dispatch($node->id);
+        }
 
         return new NodeResource($node);
     }

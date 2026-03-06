@@ -10,6 +10,7 @@ class NodeService
 {
     public function __construct(
         private SSHService $ssh,
+        private DockerService $docker,
     ) {
     }
 
@@ -57,6 +58,62 @@ class NodeService
 
         $json = json_decode($result, true);
         return $json;
+    }
+
+    public function provisionNode(Node $node): void
+    {
+        $ip = $node->ip_address;
+        $key = $node->sshKey->private_key;
+
+        $node->update(['status' => 'provisioning']);
+
+        // Build .env: base from docker config + node-specific vars
+        $env = $this->buildNodeEnv($node);
+
+        // Create directory and write .env via SSH
+        $this->ssh->run(
+            ip: $ip,
+            privateKey: $key,
+            command: "mkdir -p /opt/nukevideo && cat > /opt/nukevideo/.env",
+            input: $env,
+            timeout: 30,
+        );
+
+        // Join the swarm
+        $managerIp = $this->docker->getSwarmManagerIp();
+        $joinToken = $this->docker->getSwarmJoinToken();
+
+        $this->ssh->run(
+            ip: $ip,
+            privateKey: $key,
+            command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
+            timeout: 30,
+        );
+
+        $node->update(['status' => 'provisioned']);
+    }
+
+    private function buildNodeEnv(Node $node): string
+    {
+        // Base env from docker config
+        $baseEnv = $this->docker->getConfigContent('nukevideo_nodes_env');
+
+        // Node-specific vars
+        $nodeVars = [
+            'NODE_TYPE' => $node->type->value,
+            'REPLICAS' => $node->replicas ?? 2,
+        ];
+
+        if ($node->type->value === 'proxy' && $node->hostname) {
+            $nodeVars['DOMAIN'] = $node->hostname;
+        }
+
+        $lines = [];
+        foreach ($nodeVars as $k => $v) {
+            $lines[] = "{$k}={$v}";
+        }
+
+        return trim($baseEnv) . "\n" . implode("\n", $lines) . "\n";
     }
 
     public function deploy(Node $node): void
