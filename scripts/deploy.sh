@@ -11,54 +11,61 @@ log()  { echo "▸ $*"; }
 ok()   { echo "✅ $*"; }
 fail() { echo "❌ $*" >&2; exit 1; }
 
-# ── Cargar .env ──
+# ── Load .env ──
 ENV_FILE="${DEPLOY_DIR}/.env"
-[[ -f "$ENV_FILE" ]] || fail ".env no encontrado en ${ENV_FILE}"
+[[ -f "$ENV_FILE" ]] || fail ".env not found at ${ENV_FILE}"
 set -a
 source "$ENV_FILE"
 set +a
-ok ".env cargado desde ${ENV_FILE}"
+ok ".env loaded from ${ENV_FILE}"
 
 REPLICAS="${REPLICAS:-2}"
 APP_ENV="${APP_ENV:-local}"
 
-# ── Validaciones ──
-command -v docker >/dev/null 2>&1 || fail "Docker no instalado"
+# ── Validations ──
+command -v docker >/dev/null 2>&1 || fail "Docker not installed"
 
-[[ "${NODE_TYPE:-}" =~ ^(proxy|worker)$ ]] || fail "NODE_TYPE inválido: '${NODE_TYPE:-}' (proxy|worker)"
-[[ -n "${DOMAIN:-}" ]]     || fail "DOMAIN requerido"
+[[ "${NODE_TYPE:-}" =~ ^(proxy|worker)$ ]] || fail "Invalid NODE_TYPE: '${NODE_TYPE:-}' (proxy|worker)"
+if [[ "$NODE_TYPE" == "proxy" ]]; then
+    [[ -n "${DOMAIN:-}" ]] || fail "DOMAIN required for proxy nodes"
+fi
 
 mkdir -p "$DEPLOY_DIR"
 
 IMAGE="chikenare/nukevideo-${NODE_TYPE}:latest"
 
-log "🎬 Deploy ${NODE_TYPE} → ${DOMAIN}"
+log "🎬 Deploy ${NODE_TYPE}${DOMAIN:+ → ${DOMAIN}}"
 
 # ── Swarm ──
 if ! docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null | grep -q "active"; then
-    log "🐝 Inicializando Swarm..."
+    log "🐝 Initializing Swarm..."
     docker swarm init 2>/dev/null || true
 fi
-ok "Swarm activo"
+ok "Swarm active"
 
-# ── Red overlay ──
+# ── Overlay network ──
 docker network create --driver overlay --attachable "$NETWORK" 2>/dev/null || true
-ok "Red ${NETWORK}"
+ok "Network ${NETWORK}"
 
 # ── Pull ──
 log "🐳 Pulling ${IMAGE}..."
 docker pull "$IMAGE"
-ok "Imagen lista"
+ok "Image ready"
 
 # ── Compose ──
 COMPOSE="${DEPLOY_DIR}/docker-compose.yml"
 
-# Traefik base
-if [[ "$APP_ENV" == "production" ]]; then
-    [[ -n "${ACME_EMAIL:-}" ]] || fail "ACME_EMAIL requerido en production"
-
 cat > "$COMPOSE" <<YAML
 services:
+YAML
+
+# Traefik + proxy service (only for proxy nodes)
+if [[ "$NODE_TYPE" == "proxy" ]]; then
+
+if [[ "$APP_ENV" == "production" ]]; then
+    [[ -n "${ACME_EMAIL:-}" ]] || fail "ACME_EMAIL required in production"
+
+cat >> "$COMPOSE" <<YAML
   traefik:
     image: traefik:v3.6
     command:
@@ -90,8 +97,7 @@ services:
 
 YAML
 else
-cat > "$COMPOSE" <<YAML
-services:
+cat >> "$COMPOSE" <<YAML
   traefik:
     image: traefik:v3.6
     command:
@@ -114,8 +120,6 @@ services:
 YAML
 fi
 
-# Servicio
-if [[ "$NODE_TYPE" == "proxy" ]]; then
 cat >> "$COMPOSE" <<YAML
   proxy:
     image: ${IMAGE}
@@ -152,7 +156,9 @@ cat >> "$COMPOSE" <<YAML
         - "traefik.http.services.proxy.loadbalancer.server.port=80"
 
 YAML
+
 else
+# Worker service (no Traefik needed)
 cat >> "$COMPOSE" <<YAML
   worker:
     image: ${IMAGE}
@@ -173,7 +179,7 @@ cat >> "$COMPOSE" <<YAML
 YAML
 fi
 
-if [[ "$APP_ENV" == "production" ]]; then
+if [[ "$APP_ENV" == "production" && "$NODE_TYPE" == "proxy" ]]; then
 cat >> "$COMPOSE" <<YAML
 volumes:
   traefik-certs:
@@ -187,22 +193,22 @@ networks:
     external: true
 YAML
 
-ok "Compose generado en ${COMPOSE}"
+ok "Compose generated at ${COMPOSE}"
 
 # ── Deploy ──
-log "🚀 Desplegando stack..."
+log "🚀 Deploying stack..."
 docker stack deploy -c "$COMPOSE" --with-registry-auth "$STACK_NAME" --detach=false 2>&1
-ok "Stack desplegado"
+ok "Stack deployed"
 
-# ── Verificar convergencia ──
-log "⏳ Esperando réplicas..."
+# ── Verify convergence ──
+log "⏳ Waiting for replicas..."
 SERVICE="${STACK_NAME}_${NODE_TYPE}"
 for i in $(seq 1 30); do
     REPLICAS_STATUS=$(docker service ls --filter "name=${SERVICE}" --format "{{.Replicas}}" 2>/dev/null || echo "0/0")
     CURRENT="${REPLICAS_STATUS%%/*}"
     TARGET="${REPLICAS_STATUS##*/}"
     if [[ "$CURRENT" == "$TARGET" && "$CURRENT" != "0" ]]; then
-        ok "${SERVICE} listo (${REPLICAS_STATUS})"
+        ok "${SERVICE} ready (${REPLICAS_STATUS})"
         break
     fi
     sleep 3
@@ -211,8 +217,12 @@ done
 echo ""
 docker stack services "$STACK_NAME" --format "table {{.Name}}\t{{.Replicas}}\t{{.Image}}"
 echo ""
-if [[ "$APP_ENV" == "production" ]]; then
-    ok "🎉 Deploy completado — https://${DOMAIN}"
+if [[ "$NODE_TYPE" == "proxy" ]]; then
+    if [[ "$APP_ENV" == "production" ]]; then
+        ok "🎉 Deploy complete — https://${DOMAIN}"
+    else
+        ok "🎉 Deploy complete — http://${DOMAIN}"
+    fi
 else
-    ok "🎉 Deploy completado — http://${DOMAIN}"
+    ok "🎉 Deploy complete — worker"
 fi
