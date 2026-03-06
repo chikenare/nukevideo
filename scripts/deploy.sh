@@ -17,7 +17,7 @@ command -v docker >/dev/null 2>&1 || fail "Docker no instalado"
 
 [[ "${NODE_TYPE:-}" =~ ^(proxy|worker)$ ]] || fail "NODE_TYPE inválido: '${NODE_TYPE:-}' (proxy|worker)"
 [[ -n "${DOMAIN:-}" ]]     || fail "DOMAIN requerido"
-[[ -n "${ACME_EMAIL:-}" ]] || fail "ACME_EMAIL requerido"
+APP_ENV="${APP_ENV:-local}"
 
 mkdir -p "$DEPLOY_DIR"
 
@@ -45,6 +45,9 @@ ok "Imagen lista"
 COMPOSE="${DEPLOY_DIR}/docker-compose.yml"
 
 # Traefik base
+if [[ "$APP_ENV" == "production" ]]; then
+    [[ -n "${ACME_EMAIL:-}" ]] || fail "ACME_EMAIL requerido en production"
+
 cat > "$COMPOSE" <<YAML
 services:
   traefik:
@@ -77,6 +80,30 @@ services:
         constraints: [node.role == manager]
 
 YAML
+else
+cat > "$COMPOSE" <<YAML
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - "--providers.swarm=true"
+      - "--providers.swarm.exposedByDefault=false"
+      - "--providers.swarm.network=${NETWORK}"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - ${NETWORK}
+    deploy:
+      placement:
+        constraints: [node.role == manager]
+
+YAML
+fi
 
 # Servicio
 if [[ "$NODE_TYPE" == "proxy" ]]; then
@@ -99,8 +126,20 @@ cat >> "$COMPOSE" <<YAML
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.proxy.rule=Host(\`${DOMAIN}\`)"
+YAML
+
+if [[ "$APP_ENV" == "production" ]]; then
+cat >> "$COMPOSE" <<YAML
         - "traefik.http.routers.proxy.entrypoints=websecure"
         - "traefik.http.routers.proxy.tls.certresolver=le"
+YAML
+else
+cat >> "$COMPOSE" <<YAML
+        - "traefik.http.routers.proxy.entrypoints=web"
+YAML
+fi
+
+cat >> "$COMPOSE" <<YAML
         - "traefik.http.services.proxy.loadbalancer.server.port=80"
 
 YAML
@@ -125,10 +164,15 @@ cat >> "$COMPOSE" <<YAML
 YAML
 fi
 
+if [[ "$APP_ENV" == "production" ]]; then
 cat >> "$COMPOSE" <<YAML
 volumes:
   traefik-certs:
 
+YAML
+fi
+
+cat >> "$COMPOSE" <<YAML
 networks:
   ${NETWORK}:
     external: true
@@ -158,4 +202,8 @@ done
 echo ""
 docker stack services "$STACK_NAME" --format "table {{.Name}}\t{{.Replicas}}\t{{.Image}}"
 echo ""
-ok "🎉 Deploy completado — https://${DOMAIN}"
+if [[ "$APP_ENV" == "production" ]]; then
+    ok "🎉 Deploy completado — https://${DOMAIN}"
+else
+    ok "🎉 Deploy completado — http://${DOMAIN}"
+fi
