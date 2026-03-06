@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import Badge from '@/components/ui/badge/Badge.vue'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Progress } from '@/components/ui/progress'
 import {
   Table,
@@ -13,12 +20,12 @@ import {
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
 import type { Node } from '@/types/Node'
-import { Pencil, RefreshCw, Rocket } from 'lucide-vue-next'
+import { EllipsisVertical, Pencil, RefreshCw, Rocket, Trash2 } from 'lucide-vue-next'
 import DeployConfirmDialog from './DeployConfirmDialog.vue'
 import EditNodeDialog from './EditNodeDialog.vue'
 
 const props = defineProps<{ nodes: Node[] }>()
-const emit = defineEmits<{ deploy: [node: Node]; updated: [node: Node] }>()
+const emit = defineEmits<{ deploy: [node: Node]; updated: [node: Node]; deleted: [nodeId: number] }>()
 
 const deployDialog = ref<InstanceType<typeof DeployConfirmDialog> | null>(null)
 const editDialog = ref<InstanceType<typeof EditNodeDialog> | null>(null)
@@ -53,6 +60,16 @@ const memoryPercent = (node: Node): number => {
 const diskPercent = (node: Node): number => {
   if (!node.metrics || !node.metrics.disk_total) return 0
   return Math.round((node.metrics.disk_usage / node.metrics.disk_total) * 100)
+}
+
+const deleteNode = async (node: Node) => {
+  if (!confirm(`Are you sure you want to delete node "${node.name}"?`)) return
+  try {
+    await NodeService.deleteNode(node.id)
+    emit('deleted', node.id)
+  } catch (error) {
+    console.error('Error deleting node:', error)
+  }
 }
 
 const statusVariant = (status: string) => {
@@ -153,18 +170,32 @@ const statusVariant = (status: string) => {
           </TableCell>
 
           <TableCell>
-            <div class="flex gap-1">
-              <Button variant="ghost" size="icon" @click="editDialog?.show(node)" title="Edit">
-                <Pencil class="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" @click="deployDialog?.show(node)" title="Deploy">
-                <Rocket class="h-4 w-4" />
-              </Button>
-              <Button variant="ghost" size="icon" @click="refreshMetrics(node.id)"
-                :disabled="refreshingNodeId === node.id">
-                <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': refreshingNodeId === node.id }" />
-              </Button>
-            </div>
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <Button variant="ghost" size="icon">
+                  <EllipsisVertical class="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem @click="editDialog?.show(node)">
+                  <Pencil class="mr-2 h-4 w-4" />
+                  Edit
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="deployDialog?.show(node)">
+                  <Rocket class="mr-2 h-4 w-4" />
+                  Deploy
+                </DropdownMenuItem>
+                <DropdownMenuItem @click="refreshMetrics(node.id)" :disabled="refreshingNodeId === node.id">
+                  <RefreshCw class="mr-2 h-4 w-4" :class="{ 'animate-spin': refreshingNodeId === node.id }" />
+                  Refresh Metrics
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem class="text-destructive" @click="deleteNode(node)">
+                  <Trash2 class="mr-2 h-4 w-4" />
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </TableCell>
         </TableRow>
       </TableBody>

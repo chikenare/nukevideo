@@ -85,10 +85,10 @@ class NodeController extends Controller
     {
         $node = Node::findOrFail($id);
 
-        $this->nodeService->deactivateNode($node);
+        $node->delete();
 
         return response()->json([
-            'message' => 'Node deactivated successfully'
+            'message' => 'Node deleted successfully'
         ]);
     }
 }
