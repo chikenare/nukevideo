@@ -13,13 +13,15 @@ import {
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
 import type { Node } from '@/types/Node'
-import { RefreshCw, Rocket } from 'lucide-vue-next'
+import { Pencil, RefreshCw, Rocket } from 'lucide-vue-next'
 import DeployConfirmDialog from './DeployConfirmDialog.vue'
+import EditNodeDialog from './EditNodeDialog.vue'
 
 const props = defineProps<{ nodes: Node[] }>()
 const emit = defineEmits<{ deploy: [node: Node]; updated: [node: Node] }>()
 
 const deployDialog = ref<InstanceType<typeof DeployConfirmDialog> | null>(null)
+const editDialog = ref<InstanceType<typeof EditNodeDialog> | null>(null)
 
 const refreshingNodeId = ref<number | null>(null)
 
@@ -78,9 +80,14 @@ const statusVariant = (status: string) => {
       <TableBody>
         <TableRow v-for="node in props.nodes" :key="node.id">
           <TableCell>
-            <div class="flex flex-col">
-              <span class="font-medium">{{ node.name }}</span>
-              <span class="text-xs text-muted-foreground">{{ node.ipAddress }}</span>
+            <div class="flex items-center gap-2">
+              <span class="inline-block h-2 w-2 shrink-0 rounded-full"
+                :class="node.isActive ? 'bg-emerald-500' : 'bg-muted-foreground/40'"
+                :title="node.isActive ? 'Active' : 'Inactive'" />
+              <div class="flex flex-col">
+                <span class="font-medium">{{ node.name }}</span>
+                <span class="text-xs text-muted-foreground">{{ node.ipAddress }}</span>
+              </div>
             </div>
           </TableCell>
 
@@ -147,6 +154,9 @@ const statusVariant = (status: string) => {
 
           <TableCell>
             <div class="flex gap-1">
+              <Button variant="ghost" size="icon" @click="editDialog?.show(node)" title="Edit">
+                <Pencil class="h-4 w-4" />
+              </Button>
               <Button variant="ghost" size="icon" @click="deployDialog?.show(node)" title="Deploy">
                 <Rocket class="h-4 w-4" />
               </Button>
@@ -159,6 +169,7 @@ const statusVariant = (status: string) => {
         </TableRow>
       </TableBody>
     </Table>
-    <DeployConfirmDialog ref="deployDialog" @confirm="(node, env) => emit('deploy', node, env)" />
+    <DeployConfirmDialog ref="deployDialog" @confirm="(node) => emit('deploy', node)" />
+    <EditNodeDialog ref="editDialog" @updated="(node) => emit('updated', node)" />
   </div>
 </template>
