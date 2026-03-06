@@ -6,18 +6,27 @@ set -euo pipefail
 STACK_NAME="nukevideo"
 NETWORK="traefik-public"
 DEPLOY_DIR="/opt/nukevideo"
-REPLICAS="${REPLICAS:-2}"
 
 log()  { echo "▸ $*"; }
 ok()   { echo "✅ $*"; }
 fail() { echo "❌ $*" >&2; exit 1; }
+
+# ── Cargar .env ──
+ENV_FILE="${DEPLOY_DIR}/.env"
+[[ -f "$ENV_FILE" ]] || fail ".env no encontrado en ${ENV_FILE}"
+set -a
+source "$ENV_FILE"
+set +a
+ok ".env cargado desde ${ENV_FILE}"
+
+REPLICAS="${REPLICAS:-2}"
+APP_ENV="${APP_ENV:-local}"
 
 # ── Validaciones ──
 command -v docker >/dev/null 2>&1 || fail "Docker no instalado"
 
 [[ "${NODE_TYPE:-}" =~ ^(proxy|worker)$ ]] || fail "NODE_TYPE inválido: '${NODE_TYPE:-}' (proxy|worker)"
 [[ -n "${DOMAIN:-}" ]]     || fail "DOMAIN requerido"
-APP_ENV="${APP_ENV:-local}"
 
 mkdir -p "$DEPLOY_DIR"
 
