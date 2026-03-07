@@ -1,0 +1,63 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab-ci.yml
+
+# IDE
+.idea
+.vscode
+.fleet
+.nova
+.zed
+.phpactor.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Dependencies (installed in container)
+/vendor
+/node_modules
+/front/node_modules
+
+# Storage & cache
+/storage/logs
+/storage/framework/cache
+/storage/framework/sessions
+/storage/framework/views
+/storage/framework/testing
+/storage/pail
+/.phpunit.cache
+.phpunit.result.cache
+
+# Build artifacts
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Documentation
+*.md
+LICENSE
+
+# Tests
+/tests
+phpunit.xml
+
+# Misc
+Homestead.json
+Homestead.yaml
+*.log
+/auth.json
