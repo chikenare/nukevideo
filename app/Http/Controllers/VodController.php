@@ -26,8 +26,10 @@ class VodController extends Controller
 
         $service = new VodService;
 
+        $schema = app()->isProduction() ? 'https://' : 'http://';
+
         $signedUrl = $service->generateVodSignedUrl(
-            "$node->hostname/hls/$ulid/master.m3u8",
+            "$schema$node->hostname/hls/$ulid/master.m3u8",
             $ulid,
         );
 
