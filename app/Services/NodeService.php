@@ -76,7 +76,12 @@ class NodeService
             },
         );
 
-        $node->update(['status' => 'provisioned']);
+        $swarmNodeId = $this->docker->getSwarmNodeId($ip);
+
+        $node->update([
+            'status' => 'provisioned',
+            'swarm_node_id' => $swarmNodeId,
+        ]);
     }
 
     private function buildNodeEnv(Node $node): string

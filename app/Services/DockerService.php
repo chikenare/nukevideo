@@ -46,6 +46,23 @@ class DockerService
     }
 
 
+    public function getSwarmNodeId(string $ip): ?string
+    {
+        $response = Http::get("{$this->baseUrl}/nodes");
+
+        if (!$response->successful()) {
+            throw new RuntimeException('Failed to list swarm nodes: ' . $response->body());
+        }
+
+        foreach ($response->json() as $node) {
+            if (($node['Status']['Addr'] ?? null) === $ip) {
+                return $node['ID'];
+            }
+        }
+
+        return null;
+    }
+
     public function getService(string $name): ?array
     {
         $response = Http::get("{$this->baseUrl}/services", [
