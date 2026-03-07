@@ -84,8 +84,12 @@ class NodeService
 
     private function buildNodeEnv(Node $node): string
     {
-        // Base env from docker config
-        $baseEnv = $this->docker->getConfigContent('nukevideo_nodes_env');
+        // Base env from docker config, fallback to system env based on .env.example
+        try {
+            $baseEnv = $this->docker->getConfigContent('nukevideo_nodes_env');
+        } catch (\RuntimeException) {
+            $baseEnv = $this->buildEnvFromExample();
+        }
 
         // Node-specific vars
         $nodeVars = [
@@ -103,6 +107,27 @@ class NodeService
         }
 
         return trim($baseEnv) . "\n" . implode("\n", $lines) . "\n";
+    }
+
+    private function buildEnvFromExample(): string
+    {
+        $examplePath = base_path('.env.example');
+        $lines = file($examplePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $env = [];
+
+        foreach ($lines as $line) {
+            if (str_starts_with($line, '#')) {
+                continue;
+            }
+
+            $key = explode('=', $line, 2)[0] ?? null;
+
+            if ($key && ($value = getenv($key)) !== false) {
+                $env[] = "{$key}={$value}";
+            }
+        }
+
+        return implode("\n", $env);
     }
 
     public function deploy(Node $node): void
