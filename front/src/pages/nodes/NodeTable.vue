@@ -94,9 +94,9 @@ const statusVariant = (status: string) => {
         <TableRow>
           <TableHead>Node</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead class="w-[180px]">CPU</TableHead>
-          <TableHead class="w-[180px]">Memory</TableHead>
-          <TableHead class="w-[180px]">Disk</TableHead>
+          <TableHead class="w-45">CPU</TableHead>
+          <TableHead class="w-45">Memory</TableHead>
+          <TableHead class="w-45">Disk</TableHead>
           <TableHead>Network</TableHead>
           <TableHead class="text-right">Last Seen</TableHead>
           <TableHead class="w-12"></TableHead>
