@@ -189,11 +189,11 @@ const statusVariant = (status: string) => {
                   <Pencil class="mr-2 h-4 w-4" />
                   Edit
                 </DropdownMenuItem>
-                <DropdownMenuItem v-if="['unknown', 'provision_failed', 'provisioned'].includes(node.status)" @click="provisionNode(node)">
+                <DropdownMenuItem v-if="['ready'].includes(node.status)" @click="provisionNode(node)">
                   <Settings class="mr-2 h-4 w-4" />
                   Provision
                 </DropdownMenuItem>
-                <DropdownMenuItem v-if="['provisioned', 'running', 'exited'].includes(node.status)" @click="deployDialog?.show(node)">
+                <DropdownMenuItem v-if="['ready', 'running', 'exited'].includes(node.status)" @click="deployDialog?.show(node)">
                   <Rocket class="mr-2 h-4 w-4" />
                   Deploy
                 </DropdownMenuItem>

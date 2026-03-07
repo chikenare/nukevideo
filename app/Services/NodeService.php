@@ -79,7 +79,7 @@ class NodeService
         $swarmNodeId = $this->docker->getSwarmNodeId($ip);
 
         $node->update([
-            'status' => 'success',
+            'status' => 'ready',
             'swarm_node_id' => $swarmNodeId,
         ]);
     }
