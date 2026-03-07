@@ -5,11 +5,9 @@ import NodeService from '@/services/NodeService'
 import type { Node, NodesResponse } from '@/types/Node'
 import CreateNodeDialog from './CreateNodeDialog.vue'
 import NodeTable from './NodeTable.vue'
-import DeploySheet from './DeploySheet.vue'
 
 const nodesData = ref<NodesResponse>({ nodes: [], summary: { totalCapacity: 0, availableSlots: 0 } })
 const loading = ref(true)
-const deploySheet = ref<InstanceType<typeof DeploySheet> | null>(null)
 
 let pollInterval: ReturnType<typeof setInterval> | null = null
 
@@ -58,8 +56,7 @@ onUnmounted(() => {
       No nodes found. Click "Add Node" to get started.
     </div>
 
-    <NodeTable v-else :nodes="nodesData.nodes" @deploy="(node) => deploySheet?.start(node)" @updated="onNodeUpdated" @deleted="fetchNodes" @show-logs="(node) => deploySheet?.showLogs(node)" />
+    <NodeTable v-else :nodes="nodesData.nodes" @updated="onNodeUpdated" @deleted="fetchNodes" />
 
-    <DeploySheet ref="deploySheet" />
   </div>
 </template>

@@ -86,7 +86,7 @@ class NodeController extends Controller
 
     public function deploy(string $id)
     {
-        $node = Node::with('sshKey')->find($id);
+        $node = Node::with('sshKey')->findOrFail($id);
 
         if (!$node->swarm_node_id) {
             throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
