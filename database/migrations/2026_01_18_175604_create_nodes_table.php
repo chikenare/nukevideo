@@ -13,6 +13,7 @@ return new class extends Migration {
         Schema::create('nodes', function (Blueprint $table) {
             $table->id();
             $table->ipAddress()->unique();
+            $table->string('swarm_node_id')->nullable();
             $table->string('name');
             $table->string('container_id')->nullable();
             $table->string('hostname')->nullable();

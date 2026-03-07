@@ -19,6 +19,7 @@ class Node extends Model
         'status',
         'uptime',
         'metrics',
+        'swarm_node_id',
         'ssh_key_id',
     ];
 
