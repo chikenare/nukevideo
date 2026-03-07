@@ -14,8 +14,8 @@ services:
   nukevideo-api:
     build:  
       context: .
-      target: nukevideo-api
-    image: chiken/nukevideo/nukevideo-api
+      target: dev
+    image: nukevideo-api
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
@@ -30,7 +30,7 @@ services:
       rustfs:
         condition: service_started
   nukevideo-schedule:
-    image: chiken/nukevideo/nukevideo-api
+    image: nukevideo-api
     command: ["php", "/var/www/html/artisan", "schedule:work"]
     stop_signal: SIGTERM
     healthcheck:
@@ -47,7 +47,7 @@ services:
         condition: service_started
 
   nukevideo-horizon:
-    image: chiken/nukevideo/nukevideo-api
+    image: nukevideo-api
     command: ["php", "/var/www/html/artisan", "horizon"]
     stop_signal: SIGTERM
     healthcheck:
