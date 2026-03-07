@@ -109,6 +109,15 @@ class NodeService
 
     public function deploy(Node $node): void
     {
+        if (!$node->swarm_node_id) {
+            $node->update(['swarm_node_id' => $this->docker->getSwarmNodeId($node->ip_address)]);
+            $node->refresh();
+        }
+
+        if (!$node->swarm_node_id) {
+            throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
+        }
+
         $node->update(['status' => 'deploying']);
         broadcast(new NodeOutput($node->id, "Deploying {$node->type->value} service..."));
 
