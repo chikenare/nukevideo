@@ -30,6 +30,10 @@ class NodeController extends Controller
             'ssh_key_id' => 'nullable|exists:ssh_keys,id',
         ]);
 
+        if (app()->environment() == 'local') {
+            $validated['status'] = 'running';
+        }
+
         $node = $this->nodeService->createNode($validated);
 
         if (app()->isProduction()) {
