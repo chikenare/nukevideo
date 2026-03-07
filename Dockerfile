@@ -48,11 +48,11 @@ WORKDIR /var/www/html
 
 COPY composer.json composer.lock ./
 
-RUN composer install --no-dev --optimize-autoloader --no-scripts --prefer-dist --no-interaction
+RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
 
 COPY . .
 
-RUN composer run-script post-autoload-dump
+# RUN composer run-script post-autoload-dump
 
 # --- API prod ---
 FROM php-base AS api-prod
