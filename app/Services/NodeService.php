@@ -124,6 +124,9 @@ class NodeService
                     'Image' => $image,
                     'Env' => array_values($env),
                 ],
+                'Placement' => [
+                    'Constraints' => ["node.id == {$node->swarm_node_id}"],
+                ],
             ],
             'Mode' => [
                 'Replicated' => [
