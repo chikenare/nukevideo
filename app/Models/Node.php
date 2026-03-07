@@ -53,4 +53,13 @@ class Node extends Model
     {
         return $query->where('is_active', true);
     }
+
+    public function scopeProxy($query)
+    {
+        return $query->where('type', 'proxy');
+    }
+    public function scopeWorker($query)
+    {
+        return $query->where('type', 'worker');
+    }
 }

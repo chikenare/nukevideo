@@ -17,7 +17,7 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        $node = Node::where('type', 'proxy')->first();
+        $node = Node::proxy()->active()->first();
 
         if (!$node) {
             throw new Exception('Node not available');
