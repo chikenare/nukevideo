@@ -29,19 +29,6 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_started
-  reverb:
-    image: chiken/nukevideo/nukevideo-api
-    volumes:
-      - ./:/var/www/html
-    command: ["php", "/var/www/html/artisan", "reverb:start"]
-    stop_signal: SIGTERM
-    healthcheck:
-      test: ["CMD", "healthcheck-reverb"]
-      start_period: 10s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.reverb.rule=Host(`reverb.nukevideo.localhost`)"
-      - "traefik.http.services.reverb.loadbalancer.server.port=8080"
   nukevideo-schedule:
     image: chiken/nukevideo/nukevideo-api
     command: ["php", "/var/www/html/artisan", "schedule:work"]
