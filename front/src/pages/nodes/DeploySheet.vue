@@ -29,10 +29,10 @@ const start = async (targetNode: Node) => {
   logs.value = []
   open.value = true
 
-  echo.channel(`node.${targetNode.id}`).listen('NodeOutput', (e: { output: string }) => {
-    logs.value.push(e.output)
-    scrollToBottom()
-  })
+  // echo.channel(`node.${targetNode.id}`).listen('NodeOutput', (e: { output: string }) => {
+  //   logs.value.push(e.output)
+  //   scrollToBottom()
+  // })
 
   try {
     await NodeService.deploy(targetNode.id)
@@ -63,10 +63,10 @@ const showLogs = (targetNode: Node) => {
   logs.value = []
   open.value = true
 
-  echo.channel(`node.${targetNode.id}`).listen('NodeOutput', (e: { output: string }) => {
-    logs.value.push(e.output)
-    scrollToBottom()
-  })
+  // echo.channel(`node.${targetNode.id}`).listen('NodeOutput', (e: { output: string }) => {
+  //   logs.value.push(e.output)
+  //   scrollToBottom()
+  // })
 }
 
 defineExpose({ start, showLogs })

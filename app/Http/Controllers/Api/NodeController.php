@@ -4,8 +4,6 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\Node\NodeResource;
-use App\Jobs\DeployNodeJob;
-use App\Jobs\ProvisionNodeJob;
 use App\Models\Node;
 use App\Services\NodeService;
 use Illuminate\Http\Request;
@@ -34,8 +32,11 @@ class NodeController extends Controller
 
         $node = $this->nodeService->createNode($validated);
 
+        $node->refresh();
+        $node->load('sshKey');
+
         if ($node->ssh_key_id) {
-            ProvisionNodeJob::dispatch($node->id);
+            $this->nodeService->provisionNode($node);
         }
 
         return new NodeResource($node);
@@ -76,19 +77,24 @@ class NodeController extends Controller
 
     public function provision(string $id)
     {
-        ProvisionNodeJob::dispatch($id);
+        $node = Node::with('sshKey')->findOrFail($id);
+
+        $this->nodeService->provisionNode($node);
 
         return response()->json(['message' => 'Provisioning started']);
     }
 
     public function deploy(string $id)
     {
-        $node = Node::findOrFail($id);
+        $node = Node::with('sshKey')->find($id);
 
         if (!$node->swarm_node_id) {
             throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
         }
-        DeployNodeJob::dispatch($id);
+
+        if ($node) {
+            $this->nodeService->deploy($node);
+        }
 
         return response()->json(['message' => 'Deploy started']);
     }

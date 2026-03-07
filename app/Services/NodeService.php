@@ -2,7 +2,6 @@
 
 namespace App\Services;
 
-use App\Events\NodeOutput;
 use App\Http\Resources\Node\NodeResource;
 use App\Models\Node;
 
@@ -66,15 +65,17 @@ class NodeService
         $managerIp = $this->docker->getSwarmManagerIp();
         $joinToken = $this->docker->getSwarmJoinToken();
 
-        $this->ssh->run(
-            ip: $ip,
-            privateKey: $key,
-            command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
-            timeout: 30,
-            onOutput: function (string $output) use ($node) {
-                broadcast(new NodeOutput($node->id, $output));
-            },
-        );
+        if (app()->isProduction()) {
+            $this->ssh->run(
+                ip: $ip,
+                privateKey: $key,
+                command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
+                timeout: 30,
+                onOutput: function (string $output) use ($node) {
+                },
+            );
+            return;
+        }
 
         $swarmNodeId = $this->docker->getSwarmNodeId($ip);
 
@@ -110,7 +111,6 @@ class NodeService
     public function deploy(Node $node): void
     {
         $node->update(['status' => 'loading', 'log' => 'Deploying']);
-        broadcast(new NodeOutput($node->id, "Deploying {$node->type->value} service..."));
 
         $stackName = 'nukevideo';
         $image = "chikenare/nukevideo-{$node->type->value}:latest";
@@ -163,7 +163,6 @@ class NodeService
 
         $this->docker->deployService($serviceName, $spec);
 
-        broadcast(new NodeOutput($node->id, "Service {$serviceName} deployed successfully"));
         $node->update(['status' => 'running', 'log' => null]);
     }
 }
