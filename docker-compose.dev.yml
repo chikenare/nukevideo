@@ -75,42 +75,42 @@ services:
         condition: service_started
     volumes:
       - ".:/var/www/html"
-  # nukevideo-worker:
-  #   image: nukevideo-worker
-  #   build:
-  #     context: .
-  #     target: worker
-  #     args:
-  #       FFMPEG_IMAGE: ${FFMPEG_IMAGE}
-  #   stop_signal: SIGTERM
-  #   healthcheck:
-  #     test: ["CMD", "healthcheck-queue"]
-  #     start_period: 10s
-  #   restart: always
-  #   volumes:
-  #     - ./:/var/www/html
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_healthy
-  #     rustfs:
-  #       condition: service_started
-  # nukevideo-proxy:
-  #   image: nukevideo-proxy
-  #   build:
-  #     context: ./vod
-  #     args:
-  #       FFMPEG_IMAGE: ${FFMPEG_IMAGE}
-  #   env_file:
-  #     - .env
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.nukevideo-cdn.rule=Host(`cdn.nukevideo.localhost`)"
-  #     - "traefik.http.services.nukevideo-cdn.loadbalancer.server.port=80"
-  #   depends_on:
-  #     nukevideo-api:
-  #       condition: service_healthy
+  nukevideo-worker:
+    image: nukevideo-worker
+    build:
+      context: .
+      target: worker
+      args:
+        FFMPEG_IMAGE: ${FFMPEG_IMAGE}
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-queue"]
+      start_period: 10s
+    restart: always
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+  nukevideo-proxy:
+    image: nukevideo-proxy
+    build:
+      context: ./vod
+      args:
+        FFMPEG_IMAGE: ${FFMPEG_IMAGE}
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-cdn.rule=Host(`cdn.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-cdn.loadbalancer.server.port=80"
+    depends_on:
+      nukevideo-api:
+        condition: service_healthy
   
   nukevideo-front:
     image: nukevideo-front

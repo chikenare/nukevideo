@@ -54,7 +54,7 @@ class NodeService
         return $json;
     }
 
-    public function provisionNode(Node $node): void
+    public function joinToSwarm(Node $node): void
     {
         $ip = $node->ip_address;
         $key = $node->sshKey->private_key;
@@ -65,17 +65,14 @@ class NodeService
         $managerIp = $this->docker->getSwarmManagerIp();
         $joinToken = $this->docker->getSwarmJoinToken();
 
-        if (app()->isProduction()) {
-            $this->ssh->run(
-                ip: $ip,
-                privateKey: $key,
-                command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
-                timeout: 30,
-                onOutput: function (string $output) use ($node) {
-                },
-            );
-            return;
-        }
+        $this->ssh->run(
+            ip: $ip,
+            privateKey: $key,
+            command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
+            timeout: 30,
+            onOutput: function (string $output) use ($node) {
+            },
+        );
 
         $swarmNodeId = $this->docker->getSwarmNodeId($ip);
 

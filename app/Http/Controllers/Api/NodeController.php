@@ -32,11 +32,13 @@ class NodeController extends Controller
 
         $node = $this->nodeService->createNode($validated);
 
-        $node->refresh();
-        $node->load('sshKey');
+        if (app()->isProduction()) {
+            $node->refresh();
+            $node->load('sshKey');
 
-        if ($node->ssh_key_id) {
-            $this->nodeService->provisionNode($node);
+            if ($node->ssh_key_id) {
+                $this->nodeService->provisionNode($node);
+            }
         }
 
         return new NodeResource($node);
@@ -77,15 +79,21 @@ class NodeController extends Controller
 
     public function provision(string $id)
     {
+        if (!app()->isProduction()) {
+            return response()->json(['message' => 'Local env', 400]);
+        }
         $node = Node::with('sshKey')->findOrFail($id);
 
-        $this->nodeService->provisionNode($node);
+        $this->nodeService->joinToSwarm($node);
 
         return response()->json(['message' => 'Provisioning started']);
     }
 
     public function deploy(string $id)
     {
+        if (!app()->isProduction()) {
+            return response()->json(['message' => 'Local env', 400]);
+        }
         $node = Node::with('sshKey')->findOrFail($id);
 
         if (!$node->swarm_node_id) {
