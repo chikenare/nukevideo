@@ -1,8 +1,25 @@
 ARG FFMPEG_IMAGE=mwader/static-ffmpeg:8.0.1
+ARG PHP_CLI_IMAGE=serversideup/php:8.5-cli-alpine
+ARG PHP_FPM_IMAGE=serversideup/php:8.5-fpm-nginx-alpine
 
 FROM ${FFMPEG_IMAGE} AS ffmpeg-binaries
 
-FROM serversideup/php:8.5-cli-alpine AS worker
+# --- PHP base with common user setup ---
+FROM ${PHP_FPM_IMAGE} AS php-base
+
+USER root
+
+ARG USER_ID=1000
+ARG GROUP_ID=1000
+
+RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
+    docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID && \
+    apk add --no-cache openssh-client
+
+USER www-data
+
+# --- Worker ---
+FROM ${PHP_CLI_IMAGE} AS worker
 
 USER root
 
@@ -17,29 +34,15 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 
 USER www-data
 
-CMD [ "php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
+CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
 
+# --- API dev ---
+FROM php-base AS api-dev
 
-FROM serversideup/php:8.5-fpm-nginx-alpine AS api-dev
-
-USER root
-
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-
-RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
-    docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
-
-RUN apk add --no-cache openssh-client
-
-USER www-data
-
-
-FROM serversideup/php:8.5-fpm-nginx-alpine AS api-build
+# --- API build ---
+FROM php-base AS api-build
 
 USER root
-
-RUN apk add --no-cache openssh-client
 
 WORKDIR /var/www/html
 
@@ -51,17 +54,8 @@ COPY . .
 
 RUN composer run-script post-autoload-dump
 
-FROM serversideup/php:8.5-fpm-nginx-alpine AS api-prod
-
-USER root
-
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-
-RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
-    docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
-
-USER www-data
+# --- API prod ---
+FROM php-base AS api-prod
 
 WORKDIR /var/www/html
 
@@ -137,26 +131,24 @@ RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 
 
-FROM node:24-alpine AS front-dev
+# --- Node base ---
+FROM node:24-alpine AS node-base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
 WORKDIR /app
+
+# --- Front dev ---
+FROM node-base AS front-dev
 
 EXPOSE 5173
 
 CMD ["pnpm", "run", "dev"]
 
-#FRONT PROD
-FROM node:24-alpine AS front-build
-
-ENV PNPM_HOME="/pnpm"
-ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
-
-WORKDIR /app
+# --- Front build ---
+FROM node-base AS front-build
 
 COPY pnpm-lock.yaml package.json ./
 
@@ -165,9 +157,9 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm run build
 
-
+# --- Front prod ---
 FROM nginx:stable-alpine AS front-prod
 
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY --from=front-build /app/dist /usr/share/nginx/html
 
 CMD ["nginx", "-g", "daemon off;"]
