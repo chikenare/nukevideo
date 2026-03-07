@@ -92,26 +92,26 @@ async function handleLogout() {
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuGroup>
+          <!-- <DropdownMenuGroup>
             <DropdownMenuItem>
               <Sparkles />
               Upgrade to Pro
             </DropdownMenuItem>
           </DropdownMenuGroup>
-          <DropdownMenuSeparator />
+          <DropdownMenuSeparator /> -->
           <DropdownMenuGroup>
             <DropdownMenuItem @click="router.push({ name: 'Account' })">
               <BadgeCheck />
               Account
             </DropdownMenuItem>
-            <DropdownMenuItem>
+            <!-- <DropdownMenuItem>
               <CreditCard />
               Billing
             </DropdownMenuItem>
             <DropdownMenuItem>
               <Bell />
               Notifications
-            </DropdownMenuItem>
+            </DropdownMenuItem> -->
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
           <DropdownMenuItem @click="handleLogout">
