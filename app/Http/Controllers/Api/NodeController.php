@@ -37,7 +37,7 @@ class NodeController extends Controller
             $node->load('sshKey');
 
             if ($node->ssh_key_id) {
-                $this->nodeService->provisionNode($node);
+                $this->nodeService->joinToSwarm($node);
             }
         }
 
