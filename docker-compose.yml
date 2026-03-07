@@ -1,0 +1,82 @@
+services:
+  nukevideo-api:
+    image: chikenare/nukevideo-api
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  nukevideo-schedule:
+    image: chikenare/nukevideo-api
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  nukevideo-horizon:
+    image: chikenare/nukevideo-api
+    command: ["php", "/var/www/html/artisan", "horizon"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-horizon"]
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy  
+  nukevideo-front:
+    image: chikenare/nukevideo-api
+  docker-manager:
+    image: tecnativa/docker-socket-proxy
+    privileged: true
+    environment:
+      CONFIGS: 1
+      POST: 1
+      SWARM: 1
+      INFO: 1
+      SERVICES: 1
+      NETWORKS: 1
+      NODES: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE}
+      MARIADB_USER: ${DB_USERNAME}
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    ports:
+      - ${DB_PORT-3306}:3306
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - ${REDIS_PORT-6379}:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+volumes:
+  mariadb-data:
+    driver: local
+  redis-data:
+    driver: local

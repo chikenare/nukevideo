@@ -14,7 +14,7 @@ services:
   nukevideo-api:
     build:  
       context: .
-      target: dev
+      target: api-dev
     image: nukevideo-api
     labels:
       - "traefik.enable=true"
@@ -86,7 +86,8 @@ services:
   nukevideo-proxy:
     image: nukevideo-proxy
     build:
-      context: ./vod
+      context: .
+      target: proxy-prod
       args:
         FFMPEG_IMAGE: ${FFMPEG_IMAGE}
     env_file:
@@ -102,7 +103,8 @@ services:
   nukevideo-front:
     image: nukevideo-front
     build:
-      context: ./front
+      context: .
+      target: front-dev
     volumes:
       - ./front:/app
       - pnpm_store:/pnpm
