@@ -131,6 +131,8 @@ services:
       POST: 1
       SWARM: 1
       INFO: 1
+      SERVICES: 1
+      NETWORKS: 1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
   db:

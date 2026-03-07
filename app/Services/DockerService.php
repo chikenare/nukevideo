@@ -45,6 +45,51 @@ class DockerService
         return $swarm['JoinTokens']['Worker'];
     }
 
+
+    public function getService(string $name): ?array
+    {
+        $response = Http::get("{$this->baseUrl}/services", [
+            'filters' => json_encode(['name' => [$name]]),
+        ]);
+
+        if (!$response->successful()) {
+            return null;
+        }
+
+        foreach ($response->json() as $service) {
+            if ($service['Spec']['Name'] === $name) {
+                return $service;
+            }
+        }
+
+        return null;
+    }
+
+    public function deployService(string $name, array $spec): void
+    {
+        $spec['Name'] = $name;
+
+        $existing = $this->getService($name);
+
+        if ($existing) {
+            $version = $existing['Version']['Index'];
+            $forceUpdate = ($existing['Spec']['TaskTemplate']['ForceUpdate'] ?? 0) + 1;
+            $spec['TaskTemplate']['ForceUpdate'] = $forceUpdate;
+
+            $response = Http::post("{$this->baseUrl}/services/{$existing['ID']}/update?version={$version}", $spec);
+
+            if (!$response->successful()) {
+                throw new RuntimeException("Failed to update service '{$name}': " . $response->body());
+            }
+        } else {
+            $response = Http::post("{$this->baseUrl}/services/create", $spec);
+
+            if (!$response->successful()) {
+                throw new RuntimeException("Failed to create service '{$name}': " . $response->body());
+            }
+        }
+    }
+
     public function getConfigContent(string $name): string
     {
         $response = Http::get("{$this->baseUrl}/configs", [

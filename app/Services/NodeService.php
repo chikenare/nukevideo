@@ -14,11 +14,6 @@ class NodeService
     ) {
     }
 
-    public function deactivateNode(Node $node): void
-    {
-        $node->update(['is_active' => false]);
-    }
-
     public function index(): array
     {
         $nodes = Node::all();
@@ -67,21 +62,6 @@ class NodeService
 
         $node->update(['status' => 'provisioning']);
 
-        // Build .env: base from docker config + node-specific vars
-        $env = $this->buildNodeEnv($node);
-
-        // Create directory and write .env via SSH
-        $this->ssh->run(
-            ip: $ip,
-            privateKey: $key,
-            command: "mkdir -p /opt/nukevideo && cat > /opt/nukevideo/.env",
-            input: $env,
-            timeout: 30,
-            onOutput: function (string $output) use ($node) {
-                broadcast(new NodeOutput($node->id, $output));
-            },
-        );
-
         // Join the swarm
         $managerIp = $this->docker->getSwarmManagerIp();
         $joinToken = $this->docker->getSwarmJoinToken();
@@ -124,19 +104,58 @@ class NodeService
 
     public function deploy(Node $node): void
     {
-        $ip = $node->ip_address;
-        $script = file_get_contents(base_path('scripts/deploy.sh'));
-        $key = $node->sshKey->private_key;
+        $node->update(['status' => 'deploying']);
+        broadcast(new NodeOutput($node->id, "Deploying {$node->type->value} service..."));
 
-        $this->ssh->run(
-            ip: $ip,
-            privateKey: $key,
-            command: "bash -s",
-            input: $script,
-            timeout: 300,
-            onOutput: function (string $output) use ($node) {
-                broadcast(new NodeOutput($node->id, $output));
-            },
-        );
+        $stackName = 'nukevideo';
+        $image = "chikenare/nukevideo-{$node->type->value}:latest";
+        $serviceName = "{$stackName}_{$node->type->value}";
+
+        $env = array_filter(explode("\n", trim($this->buildNodeEnv($node))));
+
+        $spec = [
+            'TaskTemplate' => [
+                'ContainerSpec' => [
+                    'Image' => $image,
+                    'Env' => array_values($env),
+                ],
+            ],
+            'Mode' => [
+                'Replicated' => [
+                    'Replicas' => $node->replicas ?? 2,
+                ],
+            ],
+            'UpdateConfig' => [
+                'Parallelism' => 1,
+                'Delay' => 10000000000,
+                'Order' => 'start-first',
+                'FailureAction' => 'rollback',
+            ],
+            'RollbackConfig' => [
+                'Parallelism' => 1,
+                'Order' => 'stop-first',
+            ],
+        ];
+
+        if ($node->type->value === 'proxy' && $node->hostname) {
+            $isProduction = app()->environment('production');
+            $entrypoint = $isProduction ? 'websecure' : 'web';
+
+            $spec['Labels'] = [
+                'traefik.enable' => 'true',
+                'traefik.http.routers.proxy.rule' => "Host(`{$node->hostname}`)",
+                'traefik.http.routers.proxy.entrypoints' => $entrypoint,
+                'traefik.http.services.proxy.loadbalancer.server.port' => '80',
+            ];
+
+            if ($isProduction) {
+                $spec['Labels']['traefik.http.routers.proxy.tls.certresolver'] = 'le';
+            }
+        }
+
+        $this->docker->deployService($serviceName, $spec);
+
+        broadcast(new NodeOutput($node->id, "Service {$serviceName} deployed successfully"));
+        $node->update(['status' => 'running']);
     }
 }
