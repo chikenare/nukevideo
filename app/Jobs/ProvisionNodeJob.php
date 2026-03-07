@@ -30,7 +30,7 @@ class ProvisionNodeJob implements ShouldQueue
     {
         $node = Node::find($this->nodeId);
         if ($node) {
-            $node->update(['status' => 'provision_failed']);
+            $node->update(['status' => 'error']);
         }
     }
 }

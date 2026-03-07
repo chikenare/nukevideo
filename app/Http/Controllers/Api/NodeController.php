@@ -83,6 +83,11 @@ class NodeController extends Controller
 
     public function deploy(string $id)
     {
+        $node = Node::findOrFail($id);
+
+        if (!$node->swarm_node_id) {
+            throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
+        }
         DeployNodeJob::dispatch($id);
 
         return response()->json(['message' => 'Deploy started']);

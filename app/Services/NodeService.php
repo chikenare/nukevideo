@@ -60,7 +60,7 @@ class NodeService
         $ip = $node->ip_address;
         $key = $node->sshKey->private_key;
 
-        $node->update(['status' => 'provisioning']);
+        $node->update(['status' => 'loading']);
 
         // Join the swarm
         $managerIp = $this->docker->getSwarmManagerIp();
@@ -79,7 +79,7 @@ class NodeService
         $swarmNodeId = $this->docker->getSwarmNodeId($ip);
 
         $node->update([
-            'status' => 'provisioned',
+            'status' => 'success',
             'swarm_node_id' => $swarmNodeId,
         ]);
     }
@@ -109,16 +109,7 @@ class NodeService
 
     public function deploy(Node $node): void
     {
-        if (!$node->swarm_node_id) {
-            $node->update(['swarm_node_id' => $this->docker->getSwarmNodeId($node->ip_address)]);
-            $node->refresh();
-        }
-
-        if (!$node->swarm_node_id) {
-            throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
-        }
-
-        $node->update(['status' => 'deploying']);
+        $node->update(['status' => 'loading', 'log' => 'Deploying']);
         broadcast(new NodeOutput($node->id, "Deploying {$node->type->value} service..."));
 
         $stackName = 'nukevideo';
@@ -173,6 +164,6 @@ class NodeService
         $this->docker->deployService($serviceName, $spec);
 
         broadcast(new NodeOutput($node->id, "Service {$serviceName} deployed successfully"));
-        $node->update(['status' => 'running']);
+        $node->update(['status' => 'running', 'log' => null]);
     }
 }
