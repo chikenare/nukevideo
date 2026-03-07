@@ -22,6 +22,7 @@ return new class extends Migration {
             $table->string('status')->default('unknown');
             $table->string('uptime')->nullable();
             $table->json('metrics')->nullable();
+            $table->text('log')->nullable();
             $table->timestamps();
         });
     }

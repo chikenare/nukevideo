@@ -21,6 +21,7 @@ class Node extends Model
         'metrics',
         'swarm_node_id',
         'ssh_key_id',
+        'log',
     ];
 
     protected function casts()

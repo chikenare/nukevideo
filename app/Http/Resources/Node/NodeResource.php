@@ -25,6 +25,7 @@ class NodeResource extends JsonResource
             'uptime' => $this->uptime,
             'metrics' => $this->metrics,
             'sshKeyId' => $this->ssh_key_id,
+            'log' => $this->log,
             'lastSeenAt' => $this->updated_at?->diffForHumans(),
         ];
     }
