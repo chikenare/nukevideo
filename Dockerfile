@@ -18,24 +18,6 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 
 USER www-data
 
-# --- Worker ---
-FROM ${PHP_CLI_IMAGE} AS worker
-
-USER root
-
-COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/
-COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/
-
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-
-RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
-    docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
-
-USER www-data
-
-CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
-
 # --- API dev ---
 FROM php-base AS api-dev
 
@@ -52,7 +34,19 @@ RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-interacti
 
 COPY . .
 
-# RUN composer run-script post-autoload-dump
+# --- Worker ---
+FROM api-build AS worker
+
+USER root
+
+COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/
+COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/
+
+COPY --from=api-build --chown=www-data:www-data /var/www/html /var/www/html
+
+USER www-data
+
+CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
 
 # --- API prod ---
 FROM php-base AS api-prod
