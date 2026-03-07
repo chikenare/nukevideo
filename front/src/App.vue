@@ -11,6 +11,7 @@ export const description
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
 import AppSidebar from "@/components/AppSidebar.vue"
 import {
   SidebarInset,
@@ -21,11 +22,21 @@ import ModeToggle from "./components/ModeToggle.vue"
 import Separator from "./components/ui/separator/Separator.vue"
 
 const route = useRoute()
+const authStore = useAuthStore()
 const isGuestRoute = computed(() => route.meta.guest === true)
+const isReady = computed(() => authStore.loaded)
 </script>
 
 <template>
-  <template v-if="isGuestRoute">
+  <template v-if="!isReady">
+    <div class="flex h-screen w-screen items-center justify-center">
+      <svg class="h-8 w-8 animate-spin text-muted-foreground" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+      </svg>
+    </div>
+  </template>
+  <template v-else-if="isGuestRoute">
     <RouterView />
   </template>
   <template v-else>
