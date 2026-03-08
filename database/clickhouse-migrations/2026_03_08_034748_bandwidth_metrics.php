@@ -11,15 +11,15 @@ return new class extends AbstractClickhouseMigration
         $this->clickhouseClient->write(
             <<<'SQL'
                     CREATE TABLE IF NOT EXISTS bandwidth_metrics (
-                        timestamp DateTime64(3),
-                        ip String,
-                        video String,
-                        extid Nullable(String),
+                        date Date,
+                        ip IPv6,
+                        video LowCardinality(String),
+                        extid LowCardinality(String),
                         bytes UInt64
                     ) ENGINE = SummingMergeTree(bytes)
-                    PARTITION BY toYYYYMM(timestamp)
-                    ORDER BY (timestamp, video, extid, ip)
-                    SETTINGS allow_nullable_key = 1;
+                    PARTITION BY toYYYYMM(date)
+                    ORDER BY (date, video, extid, ip)
+                    TTL date + INTERVAL 3 MONTH;
                 SQL,
         );
     }

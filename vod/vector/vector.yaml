@@ -54,7 +54,8 @@ transforms:
     inputs:
       - metrics_to_logs
     source: |
-      .timestamp = to_unix_timestamp!(.timestamp)
+      .date = format_timestamp!(.timestamp, format: "%Y-%m-%d")
+      del(.timestamp)
       .bytes = to_int(.counter.value) ?? 0
       .ip = .tags.ip
       .video = .tags.video
