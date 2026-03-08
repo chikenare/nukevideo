@@ -1,0 +1,74 @@
+sources:
+  nginx_logs:
+    type: docker_logs
+    include_labels:
+      - "vector.enable=true"
+
+transforms:
+  parse_base:
+    type: remap
+    inputs:
+      - nginx_logs
+    source: |
+      parsed, err = parse_key_value(.message)
+
+      if err != null { abort }
+      if !exists(parsed.ip) || !exists(parsed.video) || !exists(parsed.bytes) { abort }
+      
+      .ip = parsed.ip
+      .video = parsed.video
+      .bytes = to_int(parsed.bytes) ?? 0
+      .extid = parsed.extid
+      
+      if .bytes <= 0 { abort }
+
+      del(.message)
+    
+  filter_extid_exists:
+    type: filter
+    inputs:
+      - parse_base
+    condition: '.extid != "" && .extid != null'
+
+  stats_general:
+    type: log_to_metric
+    inputs:
+      - parse_base
+    metrics:
+      - type: counter
+        field: bytes
+        name: total_bytes_by_ip
+        increment_by_value: true
+        tags:
+          ip: "{{ ip }}"
+      - type: counter
+        field: bytes
+        name: total_bytes_by_video
+        increment_by_value: true
+        tags:
+          video: "{{ video }}"
+  stats_extid:
+    type: log_to_metric
+    inputs:
+      - filter_extid_exists
+    metrics:
+      - type: counter
+        field: bytes
+        name: total_bytes_by_extid
+        tags:
+          extid: "{{ extid }}"
+
+  aggregate_metrics:
+    type: aggregate
+    inputs:
+      - stats_general
+      - stats_extid
+    interval_ms: 10000
+
+sinks:
+  stdout:
+    type: console
+    inputs:
+      - aggregate_metrics
+    encoding:
+      codec: json

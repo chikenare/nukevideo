@@ -96,6 +96,7 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-cdn.rule=Host(`cdn.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-cdn.loadbalancer.server.port=80"
+      - "vector.enable=true"
     depends_on:
       nukevideo-api:
         condition: service_healthy
@@ -183,6 +184,14 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-redis.rule=Host(`redis.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-redis.loadbalancer.server.port=5540"
+
+  vector:
+    image: timberio/vector:0.53.0-alpine
+    volumes:
+      - ./vod/vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - nukevideo-proxy
 
 volumes:
   mariadb-data:
