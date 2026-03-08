@@ -24,46 +24,46 @@ transforms:
 
       del(.message)
     
-  filter_extid_exists:
-    type: filter
-    inputs:
-      - parse_base
-    condition: '.extid != "" && .extid != null'
-
-  stats_general:
+  stats_bandwidth:
     type: log_to_metric
     inputs:
       - parse_base
     metrics:
       - type: counter
         field: bytes
-        name: total_bytes_by_ip
+        name: bandwidth
         increment_by_value: true
         tags:
           ip: "{{ ip }}"
-      - type: counter
-        field: bytes
-        name: total_bytes_by_video
-        increment_by_value: true
-        tags:
           video: "{{ video }}"
-  stats_extid:
-    type: log_to_metric
-    inputs:
-      - filter_extid_exists
-    metrics:
-      - type: counter
-        field: bytes
-        name: total_bytes_by_extid
-        tags:
           extid: "{{ extid }}"
 
   aggregate_metrics:
     type: aggregate
     inputs:
-      - stats_general
-      - stats_extid
+      - stats_bandwidth
     interval_ms: 10000
+
+  metrics_to_logs:
+    type: metric_to_log
+    inputs:
+      - aggregate_metrics
+
+  prep_clickhouse:
+    type: remap
+    inputs:
+      - metrics_to_logs
+    source: |
+      .timestamp = to_unix_timestamp!(.timestamp)
+      .bytes = to_int(.counter.value) ?? 0
+      .ip = .tags.ip
+      .video = .tags.video
+      .extid = .tags.extid
+      del(.tags)
+      del(.counter)
+      del(.kind)
+      del(.name)
+      del(.namespace)
 
 sinks:
   stdout:
@@ -72,3 +72,15 @@ sinks:
       - aggregate_metrics
     encoding:
       codec: json
+  clickhouse:
+    type: clickhouse
+    inputs:
+      - prep_clickhouse
+    endpoint: http://clickhouse:8123
+    table: bandwidth_metrics
+    skip_unknown_fields: true
+    database: default
+    auth:
+      strategy: basic
+      user: default
+      password: ""
