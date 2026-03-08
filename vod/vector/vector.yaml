@@ -58,7 +58,12 @@ transforms:
       .bytes = to_int(.counter.value) ?? 0
       .ip = .tags.ip
       .video = .tags.video
-      .extid = .tags.extid
+      extid = string!(.tags.extid)
+      if extid == "" || extid == "<null>" {
+        .extid = null
+      } else {
+        .extid = extid
+      }
       del(.tags)
       del(.counter)
       del(.kind)
