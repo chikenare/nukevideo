@@ -3,6 +3,7 @@ import type { SidebarProps } from '@/components/ui/sidebar'
 
 import {
   Settings2,
+  Shield,
   VideoIcon,
 } from "lucide-vue-next"
 import NavMain from '@/components/NavMain.vue'
@@ -24,44 +25,53 @@ const props = withDefaults(defineProps<SidebarProps>(), {
 
 const authStore = useAuthStore()
 
-const data = {
-  navMain: [
-    {
-      title: "Videos",
-      url: "#",
-      icon: VideoIcon,
-      items: [
-        {
-          title: "Videos",
-          url: "/videos",
-        },
-        {
-          title: "Templates",
-          url: "/templates",
-        },
-      ],
-    },
-    {
-      title: "Settings",
-      url: "#",
-      icon: Settings2,
-      items: [
-        {
-          title: "API Keys",
-          url: "/settings/api-keys",
-        },
-        {
-          title: "SSH Keys",
-          url: "/settings/ssh-keys",
-        },
-        {
-          title: "Nodes",
-          url: "/nodes",
-        },
-      ],
-    },
-  ],
-}
+const navMain = [
+  {
+    title: "Videos",
+    url: "#",
+    icon: VideoIcon,
+    items: [
+      {
+        title: "Videos",
+        url: "/videos",
+      },
+      {
+        title: "Templates",
+        url: "/templates",
+      },
+    ],
+  },
+  {
+    title: "Settings",
+    url: "#",
+    icon: Settings2,
+    items: [
+      {
+        title: "API Keys",
+        url: "/settings/api-keys",
+      },
+      {
+        title: "SSH Keys",
+        url: "/settings/ssh-keys",
+      },
+      {
+        title: "Nodes",
+        url: "/nodes",
+      },
+    ],
+  },
+  ...(authStore.isAdmin ? [{
+    title: "Admin",
+    url: "#",
+    icon: Shield,
+    items: [
+      {
+        title: "Users",
+        url: "/users",
+      },
+    ],
+  }] : []),
+]
 </script>
 
 <template>
@@ -70,7 +80,7 @@ const data = {
       <TeamSwitcher />
     </SidebarHeader>
     <SidebarContent>
-      <NavMain :items="data.navMain" />
+      <NavMain :items="navMain" />
     </SidebarContent>
     <SidebarFooter>
       <NavUser v-if="authStore.user" :user="authStore.user" />

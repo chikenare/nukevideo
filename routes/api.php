@@ -10,6 +10,8 @@ use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\VideoController;
 use App\Http\Controllers\VideoWebhookController;
 use App\Http\Controllers\VodController;
+use App\Http\Controllers\Api\UserController;
+use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
 use Tapp\LaravelUppyS3MultipartUpload\Http\Controllers\UppyS3MultipartController;
@@ -40,6 +42,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);
     Route::apiResource('/streams', StreamController::class)->except(['show', 'index']);
+
+    // Admin: User Management
+    Route::middleware(EnsureAdmin::class)->group(function () {
+        Route::apiResource('users', UserController::class);
+    });
 });
 
 Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle'])

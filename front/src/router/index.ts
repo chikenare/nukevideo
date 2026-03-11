@@ -4,6 +4,7 @@ import EditTemplatePage from '@/pages/templates/EditTemplatePage.vue'
 import VideoPage from '@/pages/videos/VideoPage.vue'
 import VideosPage from '@/pages/videos/VideosPage.vue'
 import NodesPage from '@/pages/nodes/NodesPage.vue'
+import UsersPage from '@/pages/users/UsersPage.vue'
 import AccountPage from '@/pages/settings/AccountPage.vue'
 import ApiKeysPage from '@/pages/settings/ApiKeysPage.vue'
 import SshKeysPage from '@/pages/settings/SshKeysPage.vue'
@@ -24,6 +25,7 @@ const router = createRouter({
     { name: 'CreateTemplate', path: '/templates/create', component: EditTemplatePage },
     { name: 'EditTemplate', path: '/templates/:id', component: EditTemplatePage },
     { name: 'Nodes', path: '/nodes', component: NodesPage },
+    { name: 'Users', path: '/users', component: UsersPage, meta: { admin: true } },
     { name: 'Account', path: '/settings/account', component: AccountPage },
     { name: 'ApiKeys', path: '/settings/api-keys', component: ApiKeysPage },
     { name: 'SshKeys', path: '/settings/ssh-keys', component: SshKeysPage },
@@ -44,6 +46,10 @@ router.beforeEach(async (to) => {
 
   if (!isGuest && !authStore.isAuthenticated) {
     return { name: 'Login' }
+  }
+
+  if (to.meta.admin && !authStore.isAdmin) {
+    return { name: 'Home' }
   }
 })
 
