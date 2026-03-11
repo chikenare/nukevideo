@@ -19,7 +19,7 @@ return new class extends AbstractClickhouseMigration
                     ) ENGINE = SummingMergeTree(bytes)
                     PARTITION BY toYYYYMM(date)
                     ORDER BY (date, video, extid, ip)
-                    TTL date + INTERVAL 3 MONTH;
+                    TTL date + INTERVAL 1 YEAR;
                 SQL,
         );
     }
