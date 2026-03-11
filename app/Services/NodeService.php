@@ -57,29 +57,32 @@ class NodeService
     public function joinToSwarm(Node $node): void
     {
         $ip = $node->ip_address;
-        $key = $node->sshKey->private_key;
 
-        $node->update(['status' => 'loading']);
+        $swarmNodeId = $this->docker->getSwarmNodeId($ip);
+
+        $node->update([
+            'swarm_node_id' => $swarmNodeId,
+        ]);
+
+        if (app()->environment('local')) {
+            $node->update([
+                'status' => 'ready',
+            ]);
+            return;
+        }
 
         // Join the swarm
         $managerIp = $this->docker->getSwarmManagerIp();
         $joinToken = $this->docker->getSwarmJoinToken();
+        $key = $node->sshKey->private_key;
 
         $this->ssh->run(
             ip: $ip,
             privateKey: $key,
             command: "docker swarm leave --force 2>/dev/null; docker swarm join --token {$joinToken} {$managerIp}:2377",
             timeout: 30,
-            onOutput: function (string $output) use ($node) {
-            },
         );
 
-        $swarmNodeId = $this->docker->getSwarmNodeId($ip);
-
-        $node->update([
-            'status' => 'ready',
-            'swarm_node_id' => $swarmNodeId,
-        ]);
     }
 
     private function buildNodeEnv(Node $node): string

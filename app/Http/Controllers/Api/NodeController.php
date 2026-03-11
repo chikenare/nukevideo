@@ -30,20 +30,11 @@ class NodeController extends Controller
             'ssh_key_id' => 'nullable|exists:ssh_keys,id',
         ]);
 
-        if (app()->environment() == 'local') {
-            $validated['status'] = 'running';
-        }
-
         $node = $this->nodeService->createNode($validated);
 
-        if (app()->isProduction()) {
-            $node->refresh();
-            $node->load('sshKey');
-
-            if ($node->ssh_key_id) {
-                $this->nodeService->joinToSwarm($node);
-            }
-        }
+        $node->refresh();
+        $node->load('sshKey');
+        $this->nodeService->joinToSwarm($node);
 
         return new NodeResource($node);
     }
