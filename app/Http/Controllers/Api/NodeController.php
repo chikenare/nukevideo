@@ -86,18 +86,13 @@ class NodeController extends Controller
 
     public function deploy(string $id)
     {
-        if (!app()->isProduction()) {
-            return response()->json(['message' => 'Local env', 400]);
-        }
         $node = Node::with('sshKey')->findOrFail($id);
 
         if (!$node->swarm_node_id) {
             throw new \RuntimeException("Node {$node->name} has no swarm_node_id — provision it first");
         }
 
-        if ($node) {
-            $this->nodeService->deploy($node);
-        }
+        $this->nodeService->deploy($node);
 
         return response()->json(['message' => 'Deploy started']);
     }
