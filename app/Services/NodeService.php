@@ -167,6 +167,11 @@ class NodeService
             ],
         ];
 
+        $queue = app()->environment('local') ? 'streams' : "streams-node-$node->id";
+        if ($node->type->value === 'worker') {
+            $spec['TaskTemplate']['ContainerSpec']['Command'] = ['php', '/var/www/html/artisan', 'queue:work', "--queue=$queue", '--timeout=3200'];
+        }
+
         if ($node->type->value === 'proxy' && $node->hostname) {
             $isProduction = app()->environment('production');
             $entrypoint = $isProduction ? 'websecure' : 'web';

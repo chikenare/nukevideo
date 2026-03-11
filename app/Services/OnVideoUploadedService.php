@@ -10,6 +10,7 @@ use App\Jobs\GenerateVideoStoryboard;
 use App\Jobs\ProcessStreamJob;
 use App\Jobs\ProcessSubtitlesJob;
 use App\Jobs\UploadStreamJob;
+use App\Models\Node;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
@@ -133,7 +134,8 @@ class OnVideoUploadedService
 
     private function dispatchHlsJobs(Video $video, string $originalPath): void
     {
-        $onQueue = 'streams';
+        $node = Node::active()->worker()->inRandomOrder()->firstOrFail();
+        $onQueue = app()->environment('local') ? 'streams' : "streams-node-$node->id";
 
         $batch = [];
         $streams = $video->streams()->whereIn('type', ['video', 'audio'])->get();
