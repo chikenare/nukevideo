@@ -16,10 +16,11 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
     docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID && \
     apk add --no-cache openssh-client
 
-USER www-data
 
 # --- API dev ---
 FROM php-base AS api-dev
+
+USER www-data
 
 # --- API build ---
 FROM php-base AS api-build
@@ -42,12 +43,16 @@ USER root
 COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/
 COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/
 
+COPY --chown=www-data:www-data . .
+
 USER www-data
 
 CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
 
 # --- API prod ---
 FROM api-build AS api-prod
+
+USER www-data
 
 
 FROM alpine:3.20 AS proxy-builder
