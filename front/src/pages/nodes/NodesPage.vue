@@ -28,6 +28,15 @@ const onNodeUpdated = (updated: Node) => {
   }
 }
 
+const deploy = async (node: Node) => {
+  try {
+    await NodeService.deploy(node.id)
+
+  } catch (error) {
+    console.error('Error deploy node:', error)
+  }
+}
+
 onMounted(() => {
   fetchNodes()
   pollInterval = setInterval(fetchNodes, 10000)
@@ -56,7 +65,7 @@ onUnmounted(() => {
       No nodes found. Click "Add Node" to get started.
     </div>
 
-    <NodeTable v-else :nodes="nodesData.nodes" @updated="onNodeUpdated" @deleted="fetchNodes" />
+    <NodeTable v-else :nodes="nodesData.nodes" @updated="onNodeUpdated" @deleted="fetchNodes" @deploy="deploy" />
 
   </div>
 </template>
