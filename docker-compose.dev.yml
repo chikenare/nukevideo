@@ -20,6 +20,8 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-api.loadbalancer.server.port=8080"
+    ports:
+      - 8082:8080
     volumes:
       - ./:/var/www/html
     depends_on:
