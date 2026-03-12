@@ -43,8 +43,6 @@ USER root
 COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/
 COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/
 
-COPY --chown=www-data:www-data . .
-
 USER www-data
 
 CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
