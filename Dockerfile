@@ -32,7 +32,7 @@ COPY composer.json composer.lock ./
 
 RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
 
-COPY . .
+COPY --chown=www-data:www-data . .
 
 # --- Worker ---
 FROM api-build AS worker
@@ -42,18 +42,12 @@ USER root
 COPY --from=ffmpeg-binaries /ffmpeg /usr/local/bin/
 COPY --from=ffmpeg-binaries /ffprobe /usr/local/bin/
 
-COPY --from=api-build --chown=www-data:www-data /var/www/html /var/www/html
-
 USER www-data
 
 CMD ["php", "/var/www/html/artisan", "queue:work", "--queue=streams", "--timeout=3200"]
 
 # --- API prod ---
-FROM php-base AS api-prod
-
-WORKDIR /var/www/html
-
-COPY --from=api-build --chown=www-data:www-data /var/www/html /var/www/html
+FROM api-build AS api-prod
 
 
 FROM alpine:3.20 AS proxy-builder
