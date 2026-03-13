@@ -31,9 +31,25 @@ WORKDIR /var/www/html
 
 COPY composer.json composer.lock ./
 
-RUN composer install --no-dev --optimize-autoloader --prefer-dist --no-interaction
+RUN composer install \ 
+    --no-dev \
+    --optimize-autoloader \
+    --prefer-dist \ 
+    --no-interaction \
+    --no-scripts
 
 COPY --chown=www-data:www-data . .
+
+RUN mkdir -p bootstrap/cache \
+    storage/framework/sessions \
+    storage/framework/views \
+    storage/framework/cache/data \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R 775 storage bootstrap/cache
+
+RUN php artisan optimize -e views
+
+RUN php artisan package:discover
 
 # --- Worker ---
 FROM api-build AS worker

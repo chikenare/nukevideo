@@ -98,6 +98,7 @@ class NodeService
         $nodeVars = [
             'NODE_TYPE' => $node->type->value,
             'REPLICAS' => $node->replicas ?? 2,
+            'APP_ENV' => 'production'
         ];
 
         if ($node->type->value === 'proxy' && $node->hostname) {
