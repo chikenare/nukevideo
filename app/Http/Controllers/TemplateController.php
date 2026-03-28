@@ -52,6 +52,39 @@ class TemplateController extends Controller
 
     }
 
+    public function presets()
+    {
+        $presets = collect(config('template-presets'))->map(function ($preset, $slug) {
+            return [
+                'slug' => $slug,
+                'name' => $preset['name'],
+                'description' => $preset['description'],
+                'category' => $preset['category'],
+                'query' => $preset['query'],
+            ];
+        })->values();
+
+        return response()->json(['data' => $presets]);
+    }
+
+    public function adoptPreset(Request $request, string $slug)
+    {
+        $presets = config('template-presets');
+
+        if (! isset($presets[$slug])) {
+            abort(404, 'Preset not found.');
+        }
+
+        $preset = $presets[$slug];
+
+        $template = $request->user()->templates()->create([
+            'name' => $preset['name'],
+            'query' => $preset['query'],
+        ]);
+
+        return new TemplateResource($template);
+    }
+
     public function getConfig()
     {
         $config = config('ffmpeg');

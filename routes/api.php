@@ -32,6 +32,8 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('tokens/{id}', [ApiTokenController::class, 'destroy']);
 
     Route::get('/templates-config', [TemplateController::class, 'getConfig']);
+    Route::get('/template-presets', [TemplateController::class, 'presets']);
+    Route::post('/template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset']);
     Route::apiResource('templates', TemplateController::class);
 
     Route::apiResource('/videos', VideoController::class)->except(['store']);

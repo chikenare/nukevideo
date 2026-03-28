@@ -1,5 +1,5 @@
 import apiClient from './api'
-import type { Template, CreateTemplateDto, UpdateTemplateDto } from '@/types/Template'
+import type { Template, CreateTemplateDto, UpdateTemplateDto, TemplatePreset } from '@/types/Template'
 
 class TemplateService {
   private readonly BASE_PATH = '/templates'
@@ -31,6 +31,16 @@ class TemplateService {
 
   async getCodecsConfig() {
     const res = await this.api.get('/templates-config')
+    return res.data.data
+  }
+
+  async presets(): Promise<TemplatePreset[]> {
+    const res = await this.api.get('/template-presets')
+    return res.data.data
+  }
+
+  async adoptPreset(slug: string): Promise<Template> {
+    const res = await this.api.post(`/template-presets/${slug}/adopt`)
     return res.data.data
   }
 }

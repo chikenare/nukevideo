@@ -31,3 +31,13 @@ export type AudioConfig = {
 
 export type CreateTemplateDto = Omit<Template, 'ulid' | 'createdAt'>
 export type UpdateTemplateDto = Omit<Template, 'ulid' | 'createdAt'>
+
+export type TemplatePreset = {
+  slug: string
+  name: string
+  description: string
+  category: string
+  query: {
+    outputs: TemplateOutput[]
+  }
+}
