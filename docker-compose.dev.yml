@@ -75,6 +75,17 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-app.rule=Host(`app.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-app.loadbalancer.server.port=5173"
+  nukevideo-docs:
+    image: nukevideo-docs
+    build:
+      context: .
+      target: docs
+    volumes:
+      - ./docs:/app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-docs.rule=Host(`docs.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-docs.loadbalancer.server.port=5173"
   db:
     image: mariadb:11
     restart: unless-stopped

@@ -156,8 +156,18 @@ RUN corepack enable
 
 WORKDIR /app
 
+FROM node-base AS docs
+
+USER node
+
+EXPOSE 5173
+
+CMD ["pnpm", "run", "docs:dev"]
+
 # --- Front dev ---
 FROM node-base AS front-dev
+
+USER node
 
 EXPOSE 5173
 
