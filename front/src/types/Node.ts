@@ -70,6 +70,7 @@ export type NodesResponse = {
 
 export type CreateNodePayload = {
   name: string
+  user: string
   ipAddress: string
   type: NodeType
   hostname?: string

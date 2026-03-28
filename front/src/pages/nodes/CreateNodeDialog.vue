@@ -75,6 +75,7 @@ const handleCreate = async () => {
   try {
     await NodeService.createNode({
       name: newNode.value.name,
+      user: newNode.value.user,
       ipAddress: newNode.value.ipAddress,
       type: newNode.value.type,
       ...(newNode.value.type === 'proxy' && newNode.value.hostname ? { hostname: newNode.value.hostname } : {}),
