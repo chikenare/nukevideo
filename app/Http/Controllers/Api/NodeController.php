@@ -93,9 +93,13 @@ class NodeController extends Controller
 
         $docker = app(DockerService::class);
         $containers = $docker->listContainers($node);
+        $prefix = "nukevideo_{$node->type}_{$node->id}_";
 
         foreach ($containers as $container) {
-            $docker->removeContainer($node, $container['Names']);
+            $name = $container['Names'] ?? '';
+            if (str_starts_with($name, $prefix)) {
+                $docker->removeContainer($node, $name);
+            }
         }
 
         $node->delete();
