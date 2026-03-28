@@ -1,0 +1,152 @@
+sources:
+  nginx_logs:
+    type: docker_logs
+    include_labels:
+      - "vector.enable=true"
+  host_metrics:
+    type: host_metrics
+    collectors:
+      - disk
+      - load
+      - memory
+      - network
+
+transforms:
+  parse_base:
+    type: remap
+    inputs:
+      - nginx_logs
+    source: |
+      parsed, err = parse_key_value(.message)
+
+      if err != null { abort }
+      if !exists(parsed.ip) || !exists(parsed.video) || !exists(parsed.bytes) { abort }
+      
+      .ip = parsed.ip
+      .video = parsed.video
+      .bytes = to_int(parsed.bytes) ?? 0
+      .extid = parsed.extid
+      
+      if .bytes <= 0 { abort }
+
+      del(.message)
+    
+  stats_bandwidth:
+    type: log_to_metric
+    inputs:
+      - parse_base
+    metrics:
+      - type: counter
+        field: bytes
+        name: bandwidth
+        increment_by_value: true
+        tags:
+          ip: "{{ ip }}"
+          video: "{{ video }}"
+          extid: "{{ extid }}"
+
+  aggregate_metrics:
+    type: aggregate
+    inputs:
+      - stats_bandwidth
+    interval_ms: 10000
+
+  metrics_to_logs:
+    type: metric_to_log
+    inputs:
+      - aggregate_metrics
+
+  prep_clickhouse:
+    type: remap
+    inputs:
+      - metrics_to_logs
+    source: |
+      .date = format_timestamp!(.timestamp, format: "%Y-%m-%d")
+      del(.timestamp)
+      .bytes = to_int(.counter.value) ?? 0
+      .ip = .tags.ip
+      .video = .tags.video
+      extid = string!(.tags.extid)
+      if extid == "" || extid == "<null>" {
+        .extid = null
+      } else {
+        .extid = extid
+      }
+      del(.tags)
+      del(.counter)
+      del(.kind)
+      del(.name)
+      del(.namespace)
+
+  filter_host_metrics:
+    type: remap
+    inputs:
+      - host_metrics
+    source: |
+      allowed = ["memory_total_bytes", "memory_used_bytes", "memory_available_bytes", "load1", "load5", "load15", "disk_read_bytes_total", "disk_written_bytes_total", "network_receive_bytes_total", "network_transmit_bytes_total"]
+      if !includes(allowed, .name) { abort }
+      del(.tags)
+
+  aggregate_host_metrics:
+    type: aggregate
+    inputs:
+      - filter_host_metrics
+    interval_ms: 15000
+
+  host_metrics_to_logs:
+    type: metric_to_log
+    inputs:
+      - aggregate_host_metrics
+
+  prep_host_metrics:
+    type: remap
+    inputs:
+      - host_metrics_to_logs
+    source: |
+      .metric = del(.name)
+      .node_id = get_env_var!("NODE_ID")
+      .timestamp = format_timestamp!(.timestamp, format: "%Y-%m-%d %H:%M:%S")
+      if exists(.counter) {
+        .value = .counter.value
+        del(.counter)
+      } else if exists(.gauge) {
+        .value = .gauge.value
+        del(.gauge)
+      }
+      del(.tags)
+      del(.kind)
+      del(.namespace)
+
+sinks:
+  stdout:
+    type: console
+    inputs:
+      - aggregate_metrics
+      - prep_host_metrics
+    encoding:
+      codec: json
+  clickhouse:
+    type: clickhouse
+    inputs:
+      - prep_clickhouse
+    endpoint: "${CLICKHOUSE_ENDPOINT}"
+    table: bandwidth_metrics
+    skip_unknown_fields: true
+    database: "${CLICKHOUSE_DATABASE}"
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
+
+  clickhouse_host_metrics:
+    type: clickhouse
+    inputs:
+      - prep_host_metrics
+    endpoint: "${CLICKHOUSE_ENDPOINT}"
+    table: host_metrics
+    skip_unknown_fields: true
+    database: "${CLICKHOUSE_DATABASE}"
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"

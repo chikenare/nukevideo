@@ -1,0 +1,19 @@
+{
+  "files": [],
+  "compilerOptions": {
+    "types": ["vidstack/vue"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "references": [
+    {
+      "path": "./tsconfig.node.json"
+    },
+    {
+      "path": "./tsconfig.app.json"
+    }
+  ],
+  
+}

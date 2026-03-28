@@ -1,0 +1,178 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+  nukevideo-api:
+    build:
+      context: .
+      target: api-dev
+    image: nukevideo-api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-api.loadbalancer.server.port=8080"
+    ports:
+      - 8082:8080
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+  nukevideo-schedule:
+    image: nukevideo-api
+    command: ["php", "/var/www/html/artisan", "schedule:work"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-schedule"]
+      start_period: 10s
+    volumes:
+      - ".:/var/www/html"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+
+  nukevideo-horizon:
+    image: nukevideo-api
+    command: ["php", "/var/www/html/artisan", "horizon"]
+    stop_signal: SIGTERM
+    healthcheck:
+      test: ["CMD", "healthcheck-horizon"]
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+    volumes:
+      - ".:/var/www/html"
+  nukevideo-front:
+    image: nukevideo-front
+    build:
+      context: .
+      target: front-dev
+    volumes:
+      - ./front:/app
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-app.rule=Host(`app.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-app.loadbalancer.server.port=5173"
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DB_DATABASE}
+      MARIADB_USER: ${DB_USERNAME}
+      MARIADB_ROOT_PASSWORD: ${DB_PASSWORD}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    ports:
+      - ${DB_PORT-3306}:3306
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 10s
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  adminer:
+    image: adminer
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.nukevideo.localhost`)"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+    environment:
+      ADMINER_DESIGN: filamentish
+
+  clickhouse:
+    image: clickhouse/clickhouse-server
+    restart: always
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse/
+      - clickhouse_logs:/var/log/clickhouse-server/
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    ports:
+      - 8123:8123
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+  clickhouse-ui:
+    image: ghcr.io/caioricciuti/ch-ui:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.clickhouse.rule=Host(`ch.nukevideo.localhost`)"
+      - "traefik.http.services.clickhouse.loadbalancer.server.port=3488"
+      - "traefik.http.routers.clickhouse.service=clickhouse"
+    environment:
+      CLICKHOUSE_URL: http://clickhouse:8123
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    restart: unless-stopped
+    volumes:
+      - rustfs-data:/data
+    labels:
+      - "traefik.enable=true"
+
+      - "traefik.http.routers.rustfs-9000.rule=Host(`s3-data.nukevideo.localhost`)"
+      - "traefik.http.services.rustfs-9000.loadbalancer.server.port=9000"
+      - "traefik.http.routers.rustfs-9000.service=rustfs-9000"
+
+      - "traefik.http.routers.rustfs-9001.rule=Host(`s3-ui.nukevideo.localhost`)"
+      - "traefik.http.services.rustfs-9001.loadbalancer.server.port=9001"
+      - "traefik.http.routers.rustfs-9001.service=rustfs-9001"
+    ports:
+      - 9000:9000
+      - 9001:9001
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    ports:
+      - ${REDIS_PORT-6379}:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+  redisinsight:
+    image: redis/redisinsight:latest
+    volumes:
+      - redisinsight:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nukevideo-redis.rule=Host(`redis.nukevideo.localhost`)"
+      - "traefik.http.services.nukevideo-redis.loadbalancer.server.port=5540"
+
+volumes:
+  mariadb-data:
+  rustfs-data:
+  redis-data:
+  redisinsight:
+  clickhouse_data:
+  clickhouse_logs:
