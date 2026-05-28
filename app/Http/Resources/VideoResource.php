@@ -1,0 +1,39 @@
+<?php
+
+namespace App\Http\Resources;
+
+use Illuminate\Http\Request;
+use Illuminate\Http\Resources\Json\JsonResource;
+
+class VideoResource extends JsonResource
+{
+    /**
+     * Transform the resource into an array.
+     *
+     * @return array<string, mixed>
+     */
+    public function toArray(Request $request): array
+    {
+        return [
+            'ulid' => $this->ulid,
+            'name' => $this->name,
+            'duration' => $this->duration,
+            'aspectRatio' => $this->aspect_ratio,
+            'status' => $this->status,
+            'createdAt' => $this->created_at,
+
+            'externalUserId' => $this->external_user_id,
+            'externalResourceId' => $this->external_resource_id,
+
+            'thumbnailUrl' => url("/videos/{$this->ulid}/thumbnail.jpg"),
+            'storyboardUrl' => url("/videos/{$this->ulid}/storyboard.vtt"),
+
+            'outputs' => OutputResource::collection($this->whenLoaded('outputs')),
+            'streams' => StreamResource::collection($this->whenLoaded('streams')),
+
+            'size' => $this->whenLoaded('streams', function () {
+                return $this->streams->sum('size');
+            }),
+        ];
+    }
+}
