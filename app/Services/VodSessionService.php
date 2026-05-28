@@ -13,6 +13,7 @@ class VodSessionService
         string $videoUlid,
         string $outputUlid,
         string $externalResourceId,
+        string $externalUserId = '',
     ): void {
         try {
             app(Client::class)->insert('sessions_active', [[
@@ -21,8 +22,9 @@ class VodSessionService
                 'video_ulid' => $videoUlid,
                 'output_ulid' => $outputUlid,
                 'external_resource_id' => $externalResourceId,
+                'external_user_id' => $externalUserId,
                 'created_at' => now()->format('Y-m-d H:i:s'),
-            ]], ['session_id', 'user_id', 'video_ulid', 'output_ulid', 'external_resource_id', 'created_at']);
+            ]], ['session_id', 'user_id', 'video_ulid', 'output_ulid', 'external_resource_id', 'external_user_id', 'created_at']);
         } catch (\Throwable $e) {
             Log::warning("Failed to create VOD session {$sessionId}: {$e->getMessage()}");
         }

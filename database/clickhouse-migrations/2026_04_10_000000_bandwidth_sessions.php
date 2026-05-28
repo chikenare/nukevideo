@@ -17,6 +17,7 @@ return new class extends AbstractClickhouseMigration
                     video_ulid String,
                     output_ulid String,
                     external_resource_id String DEFAULT '',
+                    external_user_id String DEFAULT '',
                     created_at DateTime DEFAULT now()
                 ) ENGINE = MergeTree()
                 ORDER BY (session_id)
@@ -34,7 +35,8 @@ return new class extends AbstractClickhouseMigration
                     user_id UInt32,
                     video_ulid String,
                     output_ulid String,
-                    external_resource_id String
+                    external_resource_id String,
+                    external_user_id String
                 ) PRIMARY KEY session_id
                 SOURCE(CLICKHOUSE(TABLE 'sessions_active' USER '{$user}' PASSWORD '{$password}'))
                 LIFETIME(MIN 10 MAX 30)
@@ -51,7 +53,7 @@ return new class extends AbstractClickhouseMigration
                     bytes UInt64
                 ) ENGINE = MergeTree()
                 ORDER BY (session_id, ip)
-                TTL created_at + INTERVAL 1 DAY;
+                TTL created_at + INTERVAL 7 DAY;
             SQL,
         );
 
@@ -64,11 +66,12 @@ return new class extends AbstractClickhouseMigration
                     video_ulid LowCardinality(String),
                     output_ulid LowCardinality(String),
                     external_resource_id LowCardinality(String),
+                    external_user_id LowCardinality(String),
                     ip IPv6,
                     bytes UInt64
                 ) ENGINE = SummingMergeTree(bytes)
                 PARTITION BY toYYYYMM(timestamp)
-                ORDER BY (session_id, user_id, video_ulid, output_ulid, external_resource_id, ip, timestamp)
+                ORDER BY (session_id, user_id, video_ulid, output_ulid, external_resource_id, external_user_id, ip, timestamp)
                 TTL timestamp + INTERVAL 1 YEAR;
             SQL,
         );
@@ -84,6 +87,7 @@ return new class extends AbstractClickhouseMigration
                     dictGet('sessions_dict', 'video_ulid', session_id) AS video_ulid,
                     dictGet('sessions_dict', 'output_ulid', session_id) AS output_ulid,
                     dictGet('sessions_dict', 'external_resource_id', session_id) AS external_resource_id,
+                    dictGet('sessions_dict', 'external_user_id', session_id) AS external_user_id,
                     ip,
                     bytes
                 FROM bandwidth_logs

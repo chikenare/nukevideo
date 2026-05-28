@@ -24,6 +24,7 @@ class VodRequest extends FormRequest
         return [
             'resolution' => 'nullable|integer|min:144|max:4320',
             'external_resource_id' => 'nullable|string|max:255',
+            'external_user_id' => 'nullable|string|max:255',
             'ip' => 'nullable|ip',
         ];
     }

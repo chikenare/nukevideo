@@ -34,7 +34,6 @@ class VodController extends Controller
 
         $service = new VodService;
         $schema = app()->isLocal() ? 'http://' : 'https://';
-        $sessionId = Str::uuid();
         $ip = $validated['ip'] ?? $request->ip() ?? '0.0.0.0';
 
         $video = $request->user()
@@ -46,13 +45,16 @@ class VodController extends Controller
 
         $links = $video
             ->outputs
-            ->map(function (Output $output) use ($service, $schema, $node, $validated, $ip, $sessionId, $ulid, $video) {
+            ->map(function (Output $output) use ($service, $schema, $node, $validated, $ip, $ulid, $video) {
+                $sessionId = Str::uuid();
+
                 VodSessionService::create(
                     sessionId: (string) $sessionId,
                     userId: $video->user_id,
                     videoUlid: $ulid,
                     outputUlid: $output->ulid,
                     externalResourceId: $validated['external_resource_id'] ?? '',
+                    externalUserId: $validated['external_user_id'] ?? '',
                 );
 
                 return $this->buildLink(
