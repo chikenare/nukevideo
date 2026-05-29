@@ -39,8 +39,7 @@ return new class extends AbstractClickhouseMigration
                     external_user_id String
                 ) PRIMARY KEY session_id
                 SOURCE(CLICKHOUSE(TABLE 'sessions_active' USER '{$user}' PASSWORD '{$password}'))
-                LIFETIME(MIN 10 MAX 30)
-                LAYOUT(HASHED());
+                LAYOUT(DIRECT());
             SQL,
         );
 
@@ -60,7 +59,7 @@ return new class extends AbstractClickhouseMigration
         $this->clickhouseClient->write(
             <<<'SQL'
                 CREATE TABLE IF NOT EXISTS sessions (
-                    timestamp DateTime DEFAULT now(),
+                    date Date DEFAULT today(),
                     session_id LowCardinality(String),
                     user_id UInt32,
                     video_ulid LowCardinality(String),
@@ -70,9 +69,9 @@ return new class extends AbstractClickhouseMigration
                     ip IPv6,
                     bytes UInt64
                 ) ENGINE = SummingMergeTree(bytes)
-                PARTITION BY toYYYYMM(timestamp)
-                ORDER BY (session_id, user_id, video_ulid, output_ulid, external_resource_id, external_user_id, ip, timestamp)
-                TTL timestamp + INTERVAL 1 YEAR;
+                PARTITION BY toYYYYMM(date)
+                ORDER BY (session_id, user_id, video_ulid, output_ulid, external_resource_id, external_user_id, ip, date)
+                TTL date + INTERVAL 1 YEAR;
             SQL,
         );
 
@@ -82,6 +81,7 @@ return new class extends AbstractClickhouseMigration
                 TO sessions
                 AS
                 SELECT
+                    today() AS date,
                     session_id,
                     dictGet('sessions_dict', 'user_id', session_id) AS user_id,
                     dictGet('sessions_dict', 'video_ulid', session_id) AS video_ulid,

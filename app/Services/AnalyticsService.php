@@ -22,7 +22,7 @@ class AnalyticsService
                 uniqExact(video_ulid) AS unique_videos,
                 uniqExact(ip) AS unique_ips
             FROM sessions
-            WHERE toDate(timestamp) >= {from:Date} AND toDate(timestamp) <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date}
         SQL, ['from' => $from, 'to' => $to]);
 
         $row = $result->fetchOne();
@@ -39,11 +39,11 @@ class AnalyticsService
     {
         $result = $this->client->select(<<<'SQL'
             SELECT
-                toDate(timestamp) AS date,
+                date,
                 sum(bytes) AS bytes,
                 uniqExact(session_id) AS sessions
             FROM sessions
-            WHERE toDate(timestamp) >= {from:Date} AND toDate(timestamp) <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date}
             GROUP BY date
             ORDER BY date
         SQL, ['from' => $from, 'to' => $to]);
@@ -59,7 +59,7 @@ class AnalyticsService
                 sum(bytes) AS bytes,
                 uniqExact(session_id) AS sessions
             FROM sessions
-            WHERE toDate(timestamp) >= {from:Date} AND toDate(timestamp) <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date}
             GROUP BY ip
             ORDER BY bytes DESC
             LIMIT {limit:UInt8}
@@ -78,7 +78,7 @@ class AnalyticsService
                 uniqExact(session_id) AS sessions,
                 uniqExact(ip) AS uniqueIps
             FROM sessions
-            WHERE toDate(timestamp) >= {from:Date} AND toDate(timestamp) <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date}
             GROUP BY video, externalResourceId
             ORDER BY bytes DESC
             LIMIT {limit:UInt8}
@@ -92,7 +92,7 @@ class AnalyticsService
         $topVideos = $this->client->select(<<<'SQL'
             SELECT video_ulid
             FROM sessions
-            WHERE toDate(timestamp) >= {from:Date} AND toDate(timestamp) <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date}
             GROUP BY video_ulid
             ORDER BY sum(bytes) DESC
             LIMIT {limit:UInt8}
@@ -108,11 +108,11 @@ class AnalyticsService
 
         $result = $this->client->select(<<<SQL
             SELECT
-                toDate(timestamp) AS date,
+                date,
                 video_ulid AS video,
                 sum(bytes) AS bytes
             FROM sessions
-            WHERE toDate(timestamp) >= '{$from}' AND toDate(timestamp) <= '{$to}'
+            WHERE date >= '{$from}' AND date <= '{$to}'
               AND video_ulid IN ({$placeholders})
             GROUP BY date, video
             ORDER BY date, video
