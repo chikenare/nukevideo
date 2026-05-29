@@ -102,5 +102,5 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
 
 // VOD
 Route::get('vod/config/{id}/{session}', [VodController::class, 'getConfig']);
-Route::get('videos/{ulid}/outputs', [VodController::class, 'getOutputs'])->middleware('auth:sanctum');
+Route::post('videos/{ulid}/outputs', [VodController::class, 'getOutputs'])->middleware('auth:sanctum');
 Route::get('videos/{ulid}/subtitles', [VodController::class, 'subtitles'])->middleware('auth:sanctum');

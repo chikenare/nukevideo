@@ -27,7 +27,7 @@ class VideoService {
   }
 
   async getVideoSources(ulid: string): Promise<{ ulid: string, format: string, url: string }[]> {
-    const res = await this.api.get(`/videos/${ulid}/outputs`)
+    const res = await this.api.post(`/videos/${ulid}/outputs`)
     return res.data.data
   }
 }
