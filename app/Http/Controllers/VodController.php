@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\SubtitleData;
+use App\Data\VodOutputData;
 use App\Enums\VideoStatus;
 use App\Http\Requests\VodRequest;
 use App\Models\Node;
@@ -9,7 +11,6 @@ use App\Models\Output;
 use App\Services\VodService;
 use App\Services\VodSessionService;
 use App\Settings\GeneralSettings;
-use Exception;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -29,7 +30,7 @@ class VodController extends Controller
         $node = Node::findProxyForVideo($ulid);
 
         if (! $node) {
-            throw new Exception('Node not available');
+            abort(503, 'No node available');
         }
 
         $service = new VodService;
@@ -46,10 +47,10 @@ class VodController extends Controller
         $links = $video
             ->outputs
             ->map(function (Output $output) use ($service, $schema, $node, $validated, $ip, $ulid, $video) {
-                $sessionId = Str::uuid();
+                $sessionId = (string) Str::uuid();
 
                 VodSessionService::create(
-                    sessionId: (string) $sessionId,
+                    sessionId: $sessionId,
                     userId: $video->user_id,
                     videoUlid: $ulid,
                     outputUlid: $output->ulid,
@@ -77,9 +78,9 @@ class VodController extends Controller
         string $schema,
         Node $node,
         ?int $resolution,
-        ?string $ip,
-        string $sessionId
-    ): array {
+        string $ip,
+        string $sessionId,
+    ): VodOutputData {
         $format = $output->format->value;
         $manifest = self::FORMAT_MANIFEST[$format];
 
@@ -88,72 +89,59 @@ class VodController extends Controller
             $resourceId .= "_$resolution";
         }
 
+        $hostname = $node->hostname;
         $url = $service->generateVodSignedUrl(
-            "$schema$node->hostname/$format/$resourceId/$sessionId/$manifest",
+            "$schema$hostname/$format/$resourceId/$sessionId/$manifest",
             $resourceId,
             $format,
-            $ip
+            $ip,
         );
 
-        return [
-            'ulid' => $output->ulid,
-            'format' => $format,
-            'url' => $url,
-        ];
+        return new VodOutputData(
+            ulid: $output->ulid,
+            format: $format,
+            url: $url,
+        );
     }
 
     public function getConfig(Request $request, string $resourceId, string $session)
     {
-        $data = explode('_', $resourceId);
-        $ulid = $data[0];
-        $resolution = $data[1] ?? 0;
-
-        if (! $ulid) {
-            abort(403, "Invalid id $ulid");
-        }
+        [$ulid, $resolution] = [...explode('_', $resourceId, 2), null];
+        $resolution = (int) ($resolution ?? 0);
 
         $includeSubtitles = app(GeneralSettings::class)->include_subtitles;
 
-        $output = Output::with('streams')
-            ->where('ulid', $ulid)
-            ->firstOrFail();
+        $with = ['streams'];
+        if ($includeSubtitles) {
+            $with['video.streams'] = fn ($q) => $q->where('type', 'subtitle');
+        }
+
+        $output = Output::with($with)->where('ulid', $ulid)->firstOrFail();
 
         $streams = $output->streams;
 
         if ($includeSubtitles) {
-            $subtitles = $output->video->streams()->where('type', 'subtitle')->get();
-            $streams = $streams->merge($subtitles);
+            $streams = $streams->merge($output->video->streams);
         }
 
         $sequences = $streams
-            ->filter(function ($s) use ($resolution) {
-                if (! in_array($s->type, ['video', 'audio', 'subtitle'])) {
-                    return false;
-                }
-
-                return $s->type !== 'video' || $resolution === 0 || $s->height <= $resolution;
-            })
+            ->filter(fn ($s) => \in_array($s->type, ['video', 'audio', 'subtitle'])
+                && ($s->type !== 'video' || $resolution === 0 || $s->height <= $resolution))
             ->map(function ($s) {
-                $data = [
+                $entry = [
                     'label' => $s->name ?? $s->height ?? 'und',
-                    'clips' => [
-                        [
-                            'type' => 'source',
-                            'path' => $s->path,
-                        ],
-                    ],
+                    'clips' => [['type' => 'source', 'path' => $s->path]],
                 ];
+
                 if ($s->language) {
-                    $data['language'] = $s->language;
+                    $entry['language'] = $s->language;
                 }
 
-                return $data;
+                return $entry;
             })
             ->values();
 
-        return response()->json([
-            'sequences' => $sequences->take(32),
-        ]);
+        return response()->json(['sequences' => $sequences->take(32)]);
     }
 
     public function subtitles(Request $request, string $ulid)
@@ -164,11 +152,11 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        $subtitles = $video->streams->map(fn ($s) => [
-            'name' => $s->name ?? $s->language ?? 'und',
-            'language' => $s->language,
-            'url' => Storage::url($s->path),
-        ]);
+        $subtitles = $video->streams->map(fn ($s) => new SubtitleData(
+            name: $s->name ?? $s->language ?? 'und',
+            language: $s->language,
+            url: Storage::url($s->path),
+        ));
 
         return response()->json(['data' => $subtitles]);
     }
