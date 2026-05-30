@@ -26,8 +26,8 @@ class VideoService {
     return this.api.delete(`${this.BASE_PATH}/${ulid}`)
   }
 
-  async getVideoSources(ulid: string): Promise<{ ulid: string, format: string, url: string }[]> {
-    const res = await this.api.post(`/videos/${ulid}/outputs`)
+  async getOutputLink(ulid: string): Promise<{ ulid: string, format: string, url: string }> {
+    const res = await this.api.post(`/outputs/${ulid}`)
     return res.data.data
   }
 }

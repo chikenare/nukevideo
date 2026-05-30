@@ -25,12 +25,8 @@ const handlePlayVideo = async () => {
 
   try {
     isLoadingVideo.value = true
-    const sources = await VideoService.getVideoSources(video.ulid)
-    const url = sources.find(e => e.ulid == outputUlid)?.url
-
-    if (url) {
-      videoUrl.value = url
-    }
+    const output = await VideoService.getOutputLink(outputUlid)
+    videoUrl.value = output.url
     isPlaying.value = true
   } catch (e) {
     if (e instanceof ApiException) {

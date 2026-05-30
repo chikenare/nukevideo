@@ -23,11 +23,21 @@ class VodController extends Controller
         'mp4' => 'video.mp4',
     ];
 
-    public function getOutputs(VodRequest $request, string $ulid)
+    public function getOutputLink(VodRequest $request, string $ulid)
     {
         $validated = $request->validated();
 
-        $node = Node::findProxyForVideo($ulid);
+        $output = Output::with('video')
+            ->whereHas('video', function ($query) use ($request) {
+                $query->where('user_id', $request->user()->id)
+                    ->where('status', VideoStatus::COMPLETED->value);
+            })
+            ->where('ulid', $ulid)
+            ->firstOrFail();
+
+        $video = $output->video;
+
+        $node = Node::findProxyForVideo($video->ulid);
 
         if (! $node) {
             abort(503, 'No node available');
@@ -37,39 +47,28 @@ class VodController extends Controller
         $schema = app()->isLocal() ? 'http://' : 'https://';
         $ip = $validated['ip'] ?? $request->ip() ?? '0.0.0.0';
 
-        $video = $request->user()
-            ->videos()
-            ->with('outputs')
-            ->where('ulid', $ulid)
-            ->where('status', VideoStatus::COMPLETED->value)
-            ->firstOrFail();
+        $sessionId = (string) Str::uuid();
 
-        $links = $video
-            ->outputs
-            ->map(function (Output $output) use ($service, $schema, $node, $validated, $ip, $ulid, $video) {
-                $sessionId = (string) Str::uuid();
+        VodSessionService::create(
+            sessionId: $sessionId,
+            userId: $video->user_id,
+            videoUlid: $video->ulid,
+            outputUlid: $output->ulid,
+            externalResourceId: $validated['external_resource_id'] ?? '',
+            externalUserId: $validated['external_user_id'] ?? '',
+        );
 
-                VodSessionService::create(
-                    sessionId: $sessionId,
-                    userId: $video->user_id,
-                    videoUlid: $ulid,
-                    outputUlid: $output->ulid,
-                    externalResourceId: $validated['external_resource_id'] ?? '',
-                    externalUserId: $validated['external_user_id'] ?? '',
-                );
+        $link = $this->buildLink(
+            output: $output,
+            service: $service,
+            schema: $schema,
+            node: $node,
+            resolution: $validated['resolution'] ?? null,
+            ip: $ip,
+            sessionId: $sessionId,
+        );
 
-                return $this->buildLink(
-                    output: $output,
-                    service: $service,
-                    schema: $schema,
-                    node: $node,
-                    resolution: $validated['resolution'] ?? null,
-                    ip: $ip,
-                    sessionId: $sessionId,
-                );
-            });
-
-        return response()->json(['data' => $links]);
+        return response()->json(['data' => $link]);
     }
 
     private function buildLink(
