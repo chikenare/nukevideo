@@ -2,7 +2,7 @@
 
 namespace App\Services;
 
-use App\Data\VideoWebhookData;
+use App\Data\VideoData;
 use App\Jobs\DispatchWebhookJob;
 use App\Models\Video;
 
@@ -26,7 +26,7 @@ class WebhookDispatcher
         $payload = [
             'event' => $event,
             'timestamp' => now()->timestamp,
-            'data' => VideoWebhookData::fromModel($video),
+            'data' => VideoData::fromModel($video->loadMissing(['outputs.streams', 'streams'])),
         ];
 
         DispatchWebhookJob::dispatch(

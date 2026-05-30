@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\VideoData;
 use App\Http\Requests\Video\UpdateVideoRequest;
-use App\Http\Resources\VideoResource;
 use App\Services\VideoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -16,7 +16,7 @@ class VideoController extends Controller
     {
         $query = $request->project()->videos()
             ->latest()
-            ->with('streams');
+            ->with(['outputs.streams', 'streams']);
 
         if ($search = $request->input('search')) {
             $query->where('name', 'like', "%{$search}%");
@@ -33,7 +33,7 @@ class VideoController extends Controller
         $videos = $query->paginate();
 
         return [
-            'data' => VideoResource::collection($videos->items()),
+            'data' => array_map(fn ($v) => VideoData::fromModel($v), $videos->items()),
             'currentPage' => $videos->currentPage(),
             'perPage' => $videos->perPage(),
             'total' => $videos->total(),
@@ -46,7 +46,7 @@ class VideoController extends Controller
             ->with(['outputs.streams', 'streams'])
             ->where('ulid', $ulid)->firstOrFail();
 
-        return new VideoResource($video);
+        return response()->json(['data' => VideoData::fromModel($video)]);
     }
 
     public function update(UpdateVideoRequest $request, string $ulid)
@@ -55,7 +55,7 @@ class VideoController extends Controller
 
         return response()->json([
             'message' => 'Video updated successfully',
-            'data' => new VideoResource($video->fresh()),
+            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams'])),
         ]);
     }
 

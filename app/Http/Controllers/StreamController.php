@@ -3,7 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Stream\UpdateStreamRequest;
-use App\Http\Resources\StreamResource;
+use App\Data\StreamData;
 use App\Services\StreamManagementService;
 use Illuminate\Http\Request;
 
@@ -17,7 +17,7 @@ class StreamController extends Controller
 
         return response()->json([
             'message' => 'Stream updated successfully',
-            'data' => new StreamResource($stream->fresh()),
+            'data' => StreamData::fromModel($stream->fresh()),
         ]);
     }
 
