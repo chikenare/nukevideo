@@ -139,7 +139,7 @@ sinks:
     type: redis
     inputs:
       - reduce_metrics_for_redis
-    endpoint: "redis://${REDIS_HOST}:${REDIS_PORT}/1"
+    endpoint: "redis://${REDIS_USER:-default}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}/${REDIS_CACHE_DB:-0}"
     key: "node_metrics:{{ node_id }}"
     data_type: list
     list:
