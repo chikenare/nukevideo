@@ -66,6 +66,7 @@ class VodController extends Controller
             resolution: $validated['resolution'] ?? null,
             ip: $ip,
             sessionId: $sessionId,
+            videoUlid: $video->ulid,
         );
 
         return response()->json(['data' => $link]);
@@ -79,6 +80,7 @@ class VodController extends Controller
         ?int $resolution,
         string $ip,
         string $sessionId,
+        string $videoUlid,
     ): VodOutputData {
         $format = $output->format->value;
         $manifest = self::FORMAT_MANIFEST[$format];
@@ -96,11 +98,7 @@ class VodController extends Controller
             $ip,
         );
 
-        return new VodOutputData(
-            ulid: $output->ulid,
-            format: $format,
-            url: $url,
-        );
+        return VodOutputData::fromOutput($output, $url, $videoUlid);
     }
 
     public function getConfig(Request $request, string $resourceId, string $session)
