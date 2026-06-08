@@ -91,11 +91,6 @@ defineExpose({ show })
           </div>
           <Switch id="edit_node_cdn" v-model="node.cdnMode" @update:checked="node.cdnMode = $event" />
         </div>
-        <div v-if="node.type === 'worker'" class="flex items-center justify-between">
-          <Label for="edit_node_gpu">GPU (NVIDIA)</Label>
-          <Switch id="edit_node_gpu" v-model="node.hasGpu" @update:checked="node.hasGpu = $event" />
-        </div>
-
         <div v-if="node.type === 'worker'" class="grid gap-2">
           <Label for="edit_node_workers">Workers</Label>
           <Input id="edit_node_workers" type="number" min="1" max="20" v-model.number="node.workers" />

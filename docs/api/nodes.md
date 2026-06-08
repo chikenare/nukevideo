@@ -43,7 +43,6 @@ POST /api/nodes
 | `type` | string | Yes | `worker` or `proxy` |
 | `ssh_key_id` | integer | Yes | SSH key to use |
 | `hostname` | string | No | Server hostname (required for proxy nodes) |
-| `has_gpu` | boolean | No | Enable GPU support (worker nodes only) |
 | `cdn_mode` | boolean | No | Disable local Nginx cache (proxy nodes only) |
 | `workers` | integer | No | Number of parallel workers (1–20 for workers, 1 for proxy) |
 

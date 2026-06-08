@@ -128,12 +128,12 @@ class AnalyticsService
                 replaceOne(metric, 'encoding_', '') AS device,
                 sum(value) AS total_seconds
             FROM usage
-            WHERE metric IN ('encoding_cpu', 'encoding_gpu')
+            WHERE metric = 'encoding_cpu'
               AND date >= {from:Date} AND date <= {to:Date}
             GROUP BY metric
         SQL, ['from' => $from, 'to' => $to]);
 
-        $usage = ['cpu' => 0, 'gpu' => 0];
+        $usage = ['cpu' => 0];
 
         foreach ($result->rows() as $row) {
             $usage[$row['device']] = round($row['total_seconds'], 2);
@@ -157,7 +157,7 @@ class AnalyticsService
             $params
         );
 
-        $usage = ['upload_bytes' => 0, 'encoding_cpu' => 0, 'encoding_gpu' => 0];
+        $usage = ['upload_bytes' => 0, 'encoding_cpu' => 0];
 
         foreach ($result->rows() as $row) {
             if (isset($usage[$row['metric']])) {
@@ -199,7 +199,7 @@ class AnalyticsService
                 replaceOne(metric, 'encoding_', '') AS device,
                 sum(value) AS seconds
             FROM usage
-            WHERE metric IN ('encoding_cpu', 'encoding_gpu')
+            WHERE metric = 'encoding_cpu'
               AND date >= {from:Date} AND date <= {to:Date}
             GROUP BY date, metric
             ORDER BY date

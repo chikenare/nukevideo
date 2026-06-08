@@ -41,7 +41,6 @@ const newNode = ref({
   hostname: '',
   type: 'worker' as 'worker' | 'proxy',
   sshKeyId: undefined as number | undefined,
-  hasGpu: false,
   cdnMode: false,
   workers: 1,
 })
@@ -62,11 +61,10 @@ const handleCreate = async () => {
       type: newNode.value.type,
       ...(newNode.value.type === 'proxy' && newNode.value.hostname ? { hostname: newNode.value.hostname } : {}),
       ...(newNode.value.sshKeyId ? { sshKeyId: newNode.value.sshKeyId } : {}),
-      ...(newNode.value.hasGpu ? { hasGpu: true } : {}),
       ...(newNode.value.cdnMode ? { cdnMode: true } : {}),
       workers: newNode.value.workers,
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', sshKeyId: undefined, hasGpu: false, cdnMode: false, workers: 1 }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', sshKeyId: undefined, cdnMode: false, workers: 1 }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -144,11 +142,6 @@ const handleCreate = async () => {
           </div>
           <Switch id="node_cdn" v-model="newNode.cdnMode" @update:checked="newNode.cdnMode = $event" />
         </div>
-        <div v-if="newNode.type === 'worker'" class="flex items-center justify-between">
-          <Label for="node_gpu">GPU (NVIDIA)</Label>
-          <Switch id="node_gpu" v-model="newNode.hasGpu" @update:checked="newNode.hasGpu = $event" />
-        </div>
-
         <div v-if="newNode.type === 'worker'" class="grid gap-2">
           <Label for="node_workers">Workers</Label>
           <Input id="node_workers" type="number" min="1" max="20" v-model.number="newNode.workers" />

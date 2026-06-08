@@ -39,12 +39,9 @@ trait ResolvesTimeout
         $codec = $params['video_codec'] ?? '';
 
         $slowCodecs = ['libx265', 'libsvtav1'];
-        $fastHwCodecs = ['hevc_nvenc', 'av1_nvenc', 'h264_nvenc'];
 
         if (in_array($codec, $slowCodecs, true)) {
             $multiplier *= 1.5;
-        } elseif (in_array($codec, $fastHwCodecs, true)) {
-            $multiplier *= 0.7;
         }
 
         // $fps = $this->stream->video->fps ?? 30;

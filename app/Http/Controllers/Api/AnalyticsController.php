@@ -62,7 +62,6 @@ class AnalyticsController extends Controller
                     ['label' => 'Active Videos', 'value' => $summary['unique_videos'], 'format' => 'number'],
                     ['label' => 'Nodes', 'value' => Node::count(), 'format' => 'number'],
                     ['label' => 'CPU Encoding', 'value' => $encoding['cpu'], 'format' => 'seconds'],
-                    ['label' => 'GPU Encoding', 'value' => $encoding['gpu'], 'format' => 'seconds'],
                     ['label' => 'Upload Volume', 'value' => $usage['upload_bytes'], 'format' => 'bytes'],
                 ],
                 'bandwidth_over_time' => $this->analyticsService->bandwidthOverTime($from, $to),

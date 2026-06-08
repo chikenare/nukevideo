@@ -5,8 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Requests\Template\StoreTemplateRequest;
 use App\Http\Requests\Template\UpdateTemplateRequest;
 use App\Http\Resources\TemplateResource;
-use App\Models\Node;
-use App\Services\CodecService;
 use Illuminate\Http\Request;
 
 class TemplateController extends Controller
@@ -91,36 +89,6 @@ class TemplateController extends Controller
 
     public function getConfig()
     {
-        $config = config('ffmpeg');
-
-        $hasGpuNode = Node::where('is_active', true)
-            ->where('type', 'worker')
-            ->where('has_gpu', true)
-            ->exists();
-
-        if (! $hasGpuNode) {
-            $gpuCodecNames = CodecService::gpuCodecs();
-
-            $config['codecs'] = array_values(
-                collect($config['codecs'])
-                    ->reject(fn ($c) => ! empty($c['requires_gpu']))
-                    ->all()
-            );
-
-            $config['parameters'] = collect($config['parameters'])
-                ->map(function ($param) use ($gpuCodecNames) {
-                    if (isset($param['available_for'])) {
-                        $param['available_for'] = array_values(
-                            array_diff($param['available_for'], $gpuCodecNames)
-                        );
-                    }
-
-                    return $param;
-                })
-                ->filter(fn ($param) => ! isset($param['available_for']) || ! empty($param['available_for']))
-                ->all();
-        }
-
-        return response()->json(['data' => $config]);
+        return response()->json(['data' => config('ffmpeg')]);
     }
 }

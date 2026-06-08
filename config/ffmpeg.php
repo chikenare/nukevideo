@@ -28,35 +28,6 @@ return [
             'protocols' => ['hls', 'dash'],
         ],
 
-        // ========== GPU VIDEO CODECS (NVIDIA NVENC) ==========
-        [
-            'codec' => 'h264_nvenc',
-            'type' => 'video',
-            'label' => 'H.264 (NVENC)',
-            'description' => 'GPU-accelerated H.264. Fast encoding with NVIDIA hardware.',
-
-            'protocols' => ['hls', 'dash'],
-            'requires_gpu' => true,
-        ],
-        [
-            'codec' => 'hevc_nvenc',
-            'type' => 'video',
-            'label' => 'H.265 (NVENC)',
-            'description' => 'GPU-accelerated HEVC. Fast encoding, good for 4K.',
-
-            'protocols' => ['hls', 'dash'],
-            'requires_gpu' => true,
-        ],
-        [
-            'codec' => 'av1_nvenc',
-            'type' => 'video',
-            'label' => 'AV1 (NVENC)',
-            'description' => 'GPU-accelerated AV1. Requires RTX 40 series or newer.',
-
-            'protocols' => ['hls', 'dash'],
-            'requires_gpu' => true,
-        ],
-
         // ========== AUDIO CODECS ==========
         [
             'codec' => 'aac',
@@ -64,7 +35,7 @@ return [
             'label' => 'AAC',
             'description' => 'Standard audio codec with good compatibility.',
 
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         [
             'codec' => 'libfdk_aac',
@@ -72,7 +43,7 @@ return [
             'label' => 'FDK-AAC',
             'description' => 'The best AAC encoder available.',
 
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         [
             'codec' => 'libopus',
@@ -80,7 +51,7 @@ return [
             'label' => 'Opus',
             'description' => 'Best open-source audio codec. Low latency, high quality.',
 
-            'available_for' => ['libsvtav1', 'av1_nvenc'],
+            'available_for' => ['libsvtav1'],
         ],
     ],
 
@@ -97,7 +68,7 @@ return [
             'max' => 3840,
             'rules' => ['required', 'integer', 'min:128', 'max:3840'],
             'template' => null,
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
         'height' => [
@@ -108,7 +79,7 @@ return [
             'max' => 2160,
             'rules' => ['required', 'integer', 'min:128', 'max:2160'],
             'template' => null,
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
         // --- H.264 specific ---
@@ -169,7 +140,7 @@ return [
             'help' => 'Useful for streaming (VBV). Prevents data spikes that cause buffering.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-maxrate %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'bufsize' => [
             'type' => 'video',
@@ -179,7 +150,7 @@ return [
             'help' => 'Used together with Maxrate to control the bitrate.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-bufsize %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'pixel_format' => [
             'type' => 'video',
@@ -189,7 +160,7 @@ return [
             'help' => 'yuv420p is compatible with all browsers and devices. 10le for HDR/10-bit.',
             'rules' => ['in:yuv420p,yuv420p10le,yuv422p,yuv444p'],
             'template' => '-pix_fmt %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'faststart' => [
             'type' => 'video',
@@ -198,7 +169,7 @@ return [
             'help' => 'Moves metadata to the beginning so the video starts playing sooner.',
             'rules' => ['boolean'],
             'template' => '-movflags +faststart',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'constant_bitrate' => [
             'type' => 'video',
@@ -208,7 +179,7 @@ return [
             'help' => 'Target bitrate. Use 0 for CRF-only mode (VP9/VP8).',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-b:v %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'gop_size' => [
             'type' => 'video',
@@ -217,7 +188,7 @@ return [
             'help' => 'Distance between keyframes. For streaming use 2x framerate (e.g. 60 for 30fps).',
             'rules' => ['nullable', 'integer', 'min:1'],
             'template' => '-g %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
         // --- H.265 specific ---
@@ -271,107 +242,6 @@ return [
             'rules' => ['integer', 'min:0', 'max:13'],
             'template' => '-preset %s',
             'available_for' => ['libsvtav1'],
-        ],
-
-        // --- NVENC (GPU) specific ---
-        'nvenc_preset' => [
-            'type' => 'video',
-            'input_type' => 'select',
-            'label' => 'NVENC Preset',
-            'options' => ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'],
-            'help' => 'p1 = fastest, p7 = best quality. p4 is a good default.',
-            'rules' => ['in:p1,p2,p3,p4,p5,p6,p7'],
-            'template' => '-preset %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
-        ],
-        'nvenc_tune' => [
-            'type' => 'video',
-            'input_type' => 'select',
-            'label' => 'NVENC Tune',
-            'options' => ['hq', 'll', 'ull', 'lossless'],
-            'help' => 'hq = high quality, ll = low latency, ull = ultra low latency.',
-            'rules' => ['in:hq,ll,ull,lossless'],
-            'template' => '-tune %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc'],
-        ],
-        'nvenc_rc' => [
-            'type' => 'video',
-            'input_type' => 'select',
-            'label' => 'Rate Control',
-            'options' => ['constqp', 'vbr', 'cbr'],
-            'help' => 'constqp = constant quality, vbr = variable bitrate, cbr = constant bitrate.',
-            'rules' => ['in:constqp,vbr,cbr'],
-            'template' => '-rc %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
-        ],
-        'nvenc_cq' => [
-            'type' => 'video',
-            'input_type' => 'integer',
-            'label' => 'Quality Level (CQ)',
-            'min' => 0,
-            'max' => 51,
-            'help' => 'Target quality when using VBR. Lower is better. 19-28 is typical.',
-            'rules' => ['integer', 'min:0', 'max:51'],
-            'template' => '-cq %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
-        ],
-        'nvenc_h264_profile' => [
-            'type' => 'video',
-            'input_type' => 'select',
-            'label' => 'H.264 Profile',
-            'options' => ['baseline', 'main', 'high', 'high444p'],
-            'rules' => ['in:baseline,main,high,high444p'],
-            'template' => '-profile:v %s',
-            'available_for' => ['h264_nvenc'],
-        ],
-        'nvenc_hevc_profile' => [
-            'type' => 'video',
-            'input_type' => 'select',
-            'label' => 'HEVC Profile',
-            'options' => ['main', 'main10', 'rext'],
-            'rules' => ['in:main,main10,rext'],
-            'template' => '-profile:v %s',
-            'available_for' => ['hevc_nvenc'],
-        ],
-        'nvenc_spatial_aq' => [
-            'type' => 'video',
-            'input_type' => 'boolean',
-            'label' => 'Spatial AQ',
-            'help' => 'Adaptive quantization that allocates more bits to complex areas.',
-            'rules' => ['boolean'],
-            'template' => '-spatial-aq 1',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
-        ],
-        'nvenc_temporal_aq' => [
-            'type' => 'video',
-            'input_type' => 'boolean',
-            'label' => 'Temporal AQ',
-            'help' => 'Allocates more bits to frames with high motion complexity.',
-            'rules' => ['boolean'],
-            'template' => '-temporal-aq 1',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc'],
-        ],
-        'nvenc_b_frames' => [
-            'type' => 'video',
-            'input_type' => 'integer',
-            'label' => 'B-Frames',
-            'min' => 0,
-            'max' => 4,
-            'help' => 'Number of B-frames. 0 disables. 2-3 is typical for quality.',
-            'rules' => ['integer', 'min:0', 'max:4'],
-            'template' => '-bf %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc'],
-        ],
-        'nvenc_gpu' => [
-            'type' => 'video',
-            'input_type' => 'integer',
-            'label' => 'GPU Device',
-            'min' => 0,
-            'max' => 7,
-            'help' => 'GPU device index. 0 is the first GPU. Only needed for multi-GPU systems.',
-            'rules' => ['integer', 'min:0', 'max:7'],
-            'template' => '-gpu %s',
-            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
 
         // ==========================================

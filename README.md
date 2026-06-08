@@ -20,7 +20,6 @@ Upload → S3 → Webhook → Download → Encode → Upload → Stream
 
 - **Multi-format encoding** — HLS, DASH, MP4 with customizable templates (codecs, bitrates, resolutions)
 - **Distributed processing** — Scale by adding worker nodes; jobs auto-distribute to least busy nodes
-- **GPU acceleration** — NVIDIA GPU support for hardware-accelerated encoding
 - **Adaptive bitrate streaming** — Nginx VOD module with on-the-fly HLS/DASH packaging from S3
 - **CDN mode** — Proxy nodes can operate behind Cloudflare or other CDNs with cache bypass
 - **Consistent hashing** — Video-to-node routing maximizes cache hits across proxy nodes
@@ -37,7 +36,7 @@ Upload → S3 → Webhook → Download → Encode → Upload → Stream
 | API | Laravel, PHP 8.3 |
 | Frontend | Vue 3, TypeScript, Vite |
 | Queue | Redis, Laravel Horizon |
-| Encoding | FFmpeg (CPU + NVIDIA GPU) |
+| Encoding | FFmpeg |
 | Streaming | Nginx + Kaltura VOD module |
 | Storage | S3 (AWS, MinIO, RustFS) |
 | Analytics | ClickHouse |

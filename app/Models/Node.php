@@ -18,7 +18,6 @@ class Node extends Model
         'workers',
         'hostname',
         'is_active',
-        'has_gpu',
         'cdn_mode',
         'ssh_key_id',
         'log',
@@ -30,7 +29,6 @@ class Node extends Model
         return [
             'type' => NodeType::class,
             'is_active' => 'boolean',
-            'has_gpu' => 'boolean',
             'cdn_mode' => 'boolean',
             'metrics' => 'array',
         ];
@@ -99,22 +97,12 @@ class Node extends Model
         return $query->where('type', 'worker');
     }
 
-    public static function findAvailableNode(bool $requiresGpu = false, bool $allowGpuFallback = true): ?self
+    public static function findAvailableNode(): ?self
     {
-        $nodes = static::active()->worker()->get()
+        return static::active()->worker()->get()
             ->filter(fn (self $node) => $node->availableWorkers() > 0)
-            ->sortByDesc(fn (self $node) => $node->availableWorkers());
-
-        if ($nodes->isEmpty()) {
-            return null;
-        }
-
-        if ($requiresGpu) {
-            return $nodes->firstWhere('has_gpu', true);
-        }
-
-        return $nodes->where('has_gpu', false)->first()
-            ?? ($allowGpuFallback ? $nodes->first() : null);
+            ->sortByDesc(fn (self $node) => $node->availableWorkers())
+            ->first();
     }
 
     private const HASH_RING_REPLICAS = 150;

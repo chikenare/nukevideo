@@ -31,9 +31,7 @@ class Mp4Service
         try {
             $this->process($inputPath);
         } finally {
-            $codec = $this->stream->input_params['video_codec'] ?? $this->stream->input_params['audio_codec'] ?? null;
-            $metric = 'encoding_'.(CodecService::isGpuCodec($codec) ? 'gpu' : 'cpu');
-            UsageService::record($this->stream->video->user_id, $metric, round(microtime(true) - $start, 2), $this->stream->video->external_user_id ?? '');
+            UsageService::record($this->stream->video->user_id, 'encoding_cpu', round(microtime(true) - $start, 2), $this->stream->video->external_user_id ?? '');
         }
 
         $this->stream->update(['status' => VideoStatus::PENDING->value]);

@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Enums\VideoStatus;
 use App\Models\Node;
 use App\Models\Video;
-use App\Services\CodecService;
 use App\Services\VideoDispatchService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -37,10 +36,6 @@ class DispatchPendingVideosCommand extends Command
             return;
         }
 
-        $hasPendingGpuVideos = $videos->contains(
-            fn (Video $video) => CodecService::outputsRequireGpu($video->template->query['outputs'] ?? [])
-        );
-
         foreach ($videos as $video) {
             $originalPath = $video->streams()->where('type', 'original')->value('path');
 
@@ -50,13 +45,7 @@ class DispatchPendingVideosCommand extends Command
                 continue;
             }
 
-            $requiresGpu = CodecService::outputsRequireGpu(
-                $video->template->query['outputs'] ?? []
-            );
-
-            $allowGpuFallback = ! $requiresGpu && ! $hasPendingGpuVideos;
-
-            $node = Node::findAvailableNode($requiresGpu, $allowGpuFallback);
+            $node = Node::findAvailableNode();
 
             if (! $node) {
                 continue;

@@ -23,7 +23,6 @@ class UpdateNodeRequest extends FormRequest
             'hostname' => 'nullable|max:255',
             'is_active' => 'sometimes|boolean',
             'ssh_key_id' => 'nullable|exists:ssh_keys,id',
-            'has_gpu' => 'sometimes|boolean',
             'cdn_mode' => 'sometimes|boolean',
             'workers' => $nodeType === 'proxy'
                 ? 'nullable|integer|min:1|max:1'

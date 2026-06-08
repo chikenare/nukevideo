@@ -45,7 +45,6 @@ export type Node = {
   workers: number
   hostname?: string
   isActive: boolean
-  hasGpu: boolean
   cdnMode: boolean
   metrics: NodeMetrics | null
   services: ServiceStatus[]
@@ -78,7 +77,6 @@ export type CreateNodePayload = {
   type: NodeType
   hostname?: string
   sshKeyId?: number
-  hasGpu?: boolean
   cdnMode?: boolean
   workers?: number
 }

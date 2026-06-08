@@ -23,7 +23,6 @@ class NodeResource extends JsonResource
             'workers' => $this->workers,
             'hostname' => $this->hostname,
             'isActive' => $this->is_active,
-            'hasGpu' => $this->has_gpu,
             'cdnMode' => $this->cdn_mode,
             'sshKeyId' => $this->ssh_key_id,
             'services' => $this->services ?? [],

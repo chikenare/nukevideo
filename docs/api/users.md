@@ -117,7 +117,6 @@ GET /api/usage
 |--------|------|-------------|
 | `upload_bytes` | bytes | File size of uploaded videos |
 | `encoding_cpu` | seconds | CPU encoding time |
-| `encoding_gpu` | seconds | GPU encoding time |
 
 **Example Request:**
 

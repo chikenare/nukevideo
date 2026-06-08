@@ -15,11 +15,7 @@ Worker nodes run FFmpeg-based containers that process video encoding jobs from R
 
 ### Job Distribution
 
-The system automatically assigns videos to the **least busy** worker with available slots. Each worker node can run 1–20 parallel encoding containers. GPU nodes are preferred for GPU-accelerated codecs, with fallback to CPU nodes when GPU nodes are full.
-
-### GPU Support
-
-Worker nodes with NVIDIA GPUs can be flagged with `has_gpu: true`. The setup script installs the NVIDIA Container Toolkit, and encoding jobs that require GPU codecs (e.g., `h264_nvenc`) are routed to GPU nodes first.
+The system automatically assigns videos to the **least busy** worker with available slots. Each worker node can run 1–20 parallel encoding containers.
 
 ## Proxy Nodes
 

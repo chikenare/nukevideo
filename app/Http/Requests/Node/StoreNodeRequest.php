@@ -28,7 +28,6 @@ class StoreNodeRequest extends FormRequest
             'ip_address' => 'required|ip',
             'type' => 'required|string|in:worker,proxy',
             'ssh_key_id' => 'nullable|exists:ssh_keys,id',
-            'has_gpu' => 'sometimes|boolean',
             'cdn_mode' => 'sometimes|boolean',
             'workers' => $this->input('type') === 'proxy'
                 ? 'nullable|integer|min:1|max:1'

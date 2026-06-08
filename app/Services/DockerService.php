@@ -67,10 +67,6 @@ class DockerService
             $cmd .= " --memory={$options['memory']}";
         }
 
-        if (! empty($options['gpus'])) {
-            $cmd .= ' --gpus '.escapeshellarg($options['gpus']);
-        }
-
         if (isset($options['command'])) {
             $cmd .= " {$image} {$options['command']}";
         } else {

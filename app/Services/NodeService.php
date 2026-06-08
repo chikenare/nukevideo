@@ -181,20 +181,12 @@ class NodeService
         $env[] = 'REDIS_QUEUE_RETRY_AFTER='.($workerTimeout + 300);
         $queue = $node->resolveQueue();
 
-        if ($node->has_gpu) {
-            $env[] = 'NVIDIA_DRIVER_CAPABILITIES=all';
-        }
-
         $containerOptions = [
             'env' => $env,
             'labels' => ['vector.enable=true'],
             'volumes' => ['nukevideo_tmp:/tmp'],
             'command' => "php /var/www/html/artisan queue:work --queue={$queue} --timeout={$workerTimeout}",
         ];
-
-        if ($node->has_gpu) {
-            $containerOptions['gpus'] = 'all';
-        }
 
         $this->docker->deployContainer($node, $name, $image, $containerOptions);
     }
@@ -249,9 +241,6 @@ class NodeService
         $workdir = self::workdir($node);
 
         $args = "--workdir={$workdir}";
-        if ($node->has_gpu) {
-            $args .= ' --gpu';
-        }
 
         $log = '';
         $collectOutput = function ($output) use ($onOutput, &$log) {
@@ -272,10 +261,6 @@ class NodeService
             ['key' => 'disk', 'label' => 'Disk Space'],
         ];
 
-        if ($node->has_gpu) {
-            $checks[] = ['key' => 'gpu', 'label' => 'GPU'];
-        }
-
         $results = [];
 
         foreach ($checks as $check) {
@@ -285,7 +270,6 @@ class NodeService
                     'network' => $this->ssh($node, 'docker network inspect nukevideo_default --format "{{.Name}} ({{.Driver}})"', 15),
                     'containers' => $this->ssh($node, 'docker ps --filter name=nukevideo_ --format "{{.Names}}\t{{.Status}}"', 15),
                     'disk' => $this->ssh($node, 'df -h / | tail -1', 15),
-                    'gpu' => $this->ssh($node, 'nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader', 15),
                 };
 
                 $results[] = [
