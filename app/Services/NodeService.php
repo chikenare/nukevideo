@@ -92,7 +92,7 @@ class NodeService
 
     public static function workdir(Node $node): string
     {
-        return "/home/{$node->user}/nukevideo-{$node->id}";
+        return "/home/{$node->user}/nukevideo/node-{$node->id}";
     }
 
     public function getPendingJobs(Node $node): array
