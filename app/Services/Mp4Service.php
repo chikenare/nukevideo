@@ -63,7 +63,7 @@ class Mp4Service
         $this->stream->update(['status' => VideoStatus::RUNNING->value, 'started_at' => now()]);
 
         $args = $this->buildArguments();
-        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$args} \"{$this->outputPath}\"";
+        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$this->threadsArgument()}{$args} \"{$this->outputPath}\"";
 
         $isCopy = $this->shouldCopyVideo() && $this->shouldCopyAudio();
         $timeout = $this->resolveProcessTimeout($isCopy);

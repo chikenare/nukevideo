@@ -69,7 +69,7 @@ class StreamService
         };
 
         $args = $this->buildArguments($canCopy);
-        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$args} \"{$this->outputPath}\"";
+        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$this->threadsArgument()}{$args} \"{$this->outputPath}\"";
         Log::debug($command);
 
         $timeout = $this->resolveProcessTimeout($canCopy);
