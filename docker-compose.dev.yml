@@ -70,7 +70,7 @@ services:
       context: .
       target: front-dev
     volumes:
-      - ./front:/app
+     - ./front:/app
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-app.rule=Host(`app.nukevideo.localhost`)"
