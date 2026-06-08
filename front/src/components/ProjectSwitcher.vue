@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronsUpDown, FolderKanban, Plus, Settings } from 'lucide-vue-next'
+import { ChevronsUpDown, FolderKanban, Plus, Settings } from '@lucide/vue'
 import { useRouter } from 'vue-router'
 import {
   SidebarMenu,

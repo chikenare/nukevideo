@@ -12,7 +12,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { Info } from 'lucide-vue-next'
+import { Info } from '@lucide/vue'
 
 const props = defineProps<{
   paramKey: string

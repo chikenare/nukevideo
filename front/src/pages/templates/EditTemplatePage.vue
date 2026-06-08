@@ -14,7 +14,7 @@ import { useCodecConfig } from '@/composables/useCodecConfig'
 import TemplateService from '@/services/TemplateService'
 import type { Template, TemplateOutput, CreateTemplateDto, UpdateTemplateDto } from '@/types/Template'
 import type { OutputFormat } from '@/types/Output'
-import { Plus, Save, ArrowLeft, Trash2 } from 'lucide-vue-next'
+import { Plus, Save, ArrowLeft, Trash2 } from '@lucide/vue'
 import { ApiException } from '@/exceptions/ApiException'
 import { toast } from 'vue-sonner'
 

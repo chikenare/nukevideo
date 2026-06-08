@@ -28,7 +28,7 @@ import {
   Upload,
   Image,
   Subtitles,
-} from 'lucide-vue-next'
+} from '@lucide/vue'
 
 const logs = ref<ResPagination<ActivityLog>>({ currentPage: 1, data: [], perPage: 0, total: 0 })
 const loading = ref(true)

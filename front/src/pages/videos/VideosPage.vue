@@ -11,8 +11,8 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import UploadButton from '@/components/upload/UploadButton.vue';
-import { FileVideo } from 'lucide-vue-next';
-import { ref, watch, onMounted } from 'vue';
+import { FileVideo } from '@lucide/vue';
+import { ref, onMounted } from 'vue';
 import VideoService from '@/services/VideoService';
 import type { Video } from '@/types/Video';
 import type { Pagination as ResPagination } from '@/types/Pagination';

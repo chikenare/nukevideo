@@ -10,7 +10,7 @@ import TableRow from '@/components/ui/table/TableRow.vue';
 import { ApiException } from '@/exceptions/ApiException';
 import StreamService from '@/services/StreamService';
 import type { Stream } from '@/types/Video';
-import { Edit, MoreVertical, Trash2 } from 'lucide-vue-next';
+import { Edit, MoreVertical, Trash2 } from '@lucide/vue';
 import prettyBytes from 'pretty-bytes';
 import { ref } from 'vue';
 import { toast } from 'vue-sonner';

@@ -4,7 +4,7 @@ import { useUploadStore } from '@/stores/upload'
 import { storeToRefs } from 'pinia'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { CheckCircle2, XCircle, Pause, Play, X, ChevronUp, ChevronDown } from 'lucide-vue-next'
+import { CheckCircle2, XCircle, Pause, Play, X, ChevronUp, ChevronDown } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 
 const uploadStore = useUploadStore()

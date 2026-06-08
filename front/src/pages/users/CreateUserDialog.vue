@@ -15,7 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { ref } from 'vue'
 import UserService from '@/services/UserService'
 import { ValidationException } from '@/exceptions/ValidationException'
-import { Plus } from 'lucide-vue-next'
+import { Plus } from '@lucide/vue'
 
 const emit = defineEmits<{ created: [] }>()
 

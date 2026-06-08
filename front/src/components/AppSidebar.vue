@@ -4,7 +4,7 @@ import type { SidebarProps } from '@/components/ui/sidebar'
 import {
   Shield,
   VideoIcon,
-} from "lucide-vue-next"
+} from "@lucide/vue"
 import NavMain from '@/components/NavMain.vue'
 import NavUser from '@/components/NavUser.vue'
 import ProjectSwitcher from '@/components/ProjectSwitcher.vue'

@@ -7,7 +7,7 @@ import {
   KeyRound,
   LogOut,
   ScrollText,
-} from "lucide-vue-next"
+} from "@lucide/vue"
 
 import {
   Avatar,

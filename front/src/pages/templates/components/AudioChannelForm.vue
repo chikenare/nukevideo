@@ -15,7 +15,7 @@ import {
 import DynamicFormField from './DynamicFormField.vue'
 import type { CodecConfig } from '@/types/CodecConfig'
 import type { AudioConfig, AudioChannelEntry } from '@/types/Template'
-import { Trash2, Plus, Settings2, Music } from 'lucide-vue-next'
+import { Trash2, Plus, Settings2, Music } from '@lucide/vue'
 
 const props = defineProps<{
   modelValue: AudioConfig

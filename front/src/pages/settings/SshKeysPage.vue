@@ -35,7 +35,7 @@ import Spinner from '@/components/ui/spinner/Spinner.vue'
 import SshKeyService from '@/services/SshKeyService'
 import type { SshKey } from '@/types/SshKey'
 import { ValidationException } from '@/exceptions/ValidationException'
-import { Plus, Copy, Trash2 } from 'lucide-vue-next'
+import { Plus, Copy, Trash2 } from '@lucide/vue'
 
 const keys = ref<SshKey[]>([])
 const loading = ref(true)

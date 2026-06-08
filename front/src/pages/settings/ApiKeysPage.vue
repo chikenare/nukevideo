@@ -27,7 +27,7 @@ import Spinner from '@/components/ui/spinner/Spinner.vue'
 import ApiTokenService from '@/services/ApiTokenService'
 import type { ApiToken } from '@/types/ApiToken'
 import { ValidationException } from '@/exceptions/ValidationException'
-import { Copy, Trash2 } from 'lucide-vue-next'
+import { Copy, Trash2 } from '@lucide/vue'
 
 const tokens = ref<ApiToken[]>([])
 const loading = ref(true)

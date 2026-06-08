@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { Input } from '@/components/ui/input'
-import { CheckCircle2, XCircle, SquarePen, Pause, Play, X } from 'lucide-vue-next'
+import { CheckCircle2, XCircle, SquarePen, Pause, Play, X } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useUploadStore } from '@/stores/upload'

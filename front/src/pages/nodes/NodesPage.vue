@@ -7,7 +7,7 @@ import type { Node, NodeMetrics, NodesResponse } from '@/types/Node'
 import CreateNodeDialog from './CreateNodeDialog.vue'
 import NodeTable from './NodeTable.vue'
 import NodeEnvironmentDialog from './NodeEnvironmentDialog.vue'
-import { Settings } from 'lucide-vue-next'
+import { Settings } from '@lucide/vue'
 
 const nodesData = ref<NodesResponse>({ nodes: [], summary: { totalCapacity: 0, availableSlots: 0 } })
 const loading = ref(true)

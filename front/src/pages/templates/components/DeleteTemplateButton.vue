@@ -10,7 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Trash2 } from 'lucide-vue-next'
+import { Trash2 } from '@lucide/vue'
 import TemplateService from '@/services/TemplateService'
 import type { Template } from '@/types/Template'
 import { toast } from 'vue-sonner'

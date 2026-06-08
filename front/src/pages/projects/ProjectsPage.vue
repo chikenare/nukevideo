@@ -18,7 +18,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Badge } from '@/components/ui/badge'
-import { Check, Copy, Edit, MoreVertical, Plus } from 'lucide-vue-next'
+import { Check, Copy, Edit, MoreVertical, Plus } from '@lucide/vue'
 import { useProjectsStore } from '@/stores/projects'
 import type { Project } from '@/types/Project'
 import { toast } from 'vue-sonner'

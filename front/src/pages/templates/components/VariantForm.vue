@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog'
 import DynamicFormField from './DynamicFormField.vue'
 import type { CodecConfig } from '@/types/CodecConfig'
-import { Trash2, Settings2 } from 'lucide-vue-next'
+import { Trash2, Settings2 } from '@lucide/vue'
 
 const props = defineProps<{
   modelValue: Record<string, unknown>

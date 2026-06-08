@@ -24,7 +24,7 @@ import NodeService from '@/services/NodeService'
 import SshKeyService from '@/services/SshKeyService'
 import type { SshKey } from '@/types/SshKey'
 import { ValidationException } from '@/exceptions/ValidationException'
-import { Plus } from 'lucide-vue-next'
+import { Plus } from '@lucide/vue'
 
 const emit = defineEmits<{ created: [] }>()
 

@@ -22,7 +22,7 @@ import {
 import TemplateService from '@/services/TemplateService'
 import type { Template } from '@/types/Template'
 import type { TemplatePreset } from '@/types/Template'
-import { Edit, MoreVertical, Plus, Download, Copy } from 'lucide-vue-next'
+import { Edit, MoreVertical, Plus, Download, Copy } from '@lucide/vue'
 import DeleteTemplateButton from './components/DeleteTemplateButton.vue'
 import { toast } from 'vue-sonner'
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Video } from "lucide-vue-next"
+import { Video } from "@lucide/vue"
 import {
   SidebarMenu,
   SidebarMenuButton,

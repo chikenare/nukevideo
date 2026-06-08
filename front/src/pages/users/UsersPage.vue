@@ -21,7 +21,7 @@ import { ref, onMounted } from 'vue'
 import UserService from '@/services/UserService'
 import type { User } from '@/types/Auth'
 import { useAuthStore } from '@/stores/auth'
-import { EllipsisVertical, Pencil, Trash2 } from 'lucide-vue-next'
+import { EllipsisVertical, Pencil, Trash2 } from '@lucide/vue'
 import CreateUserDialog from './CreateUserDialog.vue'
 import EditUserDialog from './EditUserDialog.vue'
 

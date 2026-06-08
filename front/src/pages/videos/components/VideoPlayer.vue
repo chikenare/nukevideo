@@ -6,7 +6,7 @@ import VideoService from '@/services/VideoService';
 import type { Video } from '@/types/Video';
 import { ref } from 'vue';
 import { toast } from 'vue-sonner';
-import { PlayIcon } from 'lucide-vue-next';
+import { PlayIcon } from '@lucide/vue';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 

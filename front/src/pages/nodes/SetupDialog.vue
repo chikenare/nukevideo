@@ -12,7 +12,7 @@ import Spinner from '@/components/ui/spinner/Spinner.vue'
 import { ref, computed, nextTick } from 'vue'
 import type { Node, ValidationCheck } from '@/types/Node'
 import NodeService from '@/services/NodeService'
-import { CheckCircle2, XCircle, AlertTriangle, Terminal } from 'lucide-vue-next'
+import { CheckCircle2, XCircle, AlertTriangle, Terminal } from '@lucide/vue'
 
 const emit = defineEmits<{
   (e: 'node-updated', node: Node): void
