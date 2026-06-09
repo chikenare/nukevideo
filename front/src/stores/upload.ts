@@ -25,6 +25,9 @@ export const useUploadStore = defineStore('upload', () => {
     endpoint: import.meta.env.VITE_URL_API,
     headers: getXsrfToken(),
     cookiesRule: 'include',
+    getChunkSize(file) {
+      return 100 * 1024 * 1024
+    },
   })
 
   uppy.on('upload-progress', (uppyFile, progress) => {
