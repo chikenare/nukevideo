@@ -25,11 +25,16 @@ class GenerateVideoStoryboard implements ShouldQueue
 
     private const SPRITE_ROWS = 10;
 
-    private const THUMB_WIDTH = 160;
+    // Width of each thumbnail. Keep THUMB_WIDTH * SPRITE_COLUMNS <= 4096 so the
+    // sprite sheet stays within the max texture size most players/GPUs accept
+    // (320 * 10 = 3200). For sharper thumbs beyond this, lower THUMBS_PER_SPRITE
+    // and the grid rather than overflowing the sheet.
+    private const THUMB_WIDTH = 320;
 
     private const DEFAULT_ASPECT_RATIO = 1.777; // 16:9
 
-    private const FFMPEG_QUALITY = 3;
+    // JPEG quality for the sprite sheet (ffmpeg -q:v, 2 = best, 31 = worst).
+    private const FFMPEG_QUALITY = 2;
 
     private const FFMPEG_TIMEOUT = 600; // 10 minutes
 
@@ -190,7 +195,7 @@ class GenerateVideoStoryboard implements ShouldQueue
             '-i',
             $inputLocalPath,
             '-vf',
-            'fps=1/'.self::THUMBNAIL_INTERVAL.",scale={$thumbWidth}:{$thumbHeight},tile=".self::SPRITE_COLUMNS.'x'.self::SPRITE_ROWS,
+            'fps=1/'.self::THUMBNAIL_INTERVAL.",scale={$thumbWidth}:{$thumbHeight}:flags=lanczos,tile=".self::SPRITE_COLUMNS.'x'.self::SPRITE_ROWS,
             '-q:v',
             (string) self::FFMPEG_QUALITY,
             $spriteLocalPath,
