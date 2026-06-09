@@ -43,7 +43,7 @@ export type Node = {
   ipAddress: string
   type: NodeType
   workers: number
-  cpusPerWorker: number | null
+  cpusPerWorker?: number
   hostname?: string
   isActive: boolean
   cdnMode: boolean
