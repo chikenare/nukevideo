@@ -27,6 +27,7 @@ class UpdateNodeRequest extends FormRequest
             'workers' => $nodeType === 'proxy'
                 ? 'nullable|integer|min:1|max:1'
                 : 'nullable|integer|min:1|max:20',
+            'cpus_per_worker' => 'nullable|integer|min:1|max:128',
             'env' => 'nullable|string|max:10000',
         ];
     }

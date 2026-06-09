@@ -32,6 +32,7 @@ class StoreNodeRequest extends FormRequest
             'workers' => $this->input('type') === 'proxy'
                 ? 'nullable|integer|min:1|max:1'
                 : 'nullable|integer|min:1|max:20',
+            'cpus_per_worker' => 'nullable|integer|min:1|max:128',
         ];
     }
 }

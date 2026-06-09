@@ -1,10 +1,6 @@
 <?php
 
 return [
-    // Threads per ffmpeg encoding process (null/empty = auto, ffmpeg decides).
-    // Configurable per node via the FFMPEG_THREADS env var.
-    'threads' => env('FFMPEG_THREADS'),
-
     'codecs' => [
         // ========== VIDEO CODECS ==========
         [

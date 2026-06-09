@@ -188,6 +188,17 @@ class NodeService
             'command' => "php /var/www/html/artisan queue:work --queue={$queue} --timeout={$workerTimeout}",
         ];
 
+        // Pin each worker to its own non-overlapping block of physical cores
+        // (--cpuset-cpus). This is the real cap and the best option: inside the
+        // container `nproc` reports exactly N, so ffmpeg/x264/x265/AV1 auto-size
+        // their thread pools to N with no oversubscription and no thrashing — no
+        // `-threads` hint needed. Requires workers × cpus_per_worker ≤ host cores.
+        if ($node->cpus_per_worker) {
+            $start = $index * $node->cpus_per_worker;
+            $end = $start + $node->cpus_per_worker - 1;
+            $containerOptions['cpuset'] = "{$start}-{$end}";
+        }
+
         $this->docker->deployContainer($node, $name, $image, $containerOptions);
     }
 
@@ -325,7 +336,7 @@ class NodeService
             }
 
             $m = json_decode($raw, true);
-            if (!\is_array($m) || !isset($m['node_id'])) {
+            if (! \is_array($m) || ! isset($m['node_id'])) {
                 continue;
             }
 

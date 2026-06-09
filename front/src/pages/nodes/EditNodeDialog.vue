@@ -96,6 +96,12 @@ defineExpose({ show })
           <Input id="edit_node_workers" type="number" min="1" max="20" v-model.number="node.workers" />
           <p v-if="errors.workers" class="text-sm text-destructive">{{ errors.workers[0] }}</p>
         </div>
+        <div v-if="node.type === 'worker'" class="grid gap-2">
+          <Label for="edit_node_cpus">CPUs per worker</Label>
+          <Input id="edit_node_cpus" type="number" min="1" max="128" v-model.number="node.cpusPerWorker" placeholder="empty = no limit" />
+          <p class="text-xs text-muted-foreground">Pins each worker to this many physical cores (bounds every encode, any codec). Keep workers × this ≤ node cores. Empty = no limit.</p>
+          <p v-if="errors.cpusPerWorker" class="text-sm text-destructive">{{ errors.cpusPerWorker[0] }}</p>
+        </div>
 
         <div class="grid gap-2">
           <Label for="edit_node_env">Environment Overrides</Label>

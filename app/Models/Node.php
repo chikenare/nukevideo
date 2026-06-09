@@ -16,6 +16,7 @@ class Node extends Model
         'ip_address',
         'type',
         'workers',
+        'cpus_per_worker',
         'hostname',
         'is_active',
         'cdn_mode',
@@ -30,6 +31,7 @@ class Node extends Model
             'type' => NodeType::class,
             'is_active' => 'boolean',
             'cdn_mode' => 'boolean',
+            'cpus_per_worker' => 'integer',
             'metrics' => 'array',
         ];
     }

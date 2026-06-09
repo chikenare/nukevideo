@@ -59,8 +59,8 @@ class DockerService
             $cmd .= " --network {$options['network']}";
         }
 
-        if (isset($options['cpus'])) {
-            $cmd .= " --cpus={$options['cpus']}";
+        if (isset($options['cpuset'])) {
+            $cmd .= " --cpuset-cpus={$options['cpuset']}";
         }
 
         if (isset($options['memory'])) {

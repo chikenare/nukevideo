@@ -64,7 +64,7 @@ class Mp4Service
         $this->heartbeat($this->stream->video);
 
         $args = $this->buildArguments();
-        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$this->threadsArgument()}{$args} \"{$this->outputPath}\"";
+        $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$args} \"{$this->outputPath}\"";
 
         $isCopy = $this->shouldCopyVideo() && $this->shouldCopyAudio();
         $timeout = $this->resolveProcessTimeout($isCopy);

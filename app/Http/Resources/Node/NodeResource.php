@@ -21,6 +21,7 @@ class NodeResource extends JsonResource
             'ipAddress' => $this->ip_address,
             'type' => $this->type,
             'workers' => $this->workers,
+            'cpusPerWorker' => $this->cpus_per_worker,
             'hostname' => $this->hostname,
             'isActive' => $this->is_active,
             'cdnMode' => $this->cdn_mode,

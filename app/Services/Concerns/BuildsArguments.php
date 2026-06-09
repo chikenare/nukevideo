@@ -29,13 +29,6 @@ trait BuildsArguments
         $args[] = sprintf($config['template'], $value);
     }
 
-    private function threadsArgument(): string
-    {
-        $threads = (int) config('ffmpeg.threads', 0);
-
-        return $threads > 0 ? "-threads {$threads} " : '';
-    }
-
     private function buildParamsArguments(array $params, string $type): array
     {
         $parametersConfig = config('ffmpeg.parameters', []);

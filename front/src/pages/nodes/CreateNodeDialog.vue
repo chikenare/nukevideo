@@ -43,6 +43,7 @@ const newNode = ref({
   sshKeyId: undefined as number | undefined,
   cdnMode: false,
   workers: 1,
+  cpusPerWorker: undefined as number | undefined,
 })
 
 onMounted(async () => {
@@ -63,8 +64,9 @@ const handleCreate = async () => {
       ...(newNode.value.sshKeyId ? { sshKeyId: newNode.value.sshKeyId } : {}),
       ...(newNode.value.cdnMode ? { cdnMode: true } : {}),
       workers: newNode.value.workers,
+      ...(newNode.value.cpusPerWorker ? { cpusPerWorker: newNode.value.cpusPerWorker } : {}),
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', sshKeyId: undefined, cdnMode: false, workers: 1 }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', sshKeyId: undefined, cdnMode: false, workers: 1, cpusPerWorker: undefined }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -146,6 +148,12 @@ const handleCreate = async () => {
           <Label for="node_workers">Workers</Label>
           <Input id="node_workers" type="number" min="1" max="20" v-model.number="newNode.workers" />
           <p v-if="errors.workers" class="text-sm text-destructive">{{ errors.workers[0] }}</p>
+        </div>
+        <div v-if="newNode.type === 'worker'" class="grid gap-2">
+          <Label for="node_cpus">CPUs per worker</Label>
+          <Input id="node_cpus" type="number" min="1" max="128" v-model.number="newNode.cpusPerWorker" placeholder="empty = no limit" />
+          <p class="text-xs text-muted-foreground">Pins each worker to this many physical cores (bounds every encode, any codec). Keep workers × this ≤ node cores. Empty = no limit.</p>
+          <p v-if="errors.cpusPerWorker" class="text-sm text-destructive">{{ errors.cpusPerWorker[0] }}</p>
         </div>
 
         <DialogFooter>

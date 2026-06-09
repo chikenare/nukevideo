@@ -43,6 +43,7 @@ export type Node = {
   ipAddress: string
   type: NodeType
   workers: number
+  cpusPerWorker: number | null
   hostname?: string
   isActive: boolean
   cdnMode: boolean
@@ -79,4 +80,5 @@ export type CreateNodePayload = {
   sshKeyId?: number
   cdnMode?: boolean
   workers?: number
+  cpusPerWorker?: number
 }
