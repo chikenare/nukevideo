@@ -29,6 +29,7 @@ class Stream extends Model
         'channels',
 
         'progress',
+        'fps',
         'started_at',
         'completed_at',
 
@@ -49,6 +50,7 @@ class Stream extends Model
         return [
             'meta' => 'array',
             'input_params' => 'array',
+            'fps' => 'float',
         ];
     }
 

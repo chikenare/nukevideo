@@ -87,7 +87,10 @@ const getStreamName = (): string => {
         <!-- Status Badge -->
         <Badge :class="{ 'bg-green-600 hover:bg-green-700 text-white': stream.status == 'completed' }">
           {{ stream.status }}
-          <span v-if="stream.startedAt && !stream.completedAt">{{ stream.progress }}%</span>
+          <span v-if="stream.status === 'running'">
+            {{ stream.progress }}%<template v-if="stream.fps"> · {{ stream.fps }} fps</template>
+          </span>
+          <span v-else-if="stream.status === 'uploading' || stream.status === 'downloading'">{{ stream.progress }}%</span>
         </Badge>
       </div>
     </TableCell>

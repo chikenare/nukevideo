@@ -46,6 +46,7 @@ type Stream = {
   status: VideoStatus
   size: number
   progress: number
+  fps: number | null
   width: number | null
   height: number | null
   language: string | null

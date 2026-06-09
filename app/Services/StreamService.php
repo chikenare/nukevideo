@@ -34,7 +34,7 @@ class StreamService
             UsageService::record($this->stream->video->user_id, 'encoding_cpu', round(microtime(true) - $start, 2), $this->stream->video->external_user_id ?? '');
         }
 
-        $this->stream->update(['status' => VideoStatus::PENDING->value]);
+        $this->stream->update(['status' => VideoStatus::PENDING->value, 'completed_at' => now()]);
     }
 
     private function ensureOutputDirectory(): void
@@ -89,18 +89,30 @@ class StreamService
     {
         $this->heartbeat($this->stream->video);
 
+        $updates = [];
+
+        // ffmpeg emits lines like "frame=  123 fps= 45 q=28.0 size=..."
+        if (preg_match('/fps=\s*([\d.]+)/', $output, $fpsMatches)) {
+            $fps = (float) $fpsMatches[1];
+
+            if ((float) $this->stream->fps !== $fps) {
+                $updates['fps'] = $fps;
+            }
+        }
+
         $duration = $this->stream->video->duration;
 
-        if (preg_match('/time=(\d{2}):(\d{2}):(\d{2})\.\d+/', $output, $matches)) {
+        if ($duration > 0 && preg_match('/time=(\d{2}):(\d{2}):(\d{2})\.\d+/', $output, $matches)) {
             $currentSeconds = ((int) $matches[1] * 3600) + ((int) $matches[2] * 60) + (int) $matches[3];
+            $percentage = min(100, round(($currentSeconds / $duration) * 100));
 
-            if ($duration > 0) {
-                $percentage = min(100, round(($currentSeconds / $duration) * 100));
-
-                if ($this->stream->progress != $percentage) {
-                    $this->stream->updateQuietly(['progress' => $percentage]);
-                }
+            if ($this->stream->progress != $percentage) {
+                $updates['progress'] = $percentage;
             }
+        }
+
+        if ($updates) {
+            $this->stream->updateQuietly($updates);
         }
     }
 

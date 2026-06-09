@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\VideoStatus;
+use App\Models\Stream;
 use App\Models\Video;
 use Exception;
 use Illuminate\Bus\Batchable;
@@ -86,7 +87,10 @@ class DownloadOriginalFileJob implements ShouldQueue
                 throw new Exception("Failed to open destination file $partialPath");
             }
 
-            $this->copyWithHeartbeat($sourceStream, $destStream, $video);
+            $originalStream = $video->streams()->where('type', 'original')->first();
+            $totalBytes = (int) Storage::size($inputPath);
+
+            $this->copyWithHeartbeat($sourceStream, $destStream, $video, $originalStream, $totalBytes);
         } finally {
             if (is_resource($sourceStream)) {
                 fclose($sourceStream);
@@ -112,10 +116,12 @@ class DownloadOriginalFileJob implements ShouldQueue
      * @param  resource  $sourceStream
      * @param  resource  $destStream
      */
-    private function copyWithHeartbeat($sourceStream, $destStream, Video $video): void
+    private function copyWithHeartbeat($sourceStream, $destStream, Video $video, ?Stream $stream, int $totalBytes): void
     {
         stream_set_timeout($sourceStream, self::STALL_TIMEOUT_SECONDS);
         $lastBeat = microtime(true);
+        $written = 0;
+        $lastPercent = -1;
 
         while (! feof($sourceStream)) {
             $chunk = fread($sourceStream, self::CHUNK_BYTES);
@@ -126,6 +132,16 @@ class DownloadOriginalFileJob implements ShouldQueue
 
             if ($chunk !== '' && fwrite($destStream, $chunk) === false) {
                 throw new Exception("Write error while downloading {$this->originalPath}");
+            }
+
+            // Reuse the original stream's progress column to surface download %.
+            $written += strlen($chunk);
+            if ($stream && $totalBytes > 0) {
+                $percent = (int) min(100, floor($written / $totalBytes * 100));
+                if ($percent !== $lastPercent) {
+                    $lastPercent = $percent;
+                    $stream->updateQuietly(['progress' => $percent]);
+                }
             }
 
             if ((microtime(true) - $lastBeat) >= 15) {
