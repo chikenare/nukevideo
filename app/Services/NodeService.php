@@ -166,8 +166,41 @@ class NodeService
     {
         $workers = $node->workers ?? 1;
 
+        $this->assertCpuPinningFits($node, $workers);
+
         for ($i = 0; $i < $workers; $i++) {
             $this->deployWorkerInstance($node, $i);
+        }
+    }
+
+    /**
+     * When workers are pinned to dedicated cores (--cpuset-cpus), their core
+     * ranges must fit within the host. Validate up front so we fail with a clear
+     * message instead of leaving a partial deploy when Docker later rejects a
+     * worker whose range references a non-existent core.
+     *
+     * Best-effort: if the core count can't be read, don't block the deploy.
+     */
+    private function assertCpuPinningFits(Node $node, int $workers): void
+    {
+        if (! $node->cpus_per_worker) {
+            return;
+        }
+
+        $needed = $workers * $node->cpus_per_worker;
+
+        try {
+            $cores = (int) trim($this->ssh($node, 'nproc', 10));
+        } catch (\Throwable $e) {
+            Log::warning('Could not read node core count; skipping CPU pinning check', ['node' => $node->id, 'error' => $e->getMessage()]);
+
+            return;
+        }
+
+        if ($cores > 0 && $needed > $cores) {
+            throw new \Exception(
+                "CPU pinning doesn't fit: {$workers} workers × {$node->cpus_per_worker} cores = {$needed}, but the node has only {$cores}. Reduce workers or cpus_per_worker."
+            );
         }
     }
 
