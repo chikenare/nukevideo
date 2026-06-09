@@ -30,6 +30,8 @@ class ProcessSubtitlesJob implements ShouldQueue
     {
         Log::info('ProcessSubtitles started', ['video' => $this->videoId]);
 
+        \App\Models\Video::find($this->videoId)?->heartbeat();
+
         $streams = Stream::where('video_id', $this->videoId)
             ->where('type', 'subtitle')
             ->get();

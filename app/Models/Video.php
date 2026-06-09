@@ -25,6 +25,18 @@ class Video extends Model
         'status',
         'external_user_id',
         'external_resource_id',
+        'last_heartbeat_at',
+        'dispatch_attempts',
+    ];
+
+    /**
+     * Statuses in which a video is actively being processed (non-terminal).
+     */
+    public const ACTIVE_STATUSES = [
+        VideoStatus::PENDING->value,
+        VideoStatus::DOWNLOADING->value,
+        VideoStatus::RUNNING->value,
+        VideoStatus::UPLOADING->value,
     ];
 
     protected static function boot()
@@ -40,7 +52,24 @@ class Video extends Model
     {
         return [
             'duration' => 'double',
+            'last_heartbeat_at' => 'datetime',
         ];
+    }
+
+    /**
+     * Refresh this video's liveness signal and keep its node slot alive.
+     *
+     * Called periodically by every processing stage. A worker/node that dies
+     * stops heartbeating, which lets the reaper detect and recover the video fast
+     * instead of it hanging until the queue's retry_after (~6h) elapses.
+     */
+    public function heartbeat(): void
+    {
+        $this->forceFill(['last_heartbeat_at' => now()])->saveQuietly();
+
+        if ($this->node_id) {
+            Node::find($this->node_id)?->touchSlot($this->id);
+        }
     }
 
     public function user(): BelongsTo
@@ -83,11 +112,20 @@ class Video extends Model
 
     public function markAsFailed(): void
     {
-        if ($this->status === VideoStatus::FAILED->value) {
+        // Guarded terminal transition: only an actively-processing video may move
+        // to FAILED. This stops a reaper/prune sweep (or a superseded chain) from
+        // clobbering a video a slow-but-alive worker just COMPLETED, and makes the
+        // transition atomic so concurrent callers can't double-fire the webhook.
+        $transitioned = static::query()
+            ->whereKey($this->id)
+            ->whereIn('status', self::ACTIVE_STATUSES)
+            ->update(['status' => VideoStatus::FAILED->value]);
+
+        if (! $transitioned) {
             return;
         }
 
-        $this->update(['status' => VideoStatus::FAILED]);
+        $this->setAttribute('status', VideoStatus::FAILED->value);
 
         $this->streams()
             ->whereIn('status', [VideoStatus::PENDING->value, VideoStatus::RUNNING->value])

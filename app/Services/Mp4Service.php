@@ -11,7 +11,7 @@ use RuntimeException;
 
 class Mp4Service
 {
-    use Concerns\BuildsArguments, Concerns\DetectsStreamCopy, Concerns\ResolvesScale, Concerns\ResolvesTimeout;
+    use Concerns\BuildsArguments, Concerns\DetectsStreamCopy, Concerns\EmitsHeartbeat, Concerns\ResolvesScale, Concerns\ResolvesTimeout;
 
     private string $outputPath;
 
@@ -61,6 +61,7 @@ class Mp4Service
     private function process(string $inputPath): void
     {
         $this->stream->update(['status' => VideoStatus::RUNNING->value, 'started_at' => now()]);
+        $this->heartbeat($this->stream->video);
 
         $args = $this->buildArguments();
         $command = "ffmpeg -hide_banner -y -i \"{$inputPath}\" {$this->threadsArgument()}{$args} \"{$this->outputPath}\"";
@@ -80,6 +81,8 @@ class Mp4Service
 
     private function parseProgress(string $output): void
     {
+        $this->heartbeat($this->stream->video);
+
         $duration = $this->stream->video->duration;
 
         if (preg_match('/time=(\d{2}):(\d{2}):(\d{2})\.\d+/', $output, $matches)) {

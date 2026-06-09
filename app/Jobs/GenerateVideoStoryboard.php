@@ -127,6 +127,11 @@ class GenerateVideoStoryboard implements ShouldQueue
         $sprites = [];
 
         for ($spriteIndex = 0; $spriteIndex < $config['totalSprites']; $spriteIndex++) {
+            // Each sprite is its own ffmpeg invocation and a long video produces
+            // many of them; without a heartbeat per iteration the reaper would
+            // mistake a healthy multi-minute storyboard for a dead worker.
+            $video->heartbeat();
+
             $spriteInfo = $this->calculateSpriteInfo($spriteIndex, $config['totalThumbs']);
             $spriteName = "storyboard_{$spriteIndex}.jpg";
 

@@ -18,7 +18,7 @@ class DispatchPendingVideosCommand extends Command
     public function handle(): void
     {
         $nodes = Node::active()->worker()->get()
-            ->filter(fn (Node $node) => $node->availableWorkers() > 0);
+            ->filter(fn (Node $node) => $node->isAlive() && $node->availableWorkers() > 0);
 
         if ($nodes->isEmpty()) {
             return;

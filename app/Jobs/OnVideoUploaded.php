@@ -8,12 +8,18 @@ use App\Services\UppyS3Service;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 class OnVideoUploaded implements ShouldQueue
 {
     use Queueable;
+
+    // Storage object-created events are at-least-once; retries cover transient
+    // probe/storage/DB blips. Ingestion is idempotent (unique streams.path), so
+    // retries can never create a duplicate video.
+    public int $tries = 5;
+
+    public array $backoff = [10, 30, 60, 120];
 
     public function __construct(
         private string $key,
@@ -48,12 +54,13 @@ class OnVideoUploaded implements ShouldQueue
             }
         }
 
-        // Attempt final cleanup of uploaded file
-        if (! Storage::delete($this->key)) {
-            Log::error('Failed to delete file in job failure handler', [
-                'file_path' => $this->key,
-                'error' => $exception->getMessage(),
-            ]);
-        }
+        // Deliberately do NOT delete the uploaded source here. Ingestion can fail
+        // for recoverable reasons (probe timeout, transient storage/DB error),
+        // and deleting the user's only copy turns a recoverable failure into
+        // permanent data loss. Orphaned sources are reclaimed by age-based GC.
+        Log::error('Video upload processing failed permanently; source retained for recovery', [
+            'key' => $this->key,
+            'error' => $exception->getMessage(),
+        ]);
     }
 }

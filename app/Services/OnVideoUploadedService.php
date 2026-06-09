@@ -5,12 +5,14 @@ namespace App\Services;
 use App\DTOs\UploadMeta;
 use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
+use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
 use Exception;
 use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Stream as FFStream;
 use FFMpeg\FFProbe\DataMapping\StreamCollection;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -26,20 +28,30 @@ class OnVideoUploadedService
 
     private array $audioStreamCache = [];
 
-    public function __construct(private UppyS3Service $uppyService)
-    {
-    }
+    public function __construct(private UppyS3Service $uppyService) {}
 
     public function handle(string $key, int $size): void
     {
         $meta = $this->uppyService->getUploadMeta($key);
 
-        if (!$meta) {
+        if (! $meta) {
             Log::error('Upload metadata not found', ['key' => $key]);
             throw new Exception("Upload metadata not found for key: {$key}");
         }
 
         $this->meta = $meta;
+
+        // Idempotency: this upload's storage key is stored as the original
+        // stream's path. If it was already ingested (an at-least-once webhook
+        // redelivery or a job retry), don't create a second video. The unique
+        // index on streams.path is the race-safe backstop for concurrent
+        // deliveries (handled below).
+        if (Stream::where('path', $key)->exists()) {
+            Log::info('Upload already ingested; skipping duplicate', ['key' => $key]);
+            $this->uppyService->forgetUploadMeta($key);
+
+            return;
+        }
 
         $mediaInfo = $this->probeMedia($key);
 
@@ -60,34 +72,43 @@ class OnVideoUploadedService
             throw new Exception('No outputs configured for template');
         }
 
-        $video = DB::transaction(function () use ($user, $project, $template, $mediaInfo, $key, $size, $outputs) {
-            $video = Video::create([
-                'user_id' => $user->id,
-                'project_id' => $project->id,
-                'template_id' => $template->id,
-                'name' => $this->meta->filename,
-                'status' => VideoStatus::PENDING->value,
-                'duration' => $mediaInfo['duration'],
-                'aspect_ratio' => $mediaInfo['aspectRatio'],
-                'external_user_id' => $this->meta->externalUserId,
-                'external_resource_id' => $this->meta->externalResourceId,
-            ]);
+        try {
+            $video = DB::transaction(function () use ($user, $project, $template, $mediaInfo, $key, $size, $outputs) {
+                $video = Video::create([
+                    'user_id' => $user->id,
+                    'project_id' => $project->id,
+                    'template_id' => $template->id,
+                    'name' => $this->meta->filename,
+                    'status' => VideoStatus::PENDING->value,
+                    'duration' => $mediaInfo['duration'],
+                    'aspect_ratio' => $mediaInfo['aspectRatio'],
+                    'external_user_id' => $this->meta->externalUserId,
+                    'external_resource_id' => $this->meta->externalResourceId,
+                ]);
 
-            $video->streams()->create([
-                'path' => $key,
-                'name' => 'Original',
-                'type' => 'original',
-                'size' => $size,
-                'meta' => [],
-                'status' => VideoStatus::COMPLETED->value,
-                'started_at' => now(),
-                'completed_at' => now(),
-            ]);
+                $video->streams()->create([
+                    'path' => $key,
+                    'name' => 'Original',
+                    'type' => 'original',
+                    'size' => $size,
+                    'meta' => [],
+                    'status' => VideoStatus::COMPLETED->value,
+                    'started_at' => now(),
+                    'completed_at' => now(),
+                ]);
 
-            $this->createOutputsAndStreams($video, $mediaInfo['streamCollection'], $outputs);
+                $this->createOutputsAndStreams($video, $mediaInfo['streamCollection'], $outputs);
 
-            return $video;
-        });
+                return $video;
+            });
+        } catch (UniqueConstraintViolationException $e) {
+            // A concurrent delivery won the race to insert the original stream
+            // (unique streams.path). It owns this upload; we bow out cleanly.
+            Log::info('Concurrent ingestion detected; skipping duplicate', ['key' => $key]);
+            $this->uppyService->forgetUploadMeta($key);
+
+            return;
+        }
 
         activity('video')
             ->performedOn($video)
@@ -106,21 +127,21 @@ class OnVideoUploadedService
     {
         $user = User::where('ulid', $this->meta->user)->first();
 
-        if (!$user) {
+        if (! $user) {
             Log::error('User not found for upload', ['ulid' => $this->meta->user]);
             throw new Exception("User with ulid {$this->meta->user} not found");
         }
 
         $project = $user->projects()->where('ulid', $this->meta->project)->first();
 
-        if (!$project) {
+        if (! $project) {
             Log::error('Project not found for upload', ['project' => $this->meta->project, 'user' => $this->meta->user]);
             throw new Exception("Project with ulid {$this->meta->project} not found");
         }
 
         $template = $project->templates()->where('ulid', $this->meta->template)->first();
 
-        if (!$template) {
+        if (! $template) {
             Log::error('Template not found for upload', ['template' => $this->meta->template, 'project' => $this->meta->project]);
             throw new Exception("Template with ulid {$this->meta->template} not found");
         }
@@ -142,7 +163,7 @@ class OnVideoUploadedService
 
         $videoStream = $streamCollection->videos()->first();
 
-        if (!$videoStream) {
+        if (! $videoStream) {
             Log::error('Video stream not found in file', ['key' => $key]);
             throw new Exception('Video stream not found');
         }
@@ -158,7 +179,7 @@ class OnVideoUploadedService
 
     private function validateSourceVideo(?FFStream $source): void
     {
-        if (!$source) {
+        if (! $source) {
             Log::error('Video stream not found in source media');
             throw new Exception('Video stream not found in source media');
         }
@@ -167,17 +188,17 @@ class OnVideoUploadedService
         $height = $source->get('height');
         $codec = $source->get('codec_name');
 
-        if (!$width || !is_numeric($width) || (int) $width <= 0) {
+        if (! $width || ! is_numeric($width) || (int) $width <= 0) {
             Log::error('Invalid source video width', ['width' => $width]);
             throw new Exception("Invalid source video width: {$width}");
         }
 
-        if (!$height || !is_numeric($height) || (int) $height <= 0) {
+        if (! $height || ! is_numeric($height) || (int) $height <= 0) {
             Log::error('Invalid source video height', ['height' => $height]);
             throw new Exception("Invalid source video height: {$height}");
         }
 
-        if (!$codec || !is_string($codec)) {
+        if (! $codec || ! is_string($codec)) {
             Log::error('Source video codec not detected');
             throw new Exception('Source video codec not detected');
         }
@@ -185,13 +206,13 @@ class OnVideoUploadedService
 
     private function validateSourceAudio(?FFStream $source): void
     {
-        if (!$source) {
+        if (! $source) {
             return;
         }
 
         $codec = $source->get('codec_name');
 
-        if (!$codec || !is_string($codec)) {
+        if (! $codec || ! is_string($codec)) {
             Log::error('Source audio codec not detected');
             throw new Exception('Source audio codec not detected');
         }
@@ -313,7 +334,7 @@ class OnVideoUploadedService
         foreach ($this->filterVariants($sourceVideo, $variants) as $variantConfig) {
             $key = $this->streamSignature($variantConfig);
 
-            if (!isset($this->videoStreamCache[$key])) {
+            if (! isset($this->videoStreamCache[$key])) {
                 $stream = $this->createStream(
                     video: $video,
                     stream: $sourceVideo,
@@ -342,14 +363,14 @@ class OnVideoUploadedService
             $sourceChannels = (string) $stream->get('channels');
             $channelConfig = $singleConfig ?? $channelConfigs->get($sourceChannels);
 
-            if (!$channelConfig) {
+            if (! $channelConfig) {
                 continue;
             }
 
             $inputParams = array_merge($sharedAudioParams, $channelConfig);
-            $key = $stream->get('index') . ':' . $this->streamSignature($inputParams);
+            $key = $stream->get('index').':'.$this->streamSignature($inputParams);
 
-            if (!isset($this->audioStreamCache[$key])) {
+            if (! isset($this->audioStreamCache[$key])) {
                 $created = $this->createStream(
                     video: $video,
                     stream: $stream,
@@ -418,7 +439,7 @@ class OnVideoUploadedService
                     'source_channels' => $stream->get('channels'),
                 ] : []),
             ],
-            'name' => ($tags['title'] ?? 'Unknown') .
+            'name' => ($tags['title'] ?? 'Unknown').
                 (isset($tags['language']) ? " ({$tags['language']})" : ''),
             'input_params' => $inputParams,
             'status' => VideoStatus::PENDING->value,
@@ -464,6 +485,6 @@ class OnVideoUploadedService
             [$a, $b] = [$b, $a % $b];
         }
 
-        return $width / $a . ':' . $height / $a;
+        return $width / $a.':'.$height / $a;
     }
 }

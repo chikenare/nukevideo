@@ -35,6 +35,8 @@ class ExtractThumbnailJob implements ShouldQueue
                 throw new Exception("Video {$this->videoId} not found");
             }
 
+            $video->heartbeat();
+
             $inputLocalPath = Storage::disk('tmp')->path($this->originalPath);
 
             if (! file_exists($inputLocalPath)) {

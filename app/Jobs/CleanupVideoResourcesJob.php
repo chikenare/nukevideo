@@ -28,14 +28,37 @@ class CleanupVideoResourcesJob implements ShouldQueue
 
         $video = Video::where('ulid', $this->videoUlid)->first();
 
+        // Terminal-only cleanup. If the video is back to an active status, the
+        // reaper has re-queued it and a newer run now owns its resources; a
+        // resurrected old chain's cleanup must not release the slot, drop the
+        // original stream, or delete tmp the new run is using. (This single guard
+        // is what makes the recovery safe without per-job fencing.)
+        if ($video && in_array($video->status, Video::ACTIVE_STATUSES, true)) {
+            Log::info('Cleanup skipped: video re-queued and active', ['ulid' => $this->videoUlid, 'status' => $video->status]);
+
+            return;
+        }
+
+        $disk = Storage::disk('tmp');
+
         if ($video?->node_id) {
             Node::find($video->node_id)?->releaseSlot($video->id);
             $video->update(['node_id' => null]);
         }
 
-        $video?->streams()->where('type', 'original')->first()?->delete();
+        $original = $video?->streams()->where('type', 'original')->first();
+        $originalPath = $original?->path;
 
-        $disk = Storage::disk('tmp');
+        // Removing the stream record deletes the source copy on the default disk
+        // (S3) via the StreamObserver.
+        $original?->delete();
+
+        // The downloaded source lives under its storage key (tmp-videos/...), NOT
+        // under the video's ULID directory, so the directory delete below misses
+        // it — leaking one original per video on local disk. Remove it here.
+        if ($originalPath && $disk->exists($originalPath)) {
+            $disk->delete($originalPath);
+        }
 
         if ($disk->exists($this->videoUlid)) {
             if (! $disk->deleteDirectory($this->videoUlid)) {

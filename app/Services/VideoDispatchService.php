@@ -34,8 +34,19 @@ class VideoDispatchService
         $videoUlid = $video->ulid;
         $nodeId = $node->id;
 
-        $onFail = function () use ($videoId, $videoUlid, $nodeId, $queue) {
-            $video = Video::findOrFail($videoId);
+        // Discriminates this run from a later one. The reaper increments
+        // dispatch_attempts when it re-queues a stuck video, so a superseded
+        // chain's failure handler can tell it no longer owns the video and must
+        // not fail it or wipe the new run's resources.
+        $attempt = $video->dispatch_attempts;
+
+        $onFail = function () use ($videoId, $videoUlid, $nodeId, $queue, $attempt) {
+            $video = Video::find($videoId);
+
+            if (! $video || $video->dispatch_attempts !== $attempt) {
+                return; // a newer run owns this video; leave it alone
+            }
+
             $video->markAsFailed();
             Node::find($nodeId)?->releaseSlot($videoId);
             CleanupVideoResourcesJob::dispatch($videoUlid)->onQueue($queue);
@@ -66,7 +77,9 @@ class VideoDispatchService
         $chain[] = new CleanupVideoResourcesJob($videoUlid);
 
         $node->reserveSlot($videoId);
-        $video->update(['node_id' => $nodeId]);
+        // Stamp a fresh heartbeat so the reaper doesn't reclaim the video before
+        // its first stage gets a chance to run.
+        $video->update(['node_id' => $nodeId, 'last_heartbeat_at' => now()]);
 
         Bus::chain($chain)
             ->onQueue($queue)

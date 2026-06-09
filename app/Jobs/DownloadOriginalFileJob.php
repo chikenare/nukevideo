@@ -19,6 +19,17 @@ class DownloadOriginalFileJob implements ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    // Transient storage/network blips shouldn't fail the whole video.
+    public $tries = 3;
+
+    public $backoff = [10, 30, 60];
+
+    private const CHUNK_BYTES = 8 * 1024 * 1024; // 8 MiB
+
+    // Abort if no bytes arrive for this long, instead of blocking on a hung
+    // socket until the (multi-hour) worker timeout.
+    private const STALL_TIMEOUT_SECONDS = 60;
+
     public function __construct(
         public int $videoId,
         public string $originalPath,
@@ -28,6 +39,9 @@ class DownloadOriginalFileJob implements ShouldQueue
     {
         Log::info('DownloadOriginalFile started', ['video' => $this->videoId, 'path' => $this->originalPath]);
 
+        $video = Video::findOrFail($this->videoId);
+        $video->heartbeat();
+
         $inputPath = $this->originalPath;
 
         if (! Storage::exists($inputPath)) {
@@ -35,23 +49,27 @@ class DownloadOriginalFileJob implements ShouldQueue
             throw new Exception("Original file $inputPath does not exist in storage");
         }
 
-        Video::where('id', $this->videoId)
-            ->update(['status' => VideoStatus::DOWNLOADING->value]);
+        $video->update(['status' => VideoStatus::DOWNLOADING->value]);
 
-        // Path includes video ULID as root
         $inputLocalPath = Storage::disk('tmp')->path($inputPath);
 
-        // Check if already downloaded
+        // A fully-downloaded original is left at the final path only after the
+        // atomic rename below, so its presence means "genuinely complete".
         if (file_exists($inputLocalPath)) {
+            $video->update(['status' => VideoStatus::RUNNING->value]);
+
             return;
         }
 
-        // Create directory if not exists
         $outputDir = dirname($inputLocalPath);
         if (! is_dir($outputDir)) {
             mkdir($outputDir, 0755, true);
         }
 
+        // Download to a temp file and atomically rename, so a worker that dies
+        // mid-copy never leaves a truncated file that the check above would later
+        // mistake for a complete original and feed to ffmpeg.
+        $partialPath = $inputLocalPath.'.partial';
         $sourceStream = null;
         $destStream = null;
 
@@ -62,22 +80,57 @@ class DownloadOriginalFileJob implements ShouldQueue
                 throw new Exception("Failed to open source stream for $inputPath");
             }
 
-            $destStream = fopen($inputLocalPath, 'w');
+            $destStream = fopen($partialPath, 'w');
             if (! $destStream) {
-                Log::error('Failed to open destination file', ['path' => $inputLocalPath, 'video' => $this->videoId]);
-                throw new Exception("Failed to open destination file $inputLocalPath");
+                Log::error('Failed to open destination file', ['path' => $partialPath, 'video' => $this->videoId]);
+                throw new Exception("Failed to open destination file $partialPath");
             }
 
-            stream_copy_to_stream($sourceStream, $destStream);
-
-            Video::where('id', $this->videoId)
-                ->update(['status' => VideoStatus::RUNNING->value]);
+            $this->copyWithHeartbeat($sourceStream, $destStream, $video);
         } finally {
             if (is_resource($sourceStream)) {
                 fclose($sourceStream);
             }
             if (is_resource($destStream)) {
                 fclose($destStream);
+            }
+        }
+
+        if (! rename($partialPath, $inputLocalPath)) {
+            @unlink($partialPath);
+            throw new Exception("Failed to finalize downloaded file $inputLocalPath");
+        }
+
+        $video->update(['status' => VideoStatus::RUNNING->value]);
+    }
+
+    /**
+     * Copy the source to the destination in chunks, emitting a throttled heartbeat
+     * (so the reaper can tell a large download apart from a dead worker) and
+     * aborting if the source stalls.
+     *
+     * @param  resource  $sourceStream
+     * @param  resource  $destStream
+     */
+    private function copyWithHeartbeat($sourceStream, $destStream, Video $video): void
+    {
+        stream_set_timeout($sourceStream, self::STALL_TIMEOUT_SECONDS);
+        $lastBeat = microtime(true);
+
+        while (! feof($sourceStream)) {
+            $chunk = fread($sourceStream, self::CHUNK_BYTES);
+
+            if ($chunk === false || (stream_get_meta_data($sourceStream)['timed_out'] ?? false)) {
+                throw new Exception("Read stalled/failed while downloading {$this->originalPath}");
+            }
+
+            if ($chunk !== '' && fwrite($destStream, $chunk) === false) {
+                throw new Exception("Write error while downloading {$this->originalPath}");
+            }
+
+            if ((microtime(true) - $lastBeat) >= 15) {
+                $video->heartbeat();
+                $lastBeat = microtime(true);
             }
         }
     }

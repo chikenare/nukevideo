@@ -41,6 +41,15 @@ class Node extends Model
         Redis::zadd("node:{$this->id}:videos", now()->timestamp, $videoId);
     }
 
+    /**
+     * Refresh a reserved slot's timestamp so it is not reclaimed by the TTL while
+     * the job is still making progress. Driven by {@see Video::heartbeat()}.
+     */
+    public function touchSlot(int $videoId): void
+    {
+        Redis::zadd("node:{$this->id}:videos", now()->timestamp, $videoId);
+    }
+
     public function releaseSlot(int $videoId): void
     {
         Redis::zrem("node:{$this->id}:videos", $videoId);
@@ -100,9 +109,30 @@ class Node extends Model
     public static function findAvailableNode(): ?self
     {
         return static::active()->worker()->get()
-            ->filter(fn (self $node) => $node->availableWorkers() > 0)
+            ->filter(fn (self $node) => $node->isAlive() && $node->availableWorkers() > 0)
             ->sortByDesc(fn (self $node) => $node->availableWorkers())
             ->first();
+    }
+
+    /**
+     * Whether the node is reporting (so we don't dispatch into a black hole when
+     * it has powered off). Liveness is derived from the freshness of the Vector
+     * metrics it pushes — independent of how busy its workers are, and separate
+     * from the manual {@see $is_active} switch.
+     *
+     * Fail-open: a node we've never seen metrics from is treated as alive (Vector
+     * may simply not be wired up); only a node that WAS reporting and went silent
+     * is treated as dead. Driven by {@see \App\Console\Commands\CheckNodeHealthCommand}.
+     */
+    public function isAlive(): bool
+    {
+        $redis = Redis::connection('vector');
+
+        if ((bool) $redis->exists("node_health:{$this->id}")) {
+            return true;
+        }
+
+        return ! (bool) $redis->exists("node_metrics_len:{$this->id}");
     }
 
     private const HASH_RING_REPLICAS = 150;

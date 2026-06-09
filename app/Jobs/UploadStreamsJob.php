@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\VideoStatus;
+use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
 use Exception;
@@ -25,6 +26,10 @@ class UploadStreamsJob implements ShouldQueue
 
     public $tries = 2;
 
+    public $backoff = [30, 120];
+
+    private ?float $lastBeat = null;
+
     public function __construct(
         public int $videoId,
     ) {}
@@ -34,6 +39,7 @@ class UploadStreamsJob implements ShouldQueue
         Log::info('UploadStreams started', ['video' => $this->videoId]);
 
         $video = Video::findOrFail($this->videoId);
+        $video->heartbeat();
 
         $video->update(['status' => VideoStatus::UPLOADING->value]);
 
@@ -44,12 +50,12 @@ class UploadStreamsJob implements ShouldQueue
             throw new Exception("Video directory not found: {$video->ulid}");
         }
 
-        $this->uploadDirectory($localDir, $video->ulid);
+        $this->uploadDirectory($localDir, $video->ulid, $video);
 
         $this->markStreamsCompleted($video);
     }
 
-    private function uploadDirectory(string $localDir, string $prefix): void
+    private function uploadDirectory(string $localDir, string $prefix, Video $video): void
     {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($localDir, RecursiveDirectoryIterator::SKIP_DOTS)
@@ -59,6 +65,8 @@ class UploadStreamsJob implements ShouldQueue
             if (! $file->isFile()) {
                 continue;
             }
+
+            $this->throttledHeartbeat($video);
 
             $relativePath = $prefix.'/'.ltrim(
                 str_replace($localDir, '', $file->getPathname()),
@@ -87,32 +95,81 @@ class UploadStreamsJob implements ShouldQueue
         }
     }
 
+    private function throttledHeartbeat(Video $video): void
+    {
+        $now = microtime(true);
+
+        if ($this->lastBeat !== null && ($now - $this->lastBeat) < 15) {
+            return;
+        }
+
+        $this->lastBeat = $now;
+        $video->heartbeat();
+    }
+
     private function markStreamsCompleted(Video $video): void
     {
-        DB::transaction(function () use ($video) {
-            $video->streams()
-                ->where('status', VideoStatus::PENDING->value)
-                ->each(function ($stream) {
-                    $localPath = Storage::disk('tmp')->path($stream->path);
+        $pending = $video->streams()->where('status', VideoStatus::PENDING->value)->get();
 
-                    $stream->update([
-                        'size' => file_exists($localPath) ? filesize($localPath) : 0,
-                        'status' => VideoStatus::COMPLETED->value,
-                        'progress' => 100,
-                        'completed_at' => now(),
-                    ]);
-                });
+        // Verify every expected output is really present BEFORE touching state,
+        // and outside the transaction so the row lock isn't held during S3 HEADs.
+        foreach ($pending as $stream) {
+            $this->assertStreamUploaded($stream);
+        }
 
-            $video->update(['status' => VideoStatus::COMPLETED->value]);
+        $completed = DB::transaction(function () use ($video, $pending) {
+            // Lock the video row so completion is mutually exclusive with the
+            // reaper/prune's guarded FAILED transition — exactly one terminal
+            // state can win.
+            $locked = Video::query()->whereKey($video->id)->lockForUpdate()->first();
+
+            if (! $locked || ! in_array($locked->status, Video::ACTIVE_STATUSES, true)) {
+                Log::warning('Video not active at completion; skipping', ['video' => $video->id, 'status' => $locked?->status]);
+
+                return false;
+            }
+
+            foreach ($pending as $stream) {
+                $stream->update([
+                    'size' => filesize(Storage::disk('tmp')->path($stream->path)),
+                    'status' => VideoStatus::COMPLETED->value,
+                    'progress' => 100,
+                    'completed_at' => now(),
+                ]);
+            }
+
+            $locked->update(['status' => VideoStatus::COMPLETED->value]);
 
             activity('video')
                 ->performedOn($video)
                 ->causedBy($video->user)
                 ->event('video_completed')
                 ->log("Video processing completed: {$video->name}");
+
+            return true;
         });
 
-        WebhookDispatcher::forVideo('video.completed', $video->fresh());
+        if ($completed) {
+            WebhookDispatcher::forVideo('video.completed', $video->fresh());
+        }
+    }
+
+    /**
+     * Fail loudly if an expected output is missing locally or wasn't durably
+     * persisted to storage. Marking a stream COMPLETED without this check ships
+     * broken/0-byte renditions to viewers as a "successful" video.
+     */
+    private function assertStreamUploaded(Stream $stream): void
+    {
+        $localPath = Storage::disk('tmp')->path($stream->path);
+
+        if (! file_exists($localPath) || filesize($localPath) === 0) {
+            throw new Exception("Expected output missing or empty before completion: {$stream->path}");
+        }
+
+        if (! Storage::exists($stream->path)) {
+            throw new Exception("Output not confirmed in storage after upload: {$stream->path}");
+        }
     }
 
     public function failed(Throwable $e): void
