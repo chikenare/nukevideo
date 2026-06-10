@@ -35,8 +35,16 @@ class ReapStuckVideosCommand extends Command
         $maxAttempts = (int) $this->option('max-attempts');
 
         $stuck = Video::query()
-            ->whereNotNull('node_id')
             ->whereIn('status', Video::ACTIVE_STATUSES)
+            // A PENDING video without a node is just waiting for the dispatcher
+            // and must not be reaped. Any OTHER active status without a node is
+            // an inconsistent leftover (lost race, deleted node) that no worker
+            // will ever finish — previously invisible to this query, it sat in
+            // running/uploading forever and couldn't even be deleted.
+            ->where(function ($query) {
+                $query->whereNotNull('node_id')
+                    ->orWhere('status', '!=', VideoStatus::PENDING->value);
+            })
             ->where(function ($query) use ($threshold) {
                 $query->where('last_heartbeat_at', '<', $threshold)
                     ->orWhere(function ($q) use ($threshold) {
