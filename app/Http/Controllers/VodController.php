@@ -8,6 +8,7 @@ use App\Enums\VideoStatus;
 use App\Http\Requests\VodRequest;
 use App\Models\Node;
 use App\Models\Output;
+use App\Models\Video;
 use App\Services\VodService;
 use App\Services\VodSessionService;
 use App\Settings\GeneralSettings;
@@ -143,9 +144,7 @@ class VodController extends Controller
 
     public function subtitles(Request $request, string $ulid)
     {
-        $video = $request->user()
-            ->videos()
-            ->with(['streams' => fn ($q) => $q->where('type', 'subtitle')])
+        $video = Video::with(['streams' => fn ($q) => $q->where('type', 'subtitle')])
             ->where('ulid', $ulid)
             ->firstOrFail();
 
