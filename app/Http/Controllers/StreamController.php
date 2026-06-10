@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
-use App\Http\Requests\Stream\UpdateStreamRequest;
 use App\Data\StreamData;
+use App\Http\Requests\Stream\UpdateStreamRequest;
 use App\Services\StreamManagementService;
 use Illuminate\Http\Request;
 

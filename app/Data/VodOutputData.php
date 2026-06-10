@@ -14,8 +14,7 @@ class VodOutputData extends Data
         public string $subtitlesUrl,
         public string $thumbnailUrl,
         public string $storyboardUrl,
-    ) {
-    }
+    ) {}
 
     public static function fromOutput(Output $output, string $vodUrl, string $videoUlid): self
     {
