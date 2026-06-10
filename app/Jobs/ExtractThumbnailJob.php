@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\FencedByRun;
 use App\Models\Video;
 use App\Services\ThumbnailService;
 use Exception;
@@ -17,16 +18,23 @@ use Throwable;
 
 class ExtractThumbnailJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, FencedByRun, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
         public int $videoId,
         public string $originalPath,
-    ) {}
+        ?int $runAttempt = null,
+    ) {
+        $this->runAttempt = $runAttempt;
+    }
 
     public function handle(): void
     {
         Log::info('ExtractThumbnail started', ['video' => $this->videoId]);
+
+        if ($this->supersededRun(Video::find($this->videoId))) {
+            return;
+        }
 
         try {
             $video = Video::find($this->videoId);

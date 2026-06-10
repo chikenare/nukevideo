@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\VideoStatus;
+use App\Exceptions\EncodeInterruptedException;
 use App\Models\Stream;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -34,7 +35,7 @@ class Mp4Service
             UsageService::record($this->stream->video->user_id, 'encoding_cpu', round(microtime(true) - $start, 2), $this->stream->video->external_user_id ?? '');
         }
 
-        $this->stream->update(['status' => VideoStatus::PENDING->value]);
+        $this->stream->update(['status' => VideoStatus::PENDING->value, 'completed_at' => now()]);
     }
 
     private function ensureOutputDirectory(): void
@@ -74,6 +75,11 @@ class Mp4Service
         });
 
         if (! $process->successful()) {
+            if (EncodeInterruptedException::causedTermination($process->errorOutput())) {
+                Log::warning('FFmpeg killed by signal; leaving stream for the reaper', ['stream' => $this->stream->id]);
+                throw EncodeInterruptedException::fromErrorOutput($process->errorOutput());
+            }
+
             Log::error('FFmpeg process failed', ['stream' => $this->stream->id, 'error' => $process->errorOutput()]);
             throw new RuntimeException($process->errorOutput());
         }
@@ -115,7 +121,31 @@ class Mp4Service
     {
         $args[] = '-map 0:v:0';
         $args[] = '-map 0:a?';
-        $args[] = '-map 0:s?';
+
+        $indexes = $this->textSubtitleIndexes();
+
+        if ($indexes === null) {
+            // Legacy stream rows ingested before bitmap filtering: keep the old
+            // blanket mapping rather than silently dropping their subtitles.
+            $args[] = '-map 0:s?';
+
+            return;
+        }
+
+        foreach ($indexes as $index) {
+            $args[] = '-map 0:'.(int) $index;
+        }
+    }
+
+    /**
+     * Source indexes of text-based subtitle tracks, recorded at ingestion.
+     * null = row predates the field.
+     */
+    private function textSubtitleIndexes(): ?array
+    {
+        $indexes = ($this->stream->meta ?? [])['text_subtitle_indexes'] ?? null;
+
+        return is_array($indexes) ? $indexes : null;
     }
 
     private function appendVideoParams(array &$args, array $params): void
@@ -127,7 +157,7 @@ class Mp4Service
         }
 
         if (isset($params['video_codec'])) {
-            $args[] = "-c:v {$params['video_codec']}";
+            $args[] = '-c:v '.$this->assertSafeArgValue($params['video_codec']);
         }
 
         $scale = $this->buildScaleFilter($this->stream->width, $this->stream->height);
@@ -147,7 +177,7 @@ class Mp4Service
         }
 
         if (isset($params['audio_codec'])) {
-            $args[] = "-c:a {$params['audio_codec']}";
+            $args[] = '-c:a '.$this->assertSafeArgValue($params['audio_codec']);
         }
 
         $args = array_merge($args, $this->buildParamsArguments($params, 'audio'));
@@ -155,6 +185,10 @@ class Mp4Service
 
     private function appendSubtitleParams(array &$args): void
     {
+        if ($this->textSubtitleIndexes() === []) {
+            return; // no text subtitles mapped; a codec flag would be meaningless
+        }
+
         $args[] = '-c:s mov_text';
     }
 }

@@ -22,6 +22,13 @@ class OnVideoUploadedService
 {
     use Concerns\ResolvesScale;
 
+    /**
+     * Subtitle codecs that can be converted to webvtt (HLS/DASH) or mov_text
+     * (MP4). Bitmap formats (PGS, DVD/DVB, xsub) common in BluRay remuxes can't
+     * be transcoded to text and would fail the whole pipeline if ingested.
+     */
+    private const TEXT_SUBTITLE_CODECS = ['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text', 'text'];
+
     private UploadMeta $meta;
 
     private array $videoStreamCache = [];
@@ -154,19 +161,16 @@ class OnVideoUploadedService
         $url = Storage::temporaryUrl($key, now()->addDay());
         $ffprobe = FFProbe::create();
 
-        if ($ffprobe->streams($url)->videos()->first()?->get('codec_type') != 'video') {
-            Log::error('Invalid video file: no video codec detected', ['key' => $key]);
-            throw new Exception("Invalid video file: $key");
-        }
-
+        // One probe only: each streams() call re-reads the remote object.
         $streamCollection = $ffprobe->streams($url);
 
         $videoStream = $streamCollection->videos()->first();
 
-        if (! $videoStream) {
-            Log::error('Video stream not found in file', ['key' => $key]);
-            throw new Exception('Video stream not found');
+        if ($videoStream?->get('codec_type') != 'video') {
+            Log::error('Invalid video file: no video codec detected', ['key' => $key]);
+            throw new Exception("Invalid video file: $key");
         }
+
         $duration = $ffprobe->format($url)->get('duration')
             ?? $videoStream->get('duration');
 
@@ -272,7 +276,16 @@ class OnVideoUploadedService
         $sourceAudio = $streamCollection->audios()->first();
         $audioConfig = collect($outputConfig['audio'] ?? [])->except('channels')->toArray();
 
-        $stream = $this->createMuxedStream($video, $sourceVideo, $sourceAudio, $variants[0], $audioConfig);
+        // Recorded so the muxer maps exactly these tracks: bitmap subtitles
+        // (PGS/DVD) can't become mov_text and a blanket `-map 0:s?` would fail
+        // the whole encode on sources that carry them.
+        $textSubtitleIndexes = collect($streamCollection->all())
+            ->filter(fn (FFStream $s) => $s->get('codec_type') === 'subtitle' && $this->isTextSubtitle($s))
+            ->map(fn (FFStream $s) => (int) $s->get('index'))
+            ->values()
+            ->all();
+
+        $stream = $this->createMuxedStream($video, $sourceVideo, $sourceAudio, $variants[0], $audioConfig, $textSubtitleIndexes);
 
         $output->streams()->attach([$stream->id]);
     }
@@ -283,6 +296,7 @@ class OnVideoUploadedService
         ?FFStream $sourceAudio,
         array $variantConfig,
         array $audioConfig,
+        array $textSubtitleIndexes = [],
     ) {
         $ulid = Str::ulid();
         $path = "$video->ulid/mp4/$ulid.mp4";
@@ -299,8 +313,10 @@ class OnVideoUploadedService
             'size' => 0,
             'meta' => [
                 'source_height' => $sourceVideo->get('height'),
+                'source_width' => $sourceVideo->get('width'),
                 'source_codec' => $sourceVideo->get('codec_name'),
                 'source_bit_rate' => (int) $sourceVideo->get('bit_rate'),
+                'text_subtitle_indexes' => $textSubtitleIndexes,
                 ...($sourceAudio ? [
                     'source_audio_codec' => $sourceAudio->get('codec_name'),
                     'source_audio_bit_rate' => (int) $sourceAudio->get('bit_rate'),
@@ -396,15 +412,48 @@ class OnVideoUploadedService
     private function createSubtitleStreams(Video $video, array $streams): void
     {
         foreach ($streams as $stream) {
-            if ($stream->get('codec_type') === 'subtitle') {
-                $this->createStream(
-                    video: $video,
-                    stream: $stream,
-                    codecType: 'subtitle',
-                    inputParams: null
-                );
+            if ($stream->get('codec_type') !== 'subtitle') {
+                continue;
             }
+
+            if (! $this->isTextSubtitle($stream)) {
+                Log::info('Skipping bitmap subtitle stream', [
+                    'video' => $video->id,
+                    'index' => $stream->get('index'),
+                    'codec' => $stream->get('codec_name'),
+                ]);
+
+                continue;
+            }
+
+            $this->createStream(
+                video: $video,
+                stream: $stream,
+                codecType: 'subtitle',
+                inputParams: null
+            );
         }
+    }
+
+    private function isTextSubtitle(FFStream $stream): bool
+    {
+        return in_array($stream->get('codec_name'), self::TEXT_SUBTITLE_CODECS, true);
+    }
+
+    /**
+     * Source titles frequently already carry the language ("Inglés (eng)");
+     * appending it unconditionally rendered as "Inglés (eng) (eng)".
+     */
+    private function streamDisplayName(array $tags): string
+    {
+        $title = $tags['title'] ?? 'Unknown';
+        $language = $tags['language'] ?? null;
+
+        if ($language && ! str_contains($title, "({$language})")) {
+            return "{$title} ({$language})";
+        }
+
+        return $title;
     }
 
     private function createStream(
@@ -429,6 +478,9 @@ class OnVideoUploadedService
                 'index' => $stream->get('index'),
                 ...($codecType === 'video' ? [
                     'source_height' => $stream->get('height'),
+                    // DetectsStreamCopy compares both dimensions; without the
+                    // width the copy fast-path could never trigger.
+                    'source_width' => $stream->get('width'),
                     'source_codec' => $stream->get('codec_name'),
                     'source_bit_rate' => (int) $stream->get('bit_rate'),
                 ] : []),
@@ -439,8 +491,7 @@ class OnVideoUploadedService
                     'source_channels' => $stream->get('channels'),
                 ] : []),
             ],
-            'name' => ($tags['title'] ?? 'Unknown').
-                (isset($tags['language']) ? " ({$tags['language']})" : ''),
+            'name' => $this->streamDisplayName($tags),
             'input_params' => $inputParams,
             'status' => VideoStatus::PENDING->value,
             'width' => $width,

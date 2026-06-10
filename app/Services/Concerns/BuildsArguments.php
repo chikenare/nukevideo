@@ -2,6 +2,8 @@
 
 namespace App\Services\Concerns;
 
+use InvalidArgumentException;
+
 trait BuildsArguments
 {
     private function appendArgument(array &$args, array $config, mixed $value): void
@@ -26,7 +28,24 @@ trait BuildsArguments
             return;
         }
 
-        $args[] = sprintf($config['template'], $value);
+        $args[] = sprintf($config['template'], $this->assertSafeArgValue($value));
+    }
+
+    /**
+     * Template param values come from user-editable template configs and end up
+     * interpolated into a shell command line. Every legitimate ffmpeg value
+     * (bitrates, presets, profiles, pix_fmts, sample rates) fits this charset;
+     * anything else is rejected outright rather than handed to the shell.
+     */
+    private function assertSafeArgValue(mixed $value): string
+    {
+        $value = (string) $value;
+
+        if (! preg_match('/^[A-Za-z0-9._+:-]+$/', $value)) {
+            throw new InvalidArgumentException("Unsafe ffmpeg argument value: {$value}");
+        }
+
+        return $value;
     }
 
     private function buildParamsArguments(array $params, string $type): array

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Enums\VideoStatus;
+use App\Exceptions\EncodeInterruptedException;
 use App\Models\Stream;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -80,6 +81,11 @@ class StreamService
         });
 
         if (! $process->successful()) {
+            if (EncodeInterruptedException::causedTermination($process->errorOutput())) {
+                Log::warning('FFmpeg killed by signal; leaving stream for the reaper', ['stream' => $this->stream->id]);
+                throw EncodeInterruptedException::fromErrorOutput($process->errorOutput());
+            }
+
             Log::error('FFmpeg process failed', ['stream' => $this->stream->id, 'error' => $process->errorOutput()]);
             throw new RuntimeException($process->errorOutput());
         }
@@ -134,7 +140,7 @@ class StreamService
         $codecKey = $this->stream->type === 'video' ? 'video_codec' : 'audio_codec';
         $codecFlag = $this->stream->type === 'video' ? '-c:v' : '-c:a';
         if (isset($params[$codecKey])) {
-            $args[] = "{$codecFlag} {$params[$codecKey]}";
+            $args[] = "{$codecFlag} ".$this->assertSafeArgValue($params[$codecKey]);
         }
 
         if ($this->stream->type === 'video') {

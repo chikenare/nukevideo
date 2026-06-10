@@ -111,7 +111,7 @@ class ReapStuckVideosCommand extends Command
         $video->markAsFailed();
 
         if ($queue) {
-            CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue($queue);
+            CleanupVideoResourcesJob::dispatch($video->ulid, $video->dispatch_attempts)->onQueue($queue);
         }
 
         Log::error('Gave up on stuck video after exhausting attempts', [

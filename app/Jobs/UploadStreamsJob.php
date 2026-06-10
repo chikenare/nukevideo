@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\VideoStatus;
+use App\Jobs\Concerns\FencedByRun;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
@@ -23,7 +24,7 @@ use Throwable;
 
 class UploadStreamsJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, FencedByRun, InteractsWithQueue, Queueable, SerializesModels;
 
     public $tries = 2;
 
@@ -33,13 +34,21 @@ class UploadStreamsJob implements ShouldQueue
 
     public function __construct(
         public int $videoId,
-    ) {}
+        ?int $runAttempt = null,
+    ) {
+        $this->runAttempt = $runAttempt;
+    }
 
     public function handle(): void
     {
         Log::info('UploadStreams started', ['video' => $this->videoId]);
 
-        $video = Video::findOrFail($this->videoId);
+        $video = Video::find($this->videoId);
+
+        if ($this->supersededRun($video)) {
+            return;
+        }
+
         $video->heartbeat();
 
         // A single failed rendition means the output is incomplete (e.g. a video
@@ -201,6 +210,21 @@ class UploadStreamsJob implements ShouldQueue
 
             if (! $locked || ! in_array($locked->status, Video::ACTIVE_STATUSES, true)) {
                 Log::warning('Video not active at completion; skipping', ['video' => $video->id, 'status' => $locked?->status]);
+
+                return false;
+            }
+
+            // The status check alone can't tell runs apart: after a reaper
+            // requeue the video is ACTIVE *because the new run owns it*, which is
+            // exactly when a zombie chain used to slip through here, mark the
+            // video COMPLETED mid-rerun, and hand its cleanup a terminal status
+            // that let it delete the original the new run still needed.
+            if ($this->runAttempt !== null && $locked->dispatch_attempts !== $this->runAttempt) {
+                Log::warning('Video owned by a newer run at completion; skipping', [
+                    'video' => $video->id,
+                    'job_attempt' => $this->runAttempt,
+                    'current_attempt' => $locked->dispatch_attempts,
+                ]);
 
                 return false;
             }

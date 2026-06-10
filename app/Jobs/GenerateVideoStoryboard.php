@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\FencedByRun;
 use App\Models\Video;
 use Exception;
 use Illuminate\Bus\Batchable;
@@ -14,7 +15,7 @@ use Throwable;
 
 class GenerateVideoStoryboard implements ShouldQueue
 {
-    use Batchable, Queueable;
+    use Batchable, FencedByRun, Queueable;
 
     // Configuration constants
     private const THUMBNAIL_INTERVAL = 10; // seconds
@@ -41,11 +42,18 @@ class GenerateVideoStoryboard implements ShouldQueue
     public function __construct(
         private int $videoId,
         private string $originalPath,
-    ) {}
+        ?int $runAttempt = null,
+    ) {
+        $this->runAttempt = $runAttempt;
+    }
 
     public function handle(): void
     {
         Log::info('GenerateStoryboard started', ['video' => $this->videoId]);
+
+        if ($this->supersededRun(Video::find($this->videoId))) {
+            return;
+        }
 
         try {
             $video = $this->getVideo();

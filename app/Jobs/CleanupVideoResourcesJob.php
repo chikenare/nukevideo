@@ -19,7 +19,8 @@ class CleanupVideoResourcesJob implements ShouldQueue
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     public function __construct(
-        public string $videoUlid
+        public string $videoUlid,
+        public ?int $runAttempt = null,
     ) {}
 
     public function handle(): void
@@ -28,11 +29,25 @@ class CleanupVideoResourcesJob implements ShouldQueue
 
         $video = Video::where('ulid', $this->videoUlid)->first();
 
+        // Run fence: this is destructive (deletes the original stream row and
+        // the S3 source), so a cleanup dispatched by a superseded chain must
+        // never run against a video the reaper handed to a newer run — even if
+        // that newer run already drove the video to a terminal status. A missing
+        // video (user deleted it) still proceeds: tmp is orphaned either way.
+        if ($video && $this->runAttempt !== null && $video->dispatch_attempts !== $this->runAttempt) {
+            Log::info('Cleanup skipped: video owned by a newer run', [
+                'ulid' => $this->videoUlid,
+                'job_attempt' => $this->runAttempt,
+                'current_attempt' => $video->dispatch_attempts,
+            ]);
+
+            return;
+        }
+
         // Terminal-only cleanup. If the video is back to an active status, the
         // reaper has re-queued it and a newer run now owns its resources; a
         // resurrected old chain's cleanup must not release the slot, drop the
-        // original stream, or delete tmp the new run is using. (This single guard
-        // is what makes the recovery safe without per-job fencing.)
+        // original stream, or delete tmp the new run is using.
         if ($video && in_array($video->status, Video::ACTIVE_STATUSES, true)) {
             Log::info('Cleanup skipped: video re-queued and active', ['ulid' => $this->videoUlid, 'status' => $video->status]);
 

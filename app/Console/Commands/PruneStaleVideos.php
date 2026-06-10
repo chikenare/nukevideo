@@ -9,18 +9,30 @@ use Illuminate\Console\Command;
 
 class PruneStaleVideos extends Command
 {
-    protected $signature = 'videos:prune {--hours=24 : Hours before a non-completed video is considered stale}';
+    protected $signature = 'videos:prune {--hours=24 : Hours before a failed video is considered stale}';
 
-    protected $description = 'Remove videos that have failed or been stuck in a non-completed state for too long';
+    protected $description = 'Remove videos that have been in a failed state for too long';
 
     public function handle()
     {
         $hours = (int) $this->option('hours');
         $threshold = Carbon::now()->subHours($hours);
 
-        $staleVideos = Video::where('status', '!=', VideoStatus::COMPLETED)
+        // Terminal failures only. An active-status video this old is either the
+        // reaper's problem (stuck on a node) or legitimately queued waiting for
+        // capacity — deleting it (and, via the observers, its source object)
+        // would turn a long backlog into silent data loss.
+        $staleVideos = Video::where('status', VideoStatus::FAILED->value)
             ->where('updated_at', '<', $threshold)
             ->get();
+
+        $staleActive = Video::whereIn('status', Video::ACTIVE_STATUSES)
+            ->where('updated_at', '<', $threshold)
+            ->count();
+
+        if ($staleActive > 0) {
+            $this->warn("{$staleActive} active video(s) older than {$hours}h left untouched (waiting for capacity or reaper recovery).");
+        }
 
         if ($staleVideos->isEmpty()) {
             $this->info('No stale videos found.');

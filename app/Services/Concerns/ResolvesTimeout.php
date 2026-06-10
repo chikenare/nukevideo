@@ -4,6 +4,15 @@ namespace App\Services\Concerns;
 
 trait ResolvesTimeout
 {
+    /**
+     * Hard ceiling for a single ffmpeg run. Must stay below ProcessStreamJob's
+     * $timeout (21000) — and therefore the queue's retry_after — so an encode
+     * that overruns is killed by us (clean failure with ffmpeg's own error)
+     * rather than by the worker timeout, which would orphan the ffmpeg child
+     * and let the queue redeliver the job mid-encode.
+     */
+    private const MAX_ENCODE_SECONDS = 20000;
+
     private function resolveProcessTimeout(bool $isCopy = false): int
     {
         $duration = (float) ($this->stream->video->duration ?? 0);
@@ -49,6 +58,6 @@ trait ResolvesTimeout
         //     $multiplier *= ($fps / 30);
         // }
 
-        return (int) max(300, $duration * $multiplier);
+        return (int) min(max(300, $duration * $multiplier), self::MAX_ENCODE_SECONDS);
     }
 }

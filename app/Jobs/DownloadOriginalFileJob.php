@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Enums\VideoStatus;
+use App\Jobs\Concerns\FencedByRun;
 use App\Models\Stream;
 use App\Models\Video;
 use Exception;
@@ -18,7 +19,7 @@ use Throwable;
 
 class DownloadOriginalFileJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, FencedByRun, InteractsWithQueue, Queueable, SerializesModels;
 
     // Transient storage/network blips shouldn't fail the whole video.
     public $tries = 3;
@@ -34,13 +35,21 @@ class DownloadOriginalFileJob implements ShouldQueue
     public function __construct(
         public int $videoId,
         public string $originalPath,
-    ) {}
+        ?int $runAttempt = null,
+    ) {
+        $this->runAttempt = $runAttempt;
+    }
 
     public function handle(): void
     {
         Log::info('DownloadOriginalFile started', ['video' => $this->videoId, 'path' => $this->originalPath]);
 
-        $video = Video::findOrFail($this->videoId);
+        $video = Video::find($this->videoId);
+
+        if ($this->supersededRun($video)) {
+            return;
+        }
+
         $video->heartbeat();
 
         $inputPath = $this->originalPath;

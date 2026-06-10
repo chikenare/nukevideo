@@ -29,7 +29,7 @@ class MyCustomUppyController extends UppyS3MultipartController
         Cache::put(
             "upload_meta:{$key}",
             $this->uppyService->buildUploadMeta($request->user(), $project, $request->all()),
-            now()->addHours(6),
+            now()->addHours(48),
         );
 
         $result = $this->client->createMultipartUpload([
@@ -56,7 +56,7 @@ class MyCustomUppyController extends UppyS3MultipartController
         Cache::put(
             "upload_meta:{$key}",
             $this->uppyService->buildUploadMeta($request->user(), $project, $request->all()),
-            now()->addHours(6),
+            now()->addHours(48),
         );
 
         try {
