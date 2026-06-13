@@ -3,24 +3,21 @@ ARG PHP_FRANKEN_IMAGE=serversideup/php:8.5-frankenphp
 
 FROM alpine:3.20 AS ffmpeg-builder
 
-ARG TARGETARCH
 ARG FFMPEG_URL=""
 
-RUN apk add --no-cache curl tar xz && \
-    if [ -z "$FFMPEG_URL" ]; then \
-      if [ "$TARGETARCH" = "arm64" ]; then \
-        FFMPEG_ARCH="linuxarm64"; \
-      else \
-        FFMPEG_ARCH="linux64"; \
-      fi && \
-      FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-${FFMPEG_ARCH}-gpl.tar.xz"; \
+RUN if [ -z "$FFMPEG_URL" ]; then \
+      apk add --no-cache ffmpeg && \
+      cp "$(command -v ffmpeg)" /usr/local/bin/ffmpeg && \
+      cp "$(command -v ffprobe)" /usr/local/bin/ffprobe; \
+    else \
+      apk add --no-cache curl tar xz && \
+      curl -fSL "$FFMPEG_URL" -o /tmp/ffmpeg.tar.xz && \
+      tar -xf /tmp/ffmpeg.tar.xz -C /tmp && \
+      mv /tmp/ffmpeg/bin/ffmpeg /usr/local/bin/ffmpeg && \
+      mv /tmp/ffmpeg/bin/ffprobe /usr/local/bin/ffprobe && \
+      rm -rf /tmp/ffmpeg*; \
     fi && \
-    curl -fSL "$FFMPEG_URL" -o /tmp/ffmpeg.tar.xz && \
-    tar -xJf /tmp/ffmpeg.tar.xz -C /tmp && \
-    mv /tmp/ffmpeg-*/bin/ffmpeg /usr/local/bin/ffmpeg && \
-    mv /tmp/ffmpeg-*/bin/ffprobe /usr/local/bin/ffprobe && \
-    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe && \
-    rm -rf /tmp/ffmpeg*
+    chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe
 
 # --- PHP base with common user setup ---
 FROM ${PHP_FPM_IMAGE} AS php-base
