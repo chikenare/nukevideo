@@ -91,7 +91,7 @@ const handleTextInput = (val: string | number) => {
 
     <!-- Boolean input -->
     <div v-else-if="parameter.inputType === 'boolean'" class="flex items-center space-x-2">
-      <Switch :id="paramKey" :checked="Boolean(value)" @update:checked="handleSwitchChange" />
+      <Switch :id="paramKey" :model-value="Boolean(value)" @update:model-value="handleSwitchChange" />
       <Label :for="paramKey" class="text-sm font-normal cursor-pointer">
         Enable {{ parameter.label }}
       </Label>
