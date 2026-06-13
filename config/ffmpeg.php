@@ -51,7 +51,7 @@ return [
             'label' => 'Opus',
             'description' => 'Best open-source audio codec. Low latency, high quality.',
 
-            'available_for' => ['libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
     ],
 
@@ -189,6 +189,47 @@ return [
             'rules' => ['nullable', 'integer', 'min:1'],
             'template' => '-g %s',
             'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+        ],
+
+        // --- ABR alignment (nginx-vod) ---
+        // These rely on -sc_threshold/-keyint_min and -x264-params, which are
+        // only honoured by libx264. x265/av1 use their own *-params families,
+        // so they are intentionally scoped to libx264 to avoid silent no-ops.
+        'scenecut_threshold' => [
+            'type' => 'video',
+            'input_type' => 'integer',
+            'label' => 'Scenecut Threshold',
+            'help' => 'Set to 0 to disable scene-cut keyframes and force a fixed GOP. Required to keep segment boundaries aligned across renditions in nginx-vod.',
+            'rules' => ['nullable', 'integer', 'min:0', 'max:100'],
+            'template' => '-sc_threshold %s',
+            'available_for' => ['libx264'],
+        ],
+        'min_gop_size' => [
+            'type' => 'video',
+            'input_type' => 'integer',
+            'label' => 'Min GOP Size',
+            'help' => 'Minimum distance between keyframes. Set equal to GOP Size to lock a strict, constant GOP.',
+            'rules' => ['nullable', 'integer', 'min:1'],
+            'template' => '-keyint_min %s',
+            'available_for' => ['libx264'],
+        ],
+        'closed_gop' => [
+            'type' => 'video',
+            'input_type' => 'boolean',
+            'label' => 'Closed GOP',
+            'help' => 'Keep GOPs closed so HLS/DASH segments never reference frames across boundaries. Recommended for ABR.',
+            'rules' => ['boolean'],
+            'x264_param' => 'open-gop=0',
+            'available_for' => ['libx264'],
+        ],
+        'forced_cfr' => [
+            'type' => 'video',
+            'input_type' => 'boolean',
+            'label' => 'Force Constant Framerate',
+            'help' => 'Tells x264 to assume constant frame timing, preventing sync drift in nginx-vod for VFR sources.',
+            'rules' => ['boolean'],
+            'x264_param' => 'force-cfr=1',
+            'available_for' => ['libx264'],
         ],
 
         // --- H.265 specific ---

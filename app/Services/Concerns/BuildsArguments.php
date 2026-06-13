@@ -56,6 +56,7 @@ trait BuildsArguments
             ->toArray();
 
         $args = [];
+        $x264Params = [];
         $codecKey = $type === 'video' ? 'video_codec' : 'audio_codec';
         $skip = $type === 'video' ? [$codecKey, 'width', 'height'] : [$codecKey];
 
@@ -63,9 +64,27 @@ trait BuildsArguments
             if (in_array($key, $skip)) {
                 continue;
             }
-            if (isset($available[$key])) {
-                $this->appendArgument($args, $available[$key], $value);
+            if (! isset($available[$key])) {
+                continue;
             }
+
+            $config = $available[$key];
+
+            // Sub-options that share the -x264-params flag must be merged into a
+            // single flag: ffmpeg only honours the last -x264-params it sees.
+            if (isset($config['x264_param'])) {
+                if ($value) {
+                    $x264Params[] = $config['x264_param'];
+                }
+
+                continue;
+            }
+
+            $this->appendArgument($args, $config, $value);
+        }
+
+        if ($x264Params) {
+            $args[] = '-x264-params '.implode(':', $x264Params);
         }
 
         return $args;
