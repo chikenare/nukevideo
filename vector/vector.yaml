@@ -1,0 +1,70 @@
+sources:
+  nginx_logs:
+    type: docker_logs
+    include_labels:
+      - "vector.enable=true"
+
+transforms:
+  parse_base:
+    type: remap
+    inputs:
+      - nginx_logs
+    source: |
+      parsed, err = parse_key_value(.message)
+
+      if err != null { abort }
+      if !exists(parsed.ip) || !exists(parsed.bytes) { abort }
+
+      .ip = parsed.ip
+      .bytes = to_int(parsed.bytes) ?? 0
+      .session = parsed.session
+
+      if .bytes <= 0 { abort }
+
+      del(.message)
+
+  prep_bandwidth_logs:
+    type: remap
+    inputs:
+      - parse_base
+    source: |
+      session = string!(.session)
+      if session == "" || session == "-" || session == "<null>" { abort }
+
+      ip = string!(.ip)
+      bytes = .bytes
+
+      . = {}
+      .session_id = session
+      .ip = ip
+      .bytes = bytes
+
+  aggregate_bandwidth_logs:
+    type: reduce
+    inputs:
+      - prep_bandwidth_logs
+    group_by:
+      - session_id
+      - ip
+    merge_strategies:
+      bytes: sum
+
+sinks:
+  stdout:
+    type: console
+    inputs:
+      - aggregate_bandwidth_logs
+    encoding:
+      codec: json
+  clickhouse_bandwidth_logs:
+    type: clickhouse
+    inputs:
+      - aggregate_bandwidth_logs
+    endpoint: "${CLICKHOUSE_ENDPOINT}"
+    table: bandwidth_logs
+    skip_unknown_fields: true
+    database: "${CLICKHOUSE_DATABASE}"
+    auth:
+      strategy: basic
+      user: "${CLICKHOUSE_USER}"
+      password: "${CLICKHOUSE_PASSWORD}"
