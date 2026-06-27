@@ -235,11 +235,19 @@ class OnVideoUploadedService
     {
         $sourceMax = max($sourceVideo->get('width'), $sourceVideo->get('height'));
 
-        return array_values(array_filter($variants, function (array $variant) use ($sourceMax) {
+        $kept = array_values(array_filter($variants, function (array $variant) use ($sourceMax) {
             $variantMax = max($variant['width'] ?? 0, $variant['height'] ?? 0);
 
             return $sourceMax >= $variantMax;
         }));
+
+        if (empty($kept) && ! empty($variants)) {
+            usort($variants, fn (array $a, array $b) => max($a['width'] ?? 0, $a['height'] ?? 0) <=> max($b['width'] ?? 0, $b['height'] ?? 0));
+
+            return [$variants[0]];
+        }
+
+        return $kept;
     }
 
     private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants): array
