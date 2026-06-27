@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
@@ -20,7 +19,7 @@ const props = defineProps<{
   modelValue: Record<string, unknown>
   config: CodecConfig
   index: number
-  format?: string
+  videoCodec?: string
 }>()
 
 const emit = defineEmits<{
@@ -30,50 +29,33 @@ const emit = defineEmits<{
 
 const dialogOpen = ref(false)
 const localVariant = ref<Record<string, unknown>>({})
-const localCodec = ref('')
 
-const videoCodecs = computed(() => {
-  const codecs = props.config.codecs.filter(c => c.type === 'video')
-  if (!props.format || !props.config.formats) return codecs
-
-  const formatConfig = props.config.formats[props.format]
-  if (!formatConfig) return codecs
-
-  return codecs.filter(c => {
-    return formatConfig.protocols.length === 0 ||
-      (c.protocols && c.protocols.some((p: string) => formatConfig.protocols.includes(p)))
-  })
-})
-
+// Parameters valid for the output's codec (the variant only carries resolution/quality, not codec).
 const videoParameters = computed(() => {
-  if (!localCodec.value) return {}
+  if (!props.videoCodec) return {}
 
   const filtered: Record<string, typeof props.config.parameters[string]> = {}
   Object.entries(props.config.parameters).forEach(([key, param]) => {
-    if (param.type === 'video' && param.availableFor.includes(localCodec.value)) {
+    if (param.type === 'video' && param.availableFor.includes(props.videoCodec as string)) {
       filtered[key] = param
     }
   })
   return filtered
 })
 
-watch(localCodec, (newCodec) => {
-  localVariant.value = { ...localVariant.value, videoCodec: newCodec }
-})
-
-const codecLabel = computed(() => {
-  const codec = props.modelValue.videoCodec as string
-  return videoCodecs.value.find(c => c.codec === codec)?.label ?? null
+const resolutionLabel = computed(() => {
+  const w = props.modelValue.width
+  const h = props.modelValue.height
+  return w && h ? `${w}×${h}` : null
 })
 
 const openDialog = () => {
   localVariant.value = { ...props.modelValue }
-  localCodec.value = (props.modelValue.videoCodec as string) || ''
   dialogOpen.value = true
 }
 
 const saveDialog = () => {
-  emit('update:modelValue', { ...localVariant.value, videoCodec: localCodec.value })
+  emit('update:modelValue', { ...localVariant.value })
   dialogOpen.value = false
 }
 
@@ -97,12 +79,12 @@ const updateParameter = (key: string, value: unknown) => {
       <div class="min-w-0">
         <p class="text-sm font-medium leading-none">Variant {{ index + 1 }}</p>
         <p class="text-xs text-muted-foreground mt-0.5 truncate">
-          {{ codecLabel ?? 'Not configured' }}
+          {{ resolutionLabel ?? 'Not configured' }}
         </p>
       </div>
     </div>
     <div class="flex items-center gap-2 shrink-0">
-      <Badge v-if="!codecLabel" variant="secondary" class="text-xs">Incomplete</Badge>
+      <Badge v-if="!resolutionLabel" variant="secondary" class="text-xs">Incomplete</Badge>
       <Button variant="outline" size="sm" @click="openDialog">
         <Settings2 :size="14" class="mr-1.5" />
         Configure
@@ -120,26 +102,13 @@ const updateParameter = (key: string, value: unknown) => {
       </DialogHeader>
 
       <div class="space-y-6 py-2">
-        <div class="space-y-2">
-          <Label>Video Codec *</Label>
-          <Select v-model="localCodec">
-            <SelectTrigger>
-              <SelectValue placeholder="Select video codec" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="codec in videoCodecs" :key="codec.codec" :value="codec.codec">
-                <div>
-                  <div class="font-medium">{{ codec.label }}</div>
-                  <div class="text-xs text-muted-foreground">{{ codec.description }}</div>
-                </div>
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+        <p v-if="!videoCodec" class="text-sm text-muted-foreground">
+          Select a video codec for this output first.
+        </p>
 
-        <div v-if="localCodec && Object.keys(videoParameters).length > 0">
-          <Separator class="mb-5" />
+        <div v-else-if="Object.keys(videoParameters).length > 0">
           <h4 class="text-sm font-semibold mb-4">Video Parameters</h4>
+          <Separator class="mb-5" />
           <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
             <DynamicFormField
               v-for="(param, key) in videoParameters"

@@ -219,7 +219,12 @@ class OnVideoUploadedService
         $output = $video->outputs()->create();
         $sourceVideo = $streamCollection->videos()->first();
 
-        $streamIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);
+        $streamIds = $this->resolveVideoStreams(
+            $video,
+            $sourceVideo,
+            $outputConfig['variants'] ?? [],
+            $outputConfig['video_codec'] ?? null,
+        );
 
         $audioConfig = $outputConfig['audio'] ?? [];
         $audioIds = $this->getOrCreateAudioStreams($video, $streamCollection, $audioConfig);
@@ -247,11 +252,15 @@ class OnVideoUploadedService
         return $kept;
     }
 
-    private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants): array
+    private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants, ?string $videoCodec): array
     {
         $streamIds = [];
 
         foreach ($this->filterVariants($sourceVideo, $variants) as $variantConfig) {
+            // The codec lives on the output (one codec per ABR ladder); fold it into each variant so
+            // the stream carries it in input_params, exactly like the shared audio params.
+            $variantConfig = array_merge(['video_codec' => $videoCodec], $variantConfig);
+
             $key = $this->streamSignature($variantConfig);
 
             if (! isset($this->videoStreamCache[$key])) {

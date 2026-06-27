@@ -29,10 +29,11 @@ class TemplateResource extends JsonResource
         $commands = [];
 
         foreach ($this->query['outputs'] ?? [] as $output) {
+            $codec = $output['video_codec'] ?? null;
+
             foreach ($output['variants'] ?? [] as $variant) {
                 $args = [];
 
-                $codec = $variant['video_codec'] ?? null;
                 if ($codec) {
                     $args[] = "-c:v {$codec}";
                 }

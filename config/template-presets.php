@@ -10,6 +10,9 @@ return [
     | Pre-built encoding templates that users can adopt into their account.
     | Each preset must pass the same validation as user-created templates.
     |
+    | The video codec is set per output (the variants are one codec's ABR ladder,
+    | varying only resolution/bitrate); different codecs go in different outputs.
+    |
     */
 
     'hls-h264-multi' => [
@@ -20,9 +23,9 @@ return [
             'outputs' => [
                 [
                     'format' => 'hls',
+                    'video_codec' => 'libx264',
                     'variants' => [
                         [
-                            'video_codec' => 'libx264',
                             'width' => 1920,
                             'height' => 1080,
                             'crf' => 23,
@@ -35,7 +38,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx264',
                             'width' => 1280,
                             'height' => 720,
                             'crf' => 23,
@@ -48,7 +50,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx264',
                             'width' => 854,
                             'height' => 480,
                             'crf' => 25,
@@ -80,9 +81,9 @@ return [
             'outputs' => [
                 [
                     'format' => 'hls',
+                    'video_codec' => 'libx265',
                     'variants' => [
                         [
-                            'video_codec' => 'libx265',
                             'width' => 3840,
                             'height' => 2160,
                             'crf' => 22,
@@ -95,7 +96,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx265',
                             'width' => 1920,
                             'height' => 1080,
                             'crf' => 23,
@@ -108,7 +108,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx265',
                             'width' => 1280,
                             'height' => 720,
                             'crf' => 25,
@@ -141,9 +140,9 @@ return [
             'outputs' => [
                 [
                     'format' => 'dash',
+                    'video_codec' => 'libsvtav1',
                     'variants' => [
                         [
-                            'video_codec' => 'libsvtav1',
                             'width' => 1920,
                             'height' => 1080,
                             'svtav1_crf' => 30,
@@ -154,7 +153,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libsvtav1',
                             'width' => 1280,
                             'height' => 720,
                             'svtav1_crf' => 32,
@@ -184,9 +182,9 @@ return [
             'outputs' => [
                 [
                     'format' => 'hls',
+                    'video_codec' => 'libx264',
                     'variants' => [
                         [
-                            'video_codec' => 'libx264',
                             'width' => 1280,
                             'height' => 720,
                             'crf' => 23,
@@ -199,7 +197,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx264',
                             'width' => 854,
                             'height' => 480,
                             'crf' => 25,
@@ -212,7 +209,6 @@ return [
                             'gop_size' => 60,
                         ],
                         [
-                            'video_codec' => 'libx264',
                             'width' => 640,
                             'height' => 360,
                             'crf' => 28,

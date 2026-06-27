@@ -19,22 +19,10 @@ class TemplateFormatRule implements DataAwareRule, ValidationRule
         $codecs = collect(config('ffmpeg.codecs'))->keyBy('codec');
         $parameters = config('ffmpeg.parameters');
 
-        $videoCodecKey = $value['video_codec'] ?? null;
+        // The codec is set on the output; an invalid/missing one is reported by TemplateVideoCodecRule.
+        $videoCodecKey = $this->outputVideoCodec($attribute);
 
         if (! $videoCodecKey || ! $codecs->has($videoCodecKey)) {
-            $fail("The video codec '{$videoCodecKey}' is invalid.");
-
-            return;
-        }
-
-        $videoCodec = $codecs->get($videoCodecKey);
-        if ($videoCodec['type'] !== 'video') {
-            $fail("The codec '{$videoCodecKey}' is not a video codec.");
-
-            return;
-        }
-
-        if (! $this->assertCodecProtocol($attribute, $videoCodec, $fail)) {
             return;
         }
 

@@ -29,8 +29,22 @@ const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Templa
 const templateName = ref('')
 const keepProcessedFiles = ref(true)
 const outputs = ref<TemplateOutput[]>([
-  { format: 'hls' as OutputFormat, variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
+  { format: 'hls' as OutputFormat, videoCodec: '', variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
 ])
+
+// Video codecs available for an output's format (the codec is per output, shared by its variants).
+const videoCodecsFor = (format?: string) => {
+  const codecs = config.value?.codecs.filter(c => c.type === 'video') ?? []
+  if (!format || !config.value?.formats) return codecs
+
+  const formatConfig = config.value.formats[format]
+  if (!formatConfig) return codecs
+
+  return codecs.filter(c =>
+    formatConfig.protocols.length === 0 ||
+    (c.protocols && c.protocols.some((p: string) => formatConfig.protocols.includes(p)))
+  )
+}
 const loading = ref(false)
 const saving = ref(false)
 
@@ -49,6 +63,7 @@ const addOutput = () => {
   const nextFormat = availableFormats.value.find(f => !usedFormats.includes(f.value as OutputFormat))
   outputs.value.push({
     format: (nextFormat?.value ?? 'hls') as OutputFormat,
+    videoCodec: '',
     variants: [{}],
     audio: { channels: [{ channels: '', audioBitrate: '' }] },
   })
@@ -124,8 +139,12 @@ const saveTemplate = async () => {
   }
 
   for (const [index, output] of outputs.value.entries()) {
-    if (!output.variants || output.variants.length === 0 || !output.variants[0]?.videoCodec) {
-      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please configure at least one variant with a video codec`)
+    if (!output.videoCodec) {
+      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please select a video codec`)
+      return
+    }
+    if (!output.variants || output.variants.length === 0 || !output.variants[0]?.width) {
+      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please configure at least one variant`)
       return
     }
   }
@@ -290,6 +309,24 @@ onMounted(async () => {
                 </Select>
               </div>
 
+              <!-- Video Codec (per output: variants share it) -->
+              <div class="space-y-2">
+                <Label>Video Codec *</Label>
+                <Select v-model="output.videoCodec" class="max-w-xs">
+                  <SelectTrigger class="max-w-xs">
+                    <SelectValue placeholder="Select video codec" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem v-for="codec in videoCodecsFor(output.format)" :key="codec.codec" :value="codec.codec">
+                      <div>
+                        <div class="font-medium">{{ codec.label }}</div>
+                        <div class="text-xs text-muted-foreground">{{ codec.description }}</div>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               <Separator />
 
               <!-- Quality Variants -->
@@ -313,7 +350,7 @@ onMounted(async () => {
                     @update:model-value="output.variants[variantIndex] = $event"
                     :config="config"
                     :index="variantIndex"
-                    :format="output.format"
+                    :video-codec="output.videoCodec"
                     @remove="removeVariant(outputIndex, variantIndex)"
                   />
                 </div>

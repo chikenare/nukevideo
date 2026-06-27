@@ -31,6 +31,16 @@ trait ValidatesCodecProtocol
         return data_get($this->data, "query.outputs.{$matches[1]}.format");
     }
 
+    /** The video codec is set on the output; variants inherit it. */
+    protected function outputVideoCodec(string $attribute): ?string
+    {
+        if (! preg_match('/outputs\.(\d+)\b/', $attribute, $matches)) {
+            return null;
+        }
+
+        return data_get($this->data, "query.outputs.{$matches[1]}.video_codec");
+    }
+
     /** Formats without a protocol restriction accept any codec. */
     protected function assertCodecProtocol(string $attribute, array $codec, Closure $fail): bool
     {

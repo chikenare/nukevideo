@@ -14,6 +14,7 @@ export type Template = {
 
 export type TemplateOutput = {
   format: OutputFormat
+  videoCodec: string
   variants: TemplateVariant[]
   audio: AudioConfig
 }
