@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Jobs\Concerns\CompletesVideo;
+use App\Jobs\Concerns\SyncsViaAwsCli;
 use App\Models\Stream;
 use App\Models\Video;
 use Illuminate\Bus\Queueable;
@@ -18,7 +19,7 @@ use Throwable;
 
 class ConcatenateVideoChunksJob implements ShouldQueue
 {
-    use CompletesVideo, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use CompletesVideo, Dispatchable, InteractsWithQueue, Queueable, SerializesModels, SyncsViaAwsCli;
 
     public $tries = 1;
 
@@ -114,8 +115,10 @@ class ConcatenateVideoChunksJob implements ShouldQueue
     }
 
     /**
-     * Download each chunk to local scratch in order; the concat demuxer reads local files,
-     * not store URLs.
+     * Pull every chunk for this stream off the mirror into local scratch with one parallel,
+     * self-retrying `aws s3 sync` of the stream's chunk prefix; the concat demuxer reads local
+     * files, not store URLs. Download order is irrelevant — the concat manifest is built from the
+     * already-ordered `$chunkKeys`.
      *
      * @param  list<string>  $chunkKeys  store-relative keys, already ordered
      * @return list<string> absolute local paths, same order
@@ -126,37 +129,25 @@ class ConcatenateVideoChunksJob implements ShouldQueue
             mkdir($stageDir, 0755, true);
         }
 
-        $store = Storage::disk('chunks');
-        $localPaths = [];
-        $lastBeat = microtime(true);
+        // All keys share the stream's chunk prefix (`{ulid}/chunks/{streamUlid}/`).
+        $prefix = dirname($chunkKeys[0]).'/';
 
+        $this->awsS3Sync(
+            'chunks',
+            $this->awsS3Uri('chunks', $prefix),
+            $stageDir,
+            $video,
+            $this->timeout - 60,
+            ['--exclude', '*', '--include', 'chunk_*.mp4'],
+        );
+
+        $localPaths = [];
         foreach ($chunkKeys as $key) {
             $local = $stageDir.'/'.basename($key);
-
-            $in = $store->readStream($key);
-            if ($in === null) {
-                throw new RuntimeException("Failed to read chunk from store: {$key}");
+            if (! is_file($local)) {
+                throw new RuntimeException("Chunk missing after sync: {$key}");
             }
-            $out = fopen($local, 'w');
-            try {
-                if ($out === false || stream_copy_to_stream($in, $out) === false) {
-                    throw new RuntimeException("Failed to stage chunk locally: {$key}");
-                }
-            } finally {
-                if (is_resource($in)) {
-                    fclose($in);
-                }
-                if (is_resource($out)) {
-                    fclose($out);
-                }
-            }
-
             $localPaths[] = $local;
-
-            if ((microtime(true) - $lastBeat) >= 15) {
-                $video->heartbeat();
-                $lastBeat = microtime(true);
-            }
         }
 
         return $localPaths;
