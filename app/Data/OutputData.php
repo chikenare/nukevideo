@@ -9,7 +9,8 @@ class OutputData extends Data
 {
     public function __construct(
         public string $ulid,
-        public string $format,
+        /** @var list<string> */
+        public array $formats,
         public string $status,
         public int $progress,
         /** @var StreamData[] */
@@ -21,7 +22,7 @@ class OutputData extends Data
     {
         return new self(
             ulid: $output->ulid,
-            format: $output->format->value,
+            formats: $output->formats(),
             status: $output->status->value,
             progress: $output->progress(),
             streams: StreamData::collect($output->streams)->all(),

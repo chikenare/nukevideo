@@ -12,6 +12,7 @@ class Template extends Model
     protected $fillable = [
         'name',
         'query',
+        'keep_processed_files',
         'user_id',
         'project_id',
     ];
@@ -20,6 +21,7 @@ class Template extends Model
     {
         return [
             'query' => 'json',
+            'keep_processed_files' => 'boolean',
         ];
     }
 

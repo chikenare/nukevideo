@@ -18,6 +18,7 @@ class UpdateTemplateRequest extends FormRequest
     {
         return [
             'name' => 'sometimes|string|max:255',
+            'keep_processed_files' => 'sometimes|boolean',
             'query.outputs' => 'sometimes|array|min:1',
             'query.outputs.*.format' => 'required|string|in:hls,dash',
             'query.outputs.*.variants' => 'required|array|min:1',

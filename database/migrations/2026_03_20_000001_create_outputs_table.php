@@ -1,6 +1,5 @@
 <?php
 
-use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
@@ -13,11 +12,12 @@ return new class extends Migration
      */
     public function up(): void
     {
+        // An output is one CMAF package (a codec/rendition group); the streaming formats it can
+        // serve (HLS/DASH) are derived from its streams' codecs, not stored. See Output::formats().
         Schema::create('outputs', function (Blueprint $table) {
             $table->id();
             $table->ulid()->unique();
             $table->foreignId('video_id')->constrained()->cascadeOnDelete();
-            $table->enum('format', array_column(OutputFormat::cases(), 'value'));
             $table->string('status', 50)->default(VideoStatus::PENDING->value);
             $table->timestamps();
         });

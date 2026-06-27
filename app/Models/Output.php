@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,7 +13,6 @@ class Output extends Model
 {
     protected $fillable = [
         'video_id',
-        'format',
         'status',
     ];
 
@@ -30,7 +28,6 @@ class Output extends Model
     protected function casts(): array
     {
         return [
-            'format' => OutputFormat::class,
             'status' => VideoStatus::class,
         ];
     }
@@ -43,6 +40,45 @@ class Output extends Model
     public function streams(): BelongsToMany
     {
         return $this->belongsToMany(Stream::class);
+    }
+
+    /** S3 prefix that holds this output's packaged CMAF tree (segments + manifests). */
+    public function packagePrefix(): string
+    {
+        return "{$this->video->ulid}/{$this->ulid}";
+    }
+
+    /**
+     * Streaming formats this output can serve, derived from its streams' codecs: the intersection
+     * of each codec's supported protocols (config/ffmpeg.php). One CMAF package emits a manifest
+     * per format over shared segments, so e.g. H.264+AAC yields both HLS and DASH, Opus only DASH.
+     *
+     * @return list<string>
+     */
+    public function formats(): array
+    {
+        $codecs = collect(config('ffmpeg.codecs'));
+
+        $protocolSets = $this->streams
+            ->filter(fn (Stream $stream) => in_array($stream->type, ['video', 'audio'], true))
+            ->map(fn (Stream $stream) => $codecs->firstWhere('codec', $this->streamCodec($stream))['protocols'] ?? [])
+            ->filter()
+            ->values();
+
+        if ($protocolSets->isEmpty()) {
+            return [];
+        }
+
+        return array_values(array_intersect(...$protocolSets->all()));
+    }
+
+    private function streamCodec(Stream $stream): ?string
+    {
+        return match ($stream->type) {
+            'video' => data_get($stream->input_params, 'video_codec'),
+            'audio' => data_get($stream->input_params, 'audio_codec', 'aac'),
+            default => null,
+        };
     }
 
     /**

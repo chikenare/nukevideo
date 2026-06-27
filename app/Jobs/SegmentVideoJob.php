@@ -280,15 +280,22 @@ class SegmentVideoJob implements ShouldQueue
         }
 
         // Only primitives in the closure — Eloquent models are not serializable there.
-        $streamIds = $streams->pluck('id')->all();
+        $videoId = $video->id;
 
         Bus::batch($jobs)
             ->onQueue($queue)
             ->name("encode video {$video->id}")
-            ->then(function () use ($streamIds, $queue) {
-                foreach ($streamIds as $id) {
-                    ConcatenateVideoChunksJob::dispatch($id)->onQueue($queue);
+            ->then(function () use ($videoId) {
+                // All chunk windows encoded: mark the encode done and let the readiness check fire
+                // packaging once the sidecar tracks are staged too.
+                $video = Video::find($videoId);
+
+                if (! $video || ! in_array($video->status, Video::ACTIVE_STATUSES, true)) {
+                    return;
                 }
+
+                $video->update(['status' => VideoStatus::UPLOADING->value]);
+                PackageVideoJob::dispatchIfReady($video);
             })
             ->dispatch();
     }

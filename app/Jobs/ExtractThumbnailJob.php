@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Video;
 use App\Services\ThumbnailService;
 use Exception;
@@ -18,7 +17,7 @@ use Throwable;
 
 class ExtractThumbnailJob implements ShouldQueue
 {
-    use Batchable, CompletesVideo, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     private const POSITION_PERCENT = 30;
 
@@ -49,9 +48,6 @@ class ExtractThumbnailJob implements ShouldQueue
             app(ThumbnailService::class)->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
 
             $this->publish($video->stagingKey('thumbnail.jpg'), $thumbnailLocalPath);
-
-            // Best-effort: if every stream is already staged, ride the same sync.
-            $this->dispatchSyncIfReady($video);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }

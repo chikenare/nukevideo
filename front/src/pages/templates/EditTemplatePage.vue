@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
 import Spinner from '@/components/ui/spinner/Spinner.vue'
 import VariantForm from './components/VariantForm.vue'
 import AudioChannelForm from './components/AudioChannelForm.vue'
@@ -26,6 +27,7 @@ const isEdit = computed(() => !!route.params.id)
 const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Template')
 
 const templateName = ref('')
+const keepProcessedFiles = ref(true)
 const outputs = ref<TemplateOutput[]>([
   { format: 'hls' as OutputFormat, variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
 ])
@@ -103,6 +105,7 @@ const loadTemplate = async () => {
   try {
     const template: Template = await TemplateService.show(route.params.id as string)
     templateName.value = template.name
+    keepProcessedFiles.value = template.keepProcessedFiles ?? true
 
     if (template.query.outputs && template.query.outputs.length > 0) {
       outputs.value = template.query.outputs
@@ -138,6 +141,7 @@ const saveTemplate = async () => {
   try {
     const data: CreateTemplateDto | UpdateTemplateDto = {
       name: templateName.value,
+      keepProcessedFiles: keepProcessedFiles.value,
       commands: [],
       query: {
         outputs: outputs.value,
@@ -221,6 +225,21 @@ onMounted(async () => {
               placeholder="e.g., High Quality Web, Mobile Optimized"
               class="max-w-sm"
             />
+          </div>
+
+          <div class="flex items-start gap-3 pt-4">
+            <Switch
+              id="keep-processed-files"
+              v-model="keepProcessedFiles"
+              @update:checked="keepProcessedFiles = $event"
+            />
+            <div class="space-y-0.5">
+              <Label for="keep-processed-files">Keep processed files</Label>
+              <p class="text-sm text-muted-foreground">
+                Retain the encoded video/audio renditions after packaging. Turn off to keep only the
+                packaged stream and save storage.
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>

@@ -4,6 +4,7 @@ import type { OutputFormat } from './Output'
 export type Template = {
   ulid: string
   name: string
+  keepProcessedFiles: boolean
   query: {
     outputs: TemplateOutput[]
   }

@@ -75,7 +75,7 @@ class EncodeSidecarTracksJob implements ShouldQueue
             $this->encodeAndUpload($video, $pending);
         }
 
-        $this->dispatchSyncIfReady($video);
+        PackageVideoJob::dispatchIfReady($video);
     }
 
     /**

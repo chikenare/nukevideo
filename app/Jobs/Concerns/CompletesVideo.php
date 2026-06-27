@@ -4,46 +4,14 @@ namespace App\Jobs\Concerns;
 
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
-use App\Jobs\SyncFinalsJob;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
-
 trait CompletesVideo
 {
-    private function dispatchSyncIfReady(Video $video): void
-    {
-        $streams = $video->streams()->where('type', '!=', 'original')->get();
-
-        $allStaged = $streams->isNotEmpty() && $streams->every(
-            fn (Stream $s) => Storage::disk('chunks')->exists($s->stagingPath())
-        );
-
-        if ($allStaged) {
-            SyncFinalsJob::dispatch($video->id)->onQueue('video-processing');
-        }
-    }
-
-    private function markOutputCompletedIfReady(Stream $stream): void
-    {
-        foreach ($stream->outputs()->with('streams')->get() as $output) {
-            if (in_array($output->status->value, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
-                continue;
-            }
-
-            $allReady = $output->streams->every(
-                fn (Stream $s) => Storage::disk('s3')->exists($s->path)
-            );
-
-            if ($allReady) {
-                $output->update(['status' => VideoStatus::COMPLETED->value]);
-            }
-        }
-    }
-
     private function markOutputsFailedForStream(Stream $stream): void
     {
         foreach ($stream->outputs as $output) {
@@ -102,7 +70,7 @@ trait CompletesVideo
             $fresh = $video->fresh();
             $event = $fresh->status === VideoStatus::COMPLETED->value ? 'video.completed' : 'video.error';
             WebhookDispatcher::forVideo($event, $fresh);
-            CleanupVideoResourcesJob::dispatch($video->ulid);
+            CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('video-processing');
         }
     }
 }

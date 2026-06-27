@@ -2,7 +2,6 @@
 
 namespace App\Jobs;
 
-use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Video;
 use App\Services\ThumbnailService;
 use Exception;
@@ -20,7 +19,7 @@ use Throwable;
  */
 class GenerateVideoStoryboard implements ShouldQueue
 {
-    use Batchable, CompletesVideo, Queueable;
+    use Batchable, Queueable;
 
     /** Seconds between thumbnails (also the VTT cue length). */
     private const THUMBNAIL_INTERVAL = 10;
@@ -78,9 +77,6 @@ class GenerateVideoStoryboard implements ShouldQueue
             file_put_contents("{$tmpDir}/storyboard.vtt", $vtt);
 
             $this->uploadArtifacts($video, $spriteCount);
-
-            // Best-effort: if every stream is already staged, ride the same sync.
-            $this->dispatchSyncIfReady($video);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }

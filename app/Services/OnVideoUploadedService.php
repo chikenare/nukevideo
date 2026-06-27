@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\DTOs\UploadMeta;
-use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\User;
@@ -206,8 +205,7 @@ class OnVideoUploadedService
         $this->audioStreamCache = [];
 
         foreach ($outputs as $outputConfig) {
-            $format = OutputFormat::from($outputConfig['format']);
-            $this->createRenditionOutput($video, $streamCollection, $outputConfig, $format);
+            $this->createRenditionOutput($video, $streamCollection, $outputConfig);
         }
 
         $this->createSubtitleStreams($video, $streamCollection->all());
@@ -217,9 +215,8 @@ class OnVideoUploadedService
         Video $video,
         StreamCollection $streamCollection,
         array $outputConfig,
-        OutputFormat $format,
     ): void {
-        $output = $video->outputs()->create(['format' => $format]);
+        $output = $video->outputs()->create();
         $sourceVideo = $streamCollection->videos()->first();
 
         $streamIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);

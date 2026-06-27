@@ -17,6 +17,7 @@ class TemplateResource extends JsonResource
             'ulid' => $this->ulid,
             'name' => $this->name,
             'query' => $this->query,
+            'keepProcessedFiles' => $this->keep_processed_files,
             'commands' => $this->buildCommands(),
             'createdAt' => $this->created_at,
             'updatedAt' => $this->updated_at,

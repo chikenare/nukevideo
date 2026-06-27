@@ -27,7 +27,7 @@ class VodController extends Controller
     {
         $validated = $request->validated();
 
-        $output = Output::with('video')
+        $output = Output::with('video', 'streams')
             ->whereHas('video', function ($query) use ($request) {
                 $query->where('user_id', $request->user()->id)
                     ->where('status', VideoStatus::COMPLETED->value);
@@ -82,7 +82,7 @@ class VodController extends Controller
         string $sessionId,
         string $videoUlid,
     ): VodOutputData {
-        $format = $output->format->value;
+        $format = $output->formats()[0] ?? 'hls';
         $manifest = self::FORMAT_MANIFEST[$format];
 
         $resourceId = $output->ulid;
