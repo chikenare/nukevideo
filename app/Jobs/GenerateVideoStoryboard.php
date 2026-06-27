@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Video;
 use App\Services\ThumbnailService;
 use Exception;
@@ -19,7 +20,7 @@ use Throwable;
  */
 class GenerateVideoStoryboard implements ShouldQueue
 {
-    use Batchable, Queueable;
+    use Batchable, CompletesVideo, Queueable;
 
     /** Seconds between thumbnails (also the VTT cue length). */
     private const THUMBNAIL_INTERVAL = 10;
@@ -77,6 +78,9 @@ class GenerateVideoStoryboard implements ShouldQueue
             file_put_contents("{$tmpDir}/storyboard.vtt", $vtt);
 
             $this->uploadArtifacts($video, $spriteCount);
+
+            // Best-effort: if every stream is already staged, ride the same sync.
+            $this->dispatchSyncIfReady($video);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }
@@ -153,15 +157,14 @@ class GenerateVideoStoryboard implements ShouldQueue
         }
 
         $tmp = Storage::disk('tmp');
-        $s3 = Storage::disk('s3');
+        $mirror = Storage::disk('chunks');
 
         foreach ($names as $name) {
-            $key = "{$video->ulid}/{$name}";
-            $localPath = $tmp->path($key);
+            $localPath = $tmp->path("{$video->ulid}/{$name}");
 
             $handle = fopen($localPath, 'r');
             try {
-                $s3->writeStream($key, $handle);
+                $mirror->writeStream($video->stagingKey($name), $handle);
             } finally {
                 if (is_resource($handle)) {
                     fclose($handle);

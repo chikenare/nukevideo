@@ -59,6 +59,11 @@ class Video extends Model
         $this->forceFill(['last_heartbeat_at' => now()])->saveQuietly();
     }
 
+    public function stagingKey(string $name): string
+    {
+        return "{$this->ulid}/final/{$name}";
+    }
+
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);

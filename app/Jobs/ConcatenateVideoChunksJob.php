@@ -38,10 +38,10 @@ class ConcatenateVideoChunksJob implements ShouldQueue
 
         $video = $stream->video;
 
-        // Idempotent: final file already in S3. Still settle in case this was the last to land.
-        if (Storage::disk('s3')->exists($stream->path)) {
-            $this->markOutputCompletedIfReady($stream);
-            $this->finalizeVideoIfReady($video);
+        // Idempotent: rendition already staged on the mirror. Still re-check the barrier in case
+        // this was the last stream to land.
+        if (Storage::disk('chunks')->exists($stream->stagingPath())) {
+            $this->dispatchSyncIfReady($video);
 
             return;
         }
@@ -50,8 +50,7 @@ class ConcatenateVideoChunksJob implements ShouldQueue
 
         $this->concatVideo($stream, $video);
 
-        $this->markOutputCompletedIfReady($stream);
-        $this->finalizeVideoIfReady($video);
+        $this->dispatchSyncIfReady($video);
     }
 
     private function concatVideo(Stream $stream, Video $video): void
@@ -91,7 +90,7 @@ class ConcatenateVideoChunksJob implements ShouldQueue
                 throw new RuntimeException("Failed to open final rendition for upload: {$finalLocal}");
             }
             try {
-                $uploaded = Storage::disk('s3')->writeStream($stream->path, $handle);
+                $uploaded = Storage::disk('chunks')->writeStream($stream->stagingPath(), $handle);
             } finally {
                 if (is_resource($handle)) {
                     fclose($handle);
@@ -99,7 +98,7 @@ class ConcatenateVideoChunksJob implements ShouldQueue
             }
 
             if (! $uploaded) {
-                throw new RuntimeException("Failed to upload final rendition to S3: {$stream->path}");
+                throw new RuntimeException("Failed to stage final rendition on mirror: {$stream->stagingPath()}");
             }
 
             $stream->update(['size' => $size]);

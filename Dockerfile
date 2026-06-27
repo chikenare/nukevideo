@@ -1,5 +1,8 @@
 ARG PHP_FPM_IMAGE=serversideup/php:8.5-fpm-nginx
 ARG PHP_FRANKEN_IMAGE=serversideup/php:8.5-frankenphp
+ARG AWSCLI_IMAGE=amazon/aws-cli:2.35.11
+
+FROM ${AWSCLI_IMAGE} AS awscli
 
 FROM alpine:3.20 AS ffmpeg-builder
 
@@ -28,6 +31,9 @@ FROM ${PHP_FPM_IMAGE} AS php-base
 USER root
 
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffmpeg /usr/local/bin/
+
+COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
+RUN ln -sf /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws
 
 ARG USER_ID=1000
 ARG GROUP_ID=1000
@@ -88,6 +94,9 @@ USER root
 # schedule from it, and worker nodes run `php artisan horizon` (with ffmpeg) from
 # the very same image — so it ships both ffprobe and ffmpeg.
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffmpeg /usr/local/bin/
+
+COPY --from=awscli /usr/local/aws-cli /usr/local/aws-cli
+RUN ln -sf /usr/local/aws-cli/v2/current/bin/aws /usr/local/bin/aws
 
 ARG USER_ID=1000
 ARG GROUP_ID=1000

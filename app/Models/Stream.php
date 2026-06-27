@@ -52,6 +52,11 @@ class Stream extends Model
         return $this->belongsTo(Video::class);
     }
 
+    public function stagingPath(): string
+    {
+        return preg_replace('#^([^/]+)/#', '$1/final/', $this->path, 1);
+    }
+
     public function outputs(): BelongsToMany
     {
         return $this->belongsToMany(Output::class);

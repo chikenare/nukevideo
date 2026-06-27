@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Video;
 use App\Services\ThumbnailService;
 use Exception;
@@ -15,13 +16,9 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-/**
- * Extracts the poster frame (30% into the video) and publishes it to S3 at
- * {ulid}/thumbnail.jpg, where VideoController@getAsset serves it.
- */
 class ExtractThumbnailJob implements ShouldQueue
 {
-    use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+    use Batchable, CompletesVideo, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     private const POSITION_PERCENT = 30;
 
@@ -45,14 +42,16 @@ class ExtractThumbnailJob implements ShouldQueue
 
             $sourceUrl = SegmentVideoJob::sourceUrl($this->mirrorPath);
 
-            $thumbnailKey = "{$video->ulid}/thumbnail.jpg";
-            $thumbnailLocalPath = Storage::disk('tmp')->path($thumbnailKey);
+            $thumbnailLocalPath = Storage::disk('tmp')->path("{$video->ulid}/thumbnail.jpg");
 
             $offset = (int) (self::POSITION_PERCENT / 100 * $video->duration);
 
             app(ThumbnailService::class)->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
 
-            $this->publish($thumbnailKey, $thumbnailLocalPath);
+            $this->publish($video->stagingKey('thumbnail.jpg'), $thumbnailLocalPath);
+
+            // Best-effort: if every stream is already staged, ride the same sync.
+            $this->dispatchSyncIfReady($video);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }
@@ -63,7 +62,7 @@ class ExtractThumbnailJob implements ShouldQueue
         $handle = fopen($localPath, 'r');
 
         try {
-            Storage::disk('s3')->writeStream($key, $handle);
+            Storage::disk('chunks')->writeStream($key, $handle);
         } finally {
             if (is_resource($handle)) {
                 fclose($handle);

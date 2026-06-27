@@ -4,20 +4,29 @@ namespace App\Jobs\Concerns;
 
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
-use App\Models\Output;
+use App\Jobs\SyncFinalsJob;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
-/**
- * Shared completion logic for the reduce-phase jobs. Outputs settle independently (COMPLETED
- * when all their streams are in S3, FAILED when a concat permanently fails); the video flips
- * to terminal only once every output has settled, under a row lock so exactly one caller wins.
- */
+
 trait CompletesVideo
 {
+    private function dispatchSyncIfReady(Video $video): void
+    {
+        $streams = $video->streams()->where('type', '!=', 'original')->get();
+
+        $allStaged = $streams->isNotEmpty() && $streams->every(
+            fn (Stream $s) => Storage::disk('chunks')->exists($s->stagingPath())
+        );
+
+        if ($allStaged) {
+            SyncFinalsJob::dispatch($video->id)->onQueue('video-processing');
+        }
+    }
+
     private function markOutputCompletedIfReady(Stream $stream): void
     {
         foreach ($stream->outputs()->with('streams')->get() as $output) {
@@ -87,6 +96,7 @@ trait CompletesVideo
             // Only our own subtrees (the store reuses the default bucket), never the whole prefix.
             Storage::disk('chunks')->deleteDirectory("{$video->ulid}/chunks");
             Storage::disk('chunks')->deleteDirectory("{$video->ulid}/source");
+            Storage::disk('chunks')->deleteDirectory("{$video->ulid}/final");
             $video->outputs->each->clearChunkProgress();
 
             $fresh = $video->fresh();

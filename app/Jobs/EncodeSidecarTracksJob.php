@@ -67,19 +67,15 @@ class EncodeSidecarTracksJob implements ShouldQueue
             return;
         }
 
-        // Idempotent: a prior run already delivered some/all tracks to S3.
-        $pending = $streams->reject(fn ($stream) => Storage::disk('s3')->exists($stream->path))->values();
+        // Idempotent: a prior run already staged some/all tracks on the mirror.
+        $pending = $streams->reject(fn ($stream) => Storage::disk('chunks')->exists($stream->stagingPath()))->values();
 
         if ($pending->isNotEmpty()) {
             $video->heartbeat();
             $this->encodeAndUpload($video, $pending);
         }
 
-        foreach ($streams as $stream) {
-            $this->markOutputCompletedIfReady($stream);
-        }
-
-        $this->finalizeVideoIfReady($video);
+        $this->dispatchSyncIfReady($video);
     }
 
     /**
@@ -137,8 +133,8 @@ class EncodeSidecarTracksJob implements ShouldQueue
 
         $handle = fopen($localPath, 'r');
         try {
-            if ($handle === false || ! Storage::disk('s3')->writeStream($stream->path, $handle)) {
-                throw new RuntimeException("Failed to upload sidecar track to S3: {$stream->path}");
+            if ($handle === false || ! Storage::disk('chunks')->writeStream($stream->stagingPath(), $handle)) {
+                throw new RuntimeException("Failed to stage sidecar track on mirror: {$stream->stagingPath()}");
             }
         } finally {
             if (is_resource($handle)) {
