@@ -20,11 +20,9 @@ class ConcatenateVideoChunksJob implements ShouldQueue
 {
     use CompletesVideo, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $tries = 3;
+    public $tries = 1;
 
-    public $backoff = [30, 120, 300];
-
-    public $timeout = 600;
+    public $timeout = 200;
 
     public function __construct(
         public int $streamId,
