@@ -96,6 +96,12 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
             $video->outputs()->update(['status' => VideoStatus::COMPLETED->value]);
             $this->finalizeVideoIfReady($video);
+
+            // Manifests + VTTs are on S3 now; stitch the subtitles into them in a separate job so a
+            // subtitle hiccup can't fail the packaging that already made the video servable.
+            if ($video->streams->where('type', 'subtitle')->isNotEmpty()) {
+                InjectSubtitlesJob::dispatch($video->id)->onQueue('video-processing');
+            }
         } finally {
             Storage::disk('local')->deleteDirectory($video->gatherDir());
             Storage::disk('local')->deleteDirectory($video->chunkstageDir());
@@ -255,8 +261,9 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Map the output's video/audio streams to their gathered local files. Subtitles are served
-     * separately (sidecar VTT via the subtitles endpoint), not packaged into the CMAF manifest.
+     * Map the output's video/audio streams to their gathered local files. Subtitles aren't packaged
+     * into CMAF (shaka would segment them); {@see ManifestEditor::injectSubtitles} stitches the
+     * sidecar VTTs into the finished manifests instead.
      *
      * @return list<array{path:string,type:string,ulid:string,height:?int}>
      */

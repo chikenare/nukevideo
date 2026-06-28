@@ -22,7 +22,6 @@ class SettingsController extends Controller
     {
         $validated = $request->validate([
             'registration_enabled' => ['sometimes', 'boolean'],
-            'include_subtitles' => ['sometimes', 'boolean'],
         ]);
 
         $settings->fill($validated);

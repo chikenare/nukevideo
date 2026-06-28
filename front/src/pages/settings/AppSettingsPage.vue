@@ -3,9 +3,8 @@ import { ref, onMounted } from 'vue'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
-import { UserPlus, Subtitles, CircleCheck, TriangleAlert } from '@lucide/vue'
+import { UserPlus, CircleCheck, TriangleAlert } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import type { GeneralSettings } from '@/types/Settings'
 import SettingsService from '@/services/SettingsService'
@@ -80,25 +79,6 @@ onMounted(() => {
             v-model="settings.registrationEnabled"
             :disabled="saving === 'registrationEnabled'"
             @update:model-value="(v: boolean) => toggle('registrationEnabled', v)"
-          />
-        </div>
-
-        <Separator />
-
-        <div class="flex items-start gap-4">
-          <div class="rounded-md border p-2 text-muted-foreground">
-            <Subtitles class="h-5 w-5" />
-          </div>
-          <div class="flex-1 space-y-0.5">
-            <Label class="text-sm font-medium">Include Subtitles in Manifests</Label>
-            <p class="text-sm text-muted-foreground">
-              Embed subtitle tracks in HLS/DASH manifests. When enabled, nginx-vod-module fragments subtitles into segments generating thousands of extra requests.
-            </p>
-          </div>
-          <Switch
-            v-model="settings.includeSubtitles"
-            :disabled="saving === 'includeSubtitles'"
-            @update:model-value="(v: boolean) => toggle('includeSubtitles', v)"
           />
         </div>
       </CardContent>

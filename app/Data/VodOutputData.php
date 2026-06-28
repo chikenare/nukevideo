@@ -12,7 +12,6 @@ class VodOutputData extends Data
         /** @var list<string> */
         public array $formats,
         public string $url,
-        public string $subtitlesUrl,
         public string $thumbnailUrl,
         public string $storyboardUrl,
     ) {}
@@ -23,7 +22,6 @@ class VodOutputData extends Data
             ulid: $output->ulid,
             formats: $output->formats(),
             url: $vodUrl,
-            subtitlesUrl: url("api/videos/{$videoUlid}/subtitles"),
             thumbnailUrl: url("api/videos/{$videoUlid}/thumbnail.jpg"),
             storyboardUrl: url("api/videos/{$videoUlid}/storyboard.vtt"),
         );

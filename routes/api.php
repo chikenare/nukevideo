@@ -102,6 +102,5 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
 // VOD
 Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])->middleware('auth:sanctum');
 
-Route::get('videos/{ulid}/subtitles', [VodController::class, 'subtitles']);
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg');

@@ -8,6 +8,7 @@ use App\Models\Video;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -15,7 +16,8 @@ use Illuminate\Support\Facades\Storage;
  * stream is removed or an audio track relabelled — without re-running the packager. Every stream is
  * packaged into a directory named by its ULID ({@see PackagerCommandBuilder}), so each variant is
  * located by that ULID in the manifests (HLS `URI`, DASH `SegmentTemplate@media`). Manifests are KB,
- * so this runs inline. Subtitles are sidecar VTT (served live from the DB) and never appear here.
+ * so this runs inline. Subtitles are sidecar WebVTT (shaka can't pack them un-segmented and they're
+ * only a few KB) so {@see injectSubtitles} stitches them into the manifests post-packaging instead.
  */
 class ManifestEditor
 {
@@ -53,6 +55,7 @@ class ManifestEditor
             if ($height !== null && $cap !== null) {
                 if ($cap === $height) {
                     $disk->delete($path); // dedicated cap for this height is now redundant
+
                     continue;
                 }
                 if ($cap < $height) {
@@ -94,6 +97,52 @@ class ManifestEditor
                 $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
             }
         }
+    }
+
+    /**
+     * Embed the video's sidecar WebVTT subtitles into every manifest on S3 as external text tracks,
+     * so players load them straight from the manifest instead of a side API call. Runs post-packaging
+     * (own job, after the video is COMPLETED and synced), editing the manifests in place beside the
+     * VTTs they reference relatively (`subtitle/{ulid}.vtt`). DASH takes a text AdaptationSet with a
+     * direct BaseURL; HLS needs a one-segment media playlist per track (EXT-X-MEDIA can't point at a
+     * raw VTT) plus a SUBTITLES group tagged onto every variant. Idempotent, so a retry is harmless.
+     */
+    public function injectSubtitles(Video $video): void
+    {
+        $subs = $video->streams->where('type', 'subtitle')->values();
+
+        if ($subs->isEmpty()) {
+            return;
+        }
+
+        $disk = Storage::disk('s3');
+        $manifests = $this->existingManifests($video);
+
+        if (collect($manifests)->contains(fn ($m) => $m['format'] === 'hls')) {
+            foreach ($subs as $sub) {
+                $key = preg_replace('/\.vtt$/', '.m3u8', $sub->path);
+                $disk->put($key, $this->hlsSubtitlePlaylist($video, $sub), ['ContentType' => self::CONTENT_TYPES['hls']]);
+            }
+        }
+
+        foreach ($manifests as $manifest) {
+            ['format' => $format, 'path' => $path] = $manifest;
+            $content = $disk->get($path);
+
+            $edited = $format === 'dash'
+                ? $this->dashAddSubtitles($content, $subs)
+                : $this->hlsAddSubtitles($content, $subs);
+
+            if ($edited !== null && $edited !== $content) {
+                $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+            }
+        }
+    }
+
+    /** A subtitle's VTT path relative to the manifest (strips the video-ulid prefix). */
+    private function subtitleVttUri(Stream $stream): string
+    {
+        return preg_replace('#^[^/]+/#', '', $stream->path, 1);
     }
 
     /**
@@ -203,6 +252,70 @@ class ManifestEditor
         }
 
         return $doc->saveXML();
+    }
+
+    /**
+     * Append a text AdaptationSet per subtitle to the Period, each a single Representation whose
+     * BaseURL is the relative VTT. Idempotent: skips a track whose VTT is already referenced.
+     *
+     * @param  Collection<int,Stream>  $subs
+     */
+    private function dashAddSubtitles(string $xml, Collection $subs): ?string
+    {
+        [$doc, $xpath] = $this->loadMpd($xml);
+
+        if (! $doc) {
+            return null;
+        }
+
+        $period = $xpath->query('//m:Period')->item(0);
+
+        if (! $period instanceof DOMElement) {
+            return null;
+        }
+
+        $changed = false;
+
+        foreach ($subs as $sub) {
+            $uri = $this->subtitleVttUri($sub);
+
+            if ($xpath->query("//m:AdaptationSet[@contentType='text']/m:Representation/m:BaseURL[. = '{$uri}']")->length) {
+                continue;
+            }
+
+            $set = $doc->createElementNS(self::DASH_NS, 'AdaptationSet');
+            $set->setAttribute('contentType', 'text');
+            $set->setAttribute('mimeType', 'text/vtt');
+
+            if ($sub->language) {
+                $set->setAttribute('lang', $sub->language);
+            }
+
+            $role = $doc->createElementNS(self::DASH_NS, 'Role');
+            $role->setAttribute('schemeIdUri', 'urn:mpeg:dash:role:2011');
+            $role->setAttribute('value', 'subtitle');
+            $set->appendChild($role);
+
+            if ($sub->name) {
+                $label = $doc->createElementNS(self::DASH_NS, 'Label');
+                $label->appendChild($doc->createTextNode($sub->name));
+                $set->appendChild($label);
+            }
+
+            $rep = $doc->createElementNS(self::DASH_NS, 'Representation');
+            $rep->setAttribute('id', "text_{$sub->ulid}");
+            $rep->setAttribute('bandwidth', '256');
+
+            $base = $doc->createElementNS(self::DASH_NS, 'BaseURL');
+            $base->appendChild($doc->createTextNode($uri));
+            $rep->appendChild($base);
+            $set->appendChild($rep);
+
+            $period->appendChild($set);
+            $changed = true;
+        }
+
+        return $changed ? $doc->saveXML() : null;
     }
 
     /** @return array{0:?DOMDocument,1:?DOMXPath} */
@@ -323,5 +436,77 @@ class ManifestEditor
         }
 
         return preg_replace_callback('/^#EXT-X-MEDIA:/', fn ($m) => $m[0].$attr.',', $line);
+    }
+
+    /**
+     * Add a `#EXT-X-MEDIA:TYPE=SUBTITLES` line per track (pointing at its generated media playlist)
+     * and tag every variant with `SUBTITLES="subs"`. Idempotent via the TYPE=SUBTITLES guard.
+     *
+     * @param  Collection<int,Stream>  $subs
+     */
+    private function hlsAddSubtitles(string $content, Collection $subs): ?string
+    {
+        if (str_contains($content, 'TYPE=SUBTITLES')) {
+            return null;
+        }
+
+        $media = [];
+
+        foreach ($subs as $sub) {
+            $playlist = preg_replace('/\.vtt$/', '.m3u8', $this->subtitleVttUri($sub));
+            $name = str_replace('"', '', $sub->name ?? $sub->language ?? 'Subtitles');
+
+            $attrs = ['TYPE=SUBTITLES', 'GROUP-ID="subs"', "NAME=\"{$name}\"", 'DEFAULT=NO', 'AUTOSELECT=YES', 'FORCED=NO'];
+
+            if ($sub->language) {
+                $attrs[] = 'LANGUAGE="'.str_replace('"', '', $sub->language).'"';
+            }
+
+            $attrs[] = "URI=\"{$playlist}\"";
+            $media[] = '#EXT-X-MEDIA:'.implode(',', $attrs);
+        }
+
+        $lines = preg_split('/\R/', $content);
+        $out = [];
+        $inserted = false;
+
+        foreach ($lines as $line) {
+            if (str_starts_with($line, '#EXT-X-STREAM-INF')) {
+                if (! $inserted) {
+                    array_push($out, ...$media);
+                    $inserted = true;
+                }
+
+                if (! str_contains($line, 'SUBTITLES=')) {
+                    $line .= ',SUBTITLES="subs"';
+                }
+            }
+
+            $out[] = $line;
+        }
+
+        return $inserted ? implode("\n", $out) : null;
+    }
+
+    /**
+     * A one-segment VOD media playlist wrapping the whole VTT as a single segment spanning the video
+     * duration — the rendition an HLS `#EXT-X-MEDIA:TYPE=SUBTITLES` points at. The segment is the VTT
+     * filename, relative to this playlist (both sit under `{video}/subtitle/`).
+     */
+    private function hlsSubtitlePlaylist(Video $video, Stream $sub): string
+    {
+        $seconds = max((float) $video->duration, 1.0);
+
+        return implode("\n", [
+            '#EXTM3U',
+            '#EXT-X-VERSION:3',
+            '#EXT-X-TARGETDURATION:'.(int) ceil($seconds),
+            '#EXT-X-MEDIA-SEQUENCE:0',
+            '#EXT-X-PLAYLIST-TYPE:VOD',
+            '#EXTINF:'.number_format($seconds, 3, '.', '').',',
+            basename($sub->path),
+            '#EXT-X-ENDLIST',
+            '',
+        ]);
     }
 }

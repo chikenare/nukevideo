@@ -2,17 +2,13 @@
 
 namespace App\Http\Controllers;
 
-use App\Data\SubtitleData;
 use App\Data\VodOutputData;
 use App\Enums\VideoStatus;
 use App\Http\Requests\VodRequest;
 use App\Models\Node;
 use App\Models\Output;
-use App\Models\Video;
 use App\Services\VodService;
 use App\Services\VodSessionService;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class VodController extends Controller
@@ -77,23 +73,5 @@ class VodController extends Controller
         $url = $this->vod->signUrl($url, $ip);
 
         return VodOutputData::fromOutput($output, $url, $videoUlid);
-    }
-
-    public function subtitles(Request $request, string $ulid)
-    {
-        $video = Video::with(['streams' => fn ($q) => $q->where('type', 'subtitle')])
-            ->where('ulid', $ulid)
-            ->firstOrFail();
-
-        $node = Node::findProxyForVideo($video->ulid);
-        $schema = app()->isLocal() ? 'http://' : 'https://';
-
-        $subtitles = $video->streams->map(fn ($s) => new SubtitleData(
-            name: $s->name ?? $s->language ?? 'und',
-            language: $s->language,
-            url: $node ? "{$schema}{$node->hostname}/{$s->path}" : Storage::url($s->path),
-        ));
-
-        return response()->json(['data' => $subtitles]);
     }
 }
