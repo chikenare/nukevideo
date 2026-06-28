@@ -52,6 +52,8 @@ class NodeService
 
         'WEBHOOK_SECRET',
         'VOD_TOKEN_SECRET',
+        'SECURE_TOKEN_EXPIRES_TIME',
+        'SECURE_TOKEN_QUERY_EXPIRES_TIME',
 
         'SENTRY_LARAVEL_DSN',
         'SENTRY_TRACES_SAMPLE_RATE',

@@ -4,26 +4,34 @@ namespace App\Services;
 
 class VodService
 {
-    public function generateVodSignedUrl(
-        string $baseUrl,
-        string $pathId,
-        string $protocol,
-        string $ip
-    ): string {
-        $secretHex = config('node.vod.token_secret');
-        $duration = config('node.vod.token_window');
-        $tokenName = config('node.vod.token_name');
-        $endTime = time() + $duration;
+    public function signUrl(string $url, string $ip): string
+    {
+        $secret = (string) config('node.vod.token_secret');
 
-        $acl = "/{$protocol}/{$pathId}/*";
+        if ($secret === '') {
+            return $url;
+        }
 
-        $authString = "exp={$endTime}~acl={$acl}~ip=$ip";
+        $window = (int) config('node.vod.token_window');
+        $tokenName = (string) config('node.vod.token_name');
 
-        $binSecret = pack('H*', $secretHex);
-        $hmac = hash_hmac('sha256', $authString, $binSecret);
+        $exp = time() + $window;
+        $acl = $this->aclFor($url);
 
-        $tokenValue = "{$authString}~hmac={$hmac}";
+        $authString = "exp={$exp}~acl={$acl}~ip={$ip}";
+        $hmac = hash_hmac('sha256', $authString, pack('H*', $secret));
+        $token = "{$authString}~hmac={$hmac}";
 
-        return "{$baseUrl}?{$tokenName}={$tokenValue}";
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return "{$url}{$separator}{$tokenName}={$token}";
+    }
+
+    private function aclFor(string $url): string
+    {
+        $path = (string) parse_url($url, PHP_URL_PATH); // /{sid}/{videoUlid}/manifest.mpd
+        $dir = substr($path, 0, (int) strrpos($path, '/')); // /{sid}/{videoUlid}
+
+        return "{$dir}/*";
     }
 }

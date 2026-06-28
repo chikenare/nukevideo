@@ -134,6 +134,7 @@ FROM alpine:3.20 AS proxy-builder
 ENV NGINX_VERSION=1.27.4
 ENV NGINX_AWS_AUTH_VERSION=1.1
 ENV NGINX_AKAMAI_TOKEN_VALIDATE_VERSION=1.1
+ENV NGINX_SECURE_TOKEN_VERSION=1.5
 
 RUN apk add --no-cache \
     wget ca-certificates build-base zlib-dev openssl-dev \
@@ -144,7 +145,9 @@ RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -O nginx.tar.g
     wget https://github.com/kaltura/nginx-aws-auth-module/archive/${NGINX_AWS_AUTH_VERSION}.tar.gz -O aws.tar.gz && \
     tar zxf aws.tar.gz && \
     wget https://github.com/kaltura/nginx-akamai-token-validate-module/archive/${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION}.tar.gz -O natvm.tar.gz && \
-    tar zxf natvm.tar.gz
+    tar zxf natvm.tar.gz && \
+    wget https://github.com/kaltura/nginx-secure-token-module/archive/${NGINX_SECURE_TOKEN_VERSION}.tar.gz -O nstm.tar.gz && \
+    tar zxf nstm.tar.gz
 
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" = "amd64" ]; then CC_OPT="-O3 -mpopcnt"; else CC_OPT="-O3"; fi && \
@@ -153,6 +156,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then CC_OPT="-O3 -mpopcnt"; else CC_OPT="-O3
     --prefix=/usr/local/nginx \
     --add-module=../nginx-aws-auth-module-${NGINX_AWS_AUTH_VERSION} \
     --add-module=../nginx-akamai-token-validate-module-${NGINX_AKAMAI_TOKEN_VALIDATE_VERSION} \
+    --add-module=../nginx-secure-token-module-${NGINX_SECURE_TOKEN_VERSION} \
     --conf-path=/usr/local/nginx/conf/nginx.conf \
     --with-file-aio \
     --with-threads \

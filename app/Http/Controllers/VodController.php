@@ -9,6 +9,7 @@ use App\Http\Requests\VodRequest;
 use App\Models\Node;
 use App\Models\Output;
 use App\Models\Video;
+use App\Services\VodService;
 use App\Services\VodSessionService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +17,8 @@ use Illuminate\Support\Str;
 
 class VodController extends Controller
 {
+    public function __construct(private VodService $vod) {}
+
     public function getOutputLink(VodRequest $request, string $ulid)
     {
         $validated = $request->validated();
@@ -54,6 +57,7 @@ class VodController extends Controller
             node: $node,
             sessionId: $sessionId,
             videoUlid: $video->ulid,
+            ip: $request->ip(),
         );
 
         return response()->json(['data' => $link]);
@@ -65,10 +69,12 @@ class VodController extends Controller
         Node $node,
         string $sessionId,
         string $videoUlid,
+        string $ip,
     ): VodOutputData {
         $format = $output->formats()[0] ?? 'hls';
 
         $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format)}";
+        $url = $this->vod->signUrl($url, $ip);
 
         return VodOutputData::fromOutput($output, $url, $videoUlid);
     }
@@ -79,8 +85,6 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        // Subtitles are served as sidecar VTT (not packaged into the CMAF manifest). Route them
-        // through the proxy like the media, so the private bucket is read via aws-auth.
         $node = Node::findProxyForVideo($video->ulid);
         $schema = app()->isLocal() ? 'http://' : 'https://';
 
