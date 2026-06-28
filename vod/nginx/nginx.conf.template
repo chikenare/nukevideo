@@ -11,11 +11,14 @@ http {
     default_type  application/octet-stream;
     resolver 8.8.8.8 1.1.1.1 ipv6=off valid=300s;
 
-    # Tracking session travels as the `?s=` query (not in the path). Players don't propagate it to
-    # segment requests, so only the manifest request carries it.
-    map $arg_s $session_id {
-        '' -;
-        default $arg_s;
+    map $uri $session_id {
+        "~^/(?<sid>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/"  $sid;
+        default                                                                                  -;
+    }
+
+    map $uri $cache_uid {
+        "~^/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/(?<key>.+)$"  /$key;
+        default                                                                                     $uri;
     }
 
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
@@ -30,6 +33,7 @@ http {
     tcp_nopush      on;
     tcp_nodelay     on;
     keepalive_timeout  65;
+    
 
     proxy_cache_path /var/cache/nginx/vod
         levels=1:2
@@ -53,12 +57,8 @@ http {
         access_log /dev/stdout main;
         access_log /dev/stdout bandwidth;
 
-        # Static CMAF passthrough to S3. The path mirrors the S3 key 1:1 (no session segment), so we
-        # just prefix the bucket. Manifests reference segments (v/…, a/…) and the shared subtitle
-        # (../s/…) relatively, and resolve cleanly because nothing rewrites the path hierarchy.
         location / {
-            # Path-style S3 key; aws_auth signs the rewritten $uri that we proxy.
-            rewrite "^/(.*)$" "/${AWS_BUCKET}/$1" break;
+            rewrite "^.*$" "/${AWS_BUCKET}$cache_uid" break;
 
             proxy_pass ${AWS_ENDPOINT};
             proxy_http_version 1.1;
@@ -70,9 +70,8 @@ http {
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;
 
-            # Session-independent ($arg_s excluded): one cached object shared across sessions.
             proxy_cache ${VOD_PROXY_CACHE};
-            proxy_cache_key "$uri|$http_origin";
+            proxy_cache_key "$cache_uid|$http_origin";
             proxy_cache_use_stale error timeout updating;
             proxy_cache_lock on;
             proxy_ignore_headers Cache-Control Expires Set-Cookie;
