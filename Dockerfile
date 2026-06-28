@@ -5,9 +5,6 @@ ARG SHAKA_PACKAGER_VERSION=v3.7.2
 
 FROM ${AWSCLI_IMAGE} AS awscli
 
-# --- Shaka Packager (static CMAF packaging) ---
-# The google/shaka-packager image is Alpine/musl and won't run on the Debian PHP base, so pull the
-# glibc release binary and COPY it in, the same way as ffmpeg.
 FROM alpine:3.20 AS shaka-builder
 
 ARG TARGETARCH
@@ -107,9 +104,6 @@ ENV PHP_OPCACHE_ENABLE=true
 
 USER root
 
-# Single app image for the whole cluster: the main server runs octane/horizon/
-# schedule from it, and worker nodes run `php artisan horizon` (with ffmpeg) from
-# the very same image — so it ships both ffprobe and ffmpeg.
 COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffmpeg /usr/local/bin/
 
 COPY --from=shaka-builder /usr/local/bin/packager /usr/local/bin/packager
@@ -145,9 +139,6 @@ RUN apk add --no-cache \
     wget ca-certificates build-base zlib-dev openssl-dev \
     pcre-dev libxml2-dev libxslt-dev linux-headers libaio-dev
 
-# Static CMAF serving: nginx only proxies S3 (aws-auth) and validates akamai tokens. The vod engine
-# (on-the-fly packaging) and secure-token (token *generation*) modules are no longer needed — the
-# packages are pre-built by shaka and the API mints any tokens.
 RUN wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz -O nginx.tar.gz && \
     tar zxf nginx.tar.gz && \
     wget https://github.com/kaltura/nginx-aws-auth-module/archive/${NGINX_AWS_AUTH_VERSION}.tar.gz -O aws.tar.gz && \
