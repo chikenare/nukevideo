@@ -48,10 +48,6 @@ class Output extends Model
         return "{$this->video->ulid}/{$this->ulid}";
     }
 
-    /**
-     * Public path of this output's master manifest for the given format. The path mirrors the S3 key
-     * 1:1; the tracking session travels as a `?s=` query (added by the caller), not in the path.
-     */
     public function manifestPath(string $format): string
     {
         $file = $format === 'hls' ? 'master.m3u8' : 'manifest.mpd';

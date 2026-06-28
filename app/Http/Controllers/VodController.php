@@ -68,7 +68,7 @@ class VodController extends Controller
     ): VodOutputData {
         $format = $output->formats()[0] ?? 'hls';
 
-        $url = "{$schema}{$node->hostname}/{$output->manifestPath($format)}?s={$sessionId}";
+        $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format)}";
 
         return VodOutputData::fromOutput($output, $url, $videoUlid);
     }
