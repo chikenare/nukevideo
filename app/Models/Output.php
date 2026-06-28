@@ -42,12 +42,12 @@ class Output extends Model
         return $this->belongsToMany(Stream::class);
     }
 
-    /** S3 prefix that holds this output's packaged CMAF tree (segments + manifests). */
     public function packagePrefix(): string
     {
-        return "{$this->video->ulid}/{$this->ulid}";
+        return $this->video->ulid;
     }
 
+    /** Public path of this output's master manifest, mirroring its S3 key (`{videoUlid}/file`). */
     public function manifestPath(string $format): string
     {
         $file = $format === 'hls' ? 'master.m3u8' : 'manifest.mpd';

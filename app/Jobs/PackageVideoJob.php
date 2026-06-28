@@ -213,13 +213,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $outputDir = "{$gatherDir}/{$output->ulid}";
-
-        if (! is_dir($outputDir)) {
-            mkdir($outputDir, 0755, true);
+        if (! is_dir($gatherDir)) {
+            mkdir($gatherDir, 0755, true);
         }
 
-        $this->packageManifests($video, $inputs, $outputDir, $formats);
+        $this->packageManifests($video, $inputs, $gatherDir, $formats);
 
         Log::info('Output packaged', ['video' => $video->id, 'output' => $output->id, 'formats' => $formats]);
     }
