@@ -196,7 +196,7 @@ class ProcessChunkJob implements ShouldQueue
 
     private function chunkKey(Video $video, Stream $stream): string
     {
-        return sprintf('%s/chunks/%s/chunk_%03d.mp4', $video->ulid, $stream->ulid, $this->chunkIndex);
+        return $video->chunkKey($stream, $this->chunkIndex);
     }
 
     public function failed(Throwable $e): void

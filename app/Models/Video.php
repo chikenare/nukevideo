@@ -59,9 +59,45 @@ class Video extends Model
         $this->forceFill(['last_heartbeat_at' => now()])->saveQuietly();
     }
 
+    /*
+     * Storage layout — the sub-dir names (one source of truth) plus the few keys that are built in
+     * more than one place. One-off keys (e.g. the mirrored source, a rendition) are inlined at their
+     * single call site. Disk selection stays at the call site; these return keys only.
+     */
+
+    /** Sub-dir names used across the internal mirror ('chunks' disk) and local scratch. */
+    public const SOURCE_DIR = 'source';
+
+    public const CHUNKS_DIR = 'chunks';
+
+    public const FINAL_DIR = 'final';
+
+    public const GATHER_DIR = 'gather';
+
+    public const CHUNKSTAGE_DIR = 'chunkstage';
+
+    /** Internal-mirror key of one encoded chunk: `{ulid}/chunks/{streamUlid}/chunk_NNN.mp4` (built in two jobs). */
+    public function chunkKey(Stream $stream, int $index): string
+    {
+        return sprintf('%s/%s/%s/chunk_%03d.mp4', $this->ulid, self::CHUNKS_DIR, $stream->ulid, $index);
+    }
+
+    /** Internal-mirror staging key for a single-pass asset: `{ulid}/final/{name}` (thumbnail/storyboard jobs). */
     public function stagingKey(string $name): string
     {
-        return "{$this->ulid}/final/{$name}";
+        return "{$this->ulid}/".self::FINAL_DIR."/{$name}";
+    }
+
+    /** Local scratch dir (relative) where renditions are concatenated and packaged. */
+    public function gatherDir(): string
+    {
+        return "{$this->ulid}/".self::GATHER_DIR;
+    }
+
+    /** Local scratch dir (relative) where chunks are staged before concat. */
+    public function chunkstageDir(): string
+    {
+        return "{$this->ulid}/".self::CHUNKSTAGE_DIR;
     }
 
     public function user(): BelongsTo

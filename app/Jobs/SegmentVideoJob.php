@@ -105,7 +105,7 @@ class SegmentVideoJob implements ShouldQueue
     private function ensureSourceMirrored(Video $video): string
     {
         $ext = pathinfo($this->originalPath, PATHINFO_EXTENSION) ?: 'mp4';
-        $mirrorPath = "{$video->ulid}/source/original.{$ext}";
+        $mirrorPath = "{$video->ulid}/".Video::SOURCE_DIR."/original.{$ext}";
 
         if (Storage::disk('chunks')->exists($mirrorPath)) {
             return $mirrorPath;
@@ -269,8 +269,7 @@ class SegmentVideoJob implements ShouldQueue
             $uploadJobs = [];
 
             foreach ($streams as $stream) {
-                $chunkKey = sprintf('%s/chunks/%s/chunk_%03d.mp4', $video->ulid, $stream->ulid, $index);
-                $uploadJobs[] = new UploadChunkJob($stream->id, $index, $chunkKey);
+                $uploadJobs[] = new UploadChunkJob($stream->id, $index, $video->chunkKey($stream, $index));
             }
 
             $jobs[] = [

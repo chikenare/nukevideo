@@ -86,7 +86,7 @@ class PruneScratchJob implements ShouldQueue
 
             // Only our own subtrees (the store reuses the default bucket), never the whole prefix.
             $pruned = false;
-            foreach (['chunks', 'source'] as $sub) {
+            foreach ([Video::CHUNKS_DIR, Video::SOURCE_DIR] as $sub) {
                 $pruned = $disk->deleteDirectory("{$name}/{$sub}") || $pruned;
             }
 

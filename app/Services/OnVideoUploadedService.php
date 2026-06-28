@@ -374,7 +374,7 @@ class OnVideoUploadedService
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType, $inputParams);
-        $path = "$video->ulid/$codecType/$ulid.$extension";
+        $path = "{$video->ulid}/{$codecType}/{$ulid}.{$extension}";
 
         [$width, $height] = $this->resolveStreamDimensions($stream, $codecType, $inputParams);
 

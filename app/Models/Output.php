@@ -47,12 +47,33 @@ class Output extends Model
         return $this->video->ulid;
     }
 
+    /** Master manifest filenames — shared with {@see \App\Services\PackagerCommandBuilder} so the
+     *  packager output and the served path can never diverge. */
+    public const HLS_MANIFEST = 'master.m3u8';
+
+    public const DASH_MANIFEST = 'manifest.mpd';
+
+    /**
+     * Manifest filename for a format, optionally capped to a height: `master.m3u8` /
+     * `master.720.m3u8` (HLS) or `manifest.mpd` / `manifest.720.mpd` (DASH).
+     */
+    public static function manifestFile(string $format, ?int $cap = null): string
+    {
+        $name = $format === 'hls' ? self::HLS_MANIFEST : self::DASH_MANIFEST;
+
+        if ($cap === null) {
+            return $name;
+        }
+
+        $dot = strrpos($name, '.');
+
+        return substr($name, 0, $dot).".{$cap}".substr($name, $dot);
+    }
+
     /** Public path of this output's master manifest, mirroring its S3 key (`{videoUlid}/file`). */
     public function manifestPath(string $format): string
     {
-        $file = $format === 'hls' ? 'master.m3u8' : 'manifest.mpd';
-
-        return "{$this->packagePrefix()}/{$file}";
+        return "{$this->packagePrefix()}/".self::manifestFile($format);
     }
 
     /**

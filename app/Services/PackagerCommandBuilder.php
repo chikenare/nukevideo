@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Output;
+
 /**
  * Builds the shaka-packager argv for one output: every rendition becomes a CMAF stream sharing
  * one segment tree, and a manifest is emitted per requested format over those same segments.
@@ -34,11 +36,9 @@ class PackagerCommandBuilder
         $args[] = '--segment_duration';
         $args[] = (string) $this->segmentDuration;
 
-        $suffix = $cap === null ? '' : ".{$cap}";
-
         if (in_array('hls', $formats, true)) {
             $args[] = '--hls_master_playlist_output';
-            $args[] = "{$outputDir}/master{$suffix}.m3u8";
+            $args[] = "{$outputDir}/".Output::manifestFile('hls', $cap);
             $args[] = '--hls_playlist_type';
             $args[] = 'VOD';
         }
@@ -46,7 +46,7 @@ class PackagerCommandBuilder
         if (in_array('dash', $formats, true)) {
             $args[] = '--generate_static_live_mpd';
             $args[] = '--mpd_output';
-            $args[] = "{$outputDir}/manifest{$suffix}.mpd";
+            $args[] = "{$outputDir}/".Output::manifestFile('dash', $cap);
         }
 
         return $args;

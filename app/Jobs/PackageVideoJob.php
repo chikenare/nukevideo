@@ -80,7 +80,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
         $video->heartbeat();
 
-        $gatherDir = Storage::disk('local')->path("{$video->ulid}/gather");
+        $gatherDir = Storage::disk('local')->path($video->gatherDir());
 
         try {
             $this->gatherSidecars($video, $gatherDir);
@@ -97,8 +97,8 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             $video->outputs()->update(['status' => VideoStatus::COMPLETED->value]);
             $this->finalizeVideoIfReady($video);
         } finally {
-            Storage::disk('local')->deleteDirectory("{$video->ulid}/gather");
-            Storage::disk('local')->deleteDirectory("{$video->ulid}/chunkstage");
+            Storage::disk('local')->deleteDirectory($video->gatherDir());
+            Storage::disk('local')->deleteDirectory($video->chunkstageDir());
         }
     }
 
@@ -111,7 +111,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     {
         $this->awsS3Sync(
             'chunks',
-            $this->awsS3Uri('chunks', "{$video->ulid}/final/"),
+            $this->awsS3Uri('chunks', "{$video->ulid}/".Video::FINAL_DIR.'/'),
             $gatherDir,
             $video,
             $this->timeout - 120,
@@ -127,11 +127,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $stageDir = Storage::disk('local')->path("{$video->ulid}/chunkstage");
+        $stageDir = Storage::disk('local')->path($video->chunkstageDir());
 
         $this->awsS3Sync(
             'chunks',
-            $this->awsS3Uri('chunks', "{$video->ulid}/chunks/"),
+            $this->awsS3Uri('chunks', "{$video->ulid}/".Video::CHUNKS_DIR.'/'),
             $stageDir,
             $video,
             $this->timeout - 120,
@@ -322,7 +322,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         }
 
         foreach (['video', 'audio'] as $type) {
-            Storage::disk('local')->deleteDirectory("{$video->ulid}/gather/{$type}");
+            Storage::disk('local')->deleteDirectory($video->gatherDir()."/{$type}");
         }
 
         Log::info('Pruned processed renditions before sync', ['video' => $video->id]);
