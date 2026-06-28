@@ -14,7 +14,8 @@ class UpdateStreamRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => 'nullable|string|max:20',
+            'name' => 'nullable|string|max:64',
+            'language' => 'nullable|string|max:20',
         ];
     }
 }

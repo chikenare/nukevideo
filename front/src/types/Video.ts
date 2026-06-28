@@ -53,6 +53,6 @@ type Stream = {
   createdAt: string | null
 }
 
-type UpdateStreamDto = Pick<Stream, 'name'>
+type UpdateStreamDto = Pick<Stream, 'name'> & Partial<Pick<Stream, 'language'>>
 
 export type { Video, UpdateVideoDto, Stream, UpdateStreamDto, StreamType }

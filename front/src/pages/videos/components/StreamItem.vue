@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
-import type { Stream } from '@/types/Video'
+import type { Stream, UpdateStreamDto } from '@/types/Video'
 import { Edit, MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown } from '@lucide/vue'
 import prettyBytes from 'pretty-bytes'
 import { toast } from 'vue-sonner'
@@ -18,15 +18,22 @@ const emit = defineEmits(['onDeleted', 'onUpdated'])
 const isEditDialogOpen = ref(false)
 const isErrorExpanded = ref(false)
 const editName = ref('')
+const editLanguage = ref('')
+
+// Language is part of the manifest for audio and is the sidecar metadata for subtitles; video has none.
+const canEditLanguage = computed(() => stream.type === 'audio' || stream.type === 'subtitle')
 
 const handleEdit = () => {
   editName.value = stream.name ?? ''
+  editLanguage.value = stream.language ?? ''
   isEditDialogOpen.value = true
 }
 
 const handleUpdate = async () => {
   try {
-    const res = await StreamService.update(stream.ulid, { name: editName.value })
+    const dto: UpdateStreamDto = { name: editName.value }
+    if (canEditLanguage.value) dto.language = editLanguage.value || null
+    const res = await StreamService.update(stream.ulid, dto)
     toast.success(res.data.message)
     isEditDialogOpen.value = false
     emit('onUpdated')
@@ -164,6 +171,10 @@ const details = computed(() => {
         <div class="grid grid-cols-4 items-center gap-4">
           <Label for="label" class="text-right">Label</Label>
           <Input id="label" v-model="editName" class="col-span-3" @keyup.enter="handleUpdate" />
+        </div>
+        <div v-if="canEditLanguage" class="grid grid-cols-4 items-center gap-4">
+          <Label for="language" class="text-right">Language</Label>
+          <Input id="language" v-model="editLanguage" placeholder="es, en, es-MX…" class="col-span-3" @keyup.enter="handleUpdate" />
         </div>
       </div>
       <DialogFooter>
