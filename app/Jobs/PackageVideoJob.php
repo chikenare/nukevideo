@@ -257,7 +257,8 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Map the output's video/audio streams to their gathered local files.
+     * Map the output's video/audio streams to their gathered local files. Subtitles are served
+     * separately (sidecar VTT via the subtitles endpoint), not packaged into the CMAF manifest.
      *
      * @return list<array{path:string,type:string,ulid:string,height:?int}>
      */

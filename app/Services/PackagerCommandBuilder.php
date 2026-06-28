@@ -58,7 +58,7 @@ class PackagerCommandBuilder
      */
     private function streamDescriptor(array $input, string $outputDir, array $formats): string
     {
-        $segmentDir = "{$outputDir}/cmaf/{$input['ulid']}";
+        $segmentDir = "{$outputDir}/f/{$input['ulid']}";
 
         $parts = [
             "in={$input['path']}",
@@ -68,7 +68,7 @@ class PackagerCommandBuilder
         ];
 
         if (in_array('hls', $formats, true)) {
-            $parts[] = "playlist_name=cmaf/{$input['ulid']}/index.m3u8";
+            $parts[] = "playlist_name=f/{$input['ulid']}/index.m3u8";
 
             if ($input['type'] === 'audio') {
                 $parts[] = 'hls_group_id=audio';

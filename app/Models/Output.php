@@ -49,6 +49,17 @@ class Output extends Model
     }
 
     /**
+     * Public path of this output's master manifest for the given format. The path mirrors the S3 key
+     * 1:1; the tracking session travels as a `?s=` query (added by the caller), not in the path.
+     */
+    public function manifestPath(string $format): string
+    {
+        $file = $format === 'hls' ? 'master.m3u8' : 'manifest.mpd';
+
+        return "{$this->packagePrefix()}/{$file}";
+    }
+
+    /**
      * Streaming formats this output can serve, derived from its streams' codecs: the intersection
      * of each codec's supported protocols (config/ffmpeg.php). One CMAF package emits a manifest
      * per format over shared segments, so e.g. H.264+AAC yields both HLS and DASH, Opus only DASH.

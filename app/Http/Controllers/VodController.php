@@ -9,20 +9,13 @@ use App\Http\Requests\VodRequest;
 use App\Models\Node;
 use App\Models\Output;
 use App\Models\Video;
-use App\Services\VodService;
 use App\Services\VodSessionService;
-use App\Settings\GeneralSettings;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class VodController extends Controller
 {
-    private const FORMAT_MANIFEST = [
-        'hls' => 'master.m3u8',
-        'dash' => 'manifest.mpd',
-    ];
-
     public function getOutputLink(VodRequest $request, string $ulid)
     {
         $validated = $request->validated();
@@ -43,10 +36,7 @@ class VodController extends Controller
             abort(503, 'No node available');
         }
 
-        $service = new VodService;
         $schema = app()->isLocal() ? 'http://' : 'https://';
-        $ip = $validated['ip'] ?? $request->ip() ?? '0.0.0.0';
-
         $sessionId = (string) Str::uuid();
 
         VodSessionService::create(
@@ -60,11 +50,8 @@ class VodController extends Controller
 
         $link = $this->buildLink(
             output: $output,
-            service: $service,
             schema: $schema,
             node: $node,
-            resolution: $validated['resolution'] ?? null,
-            ip: $ip,
             sessionId: $sessionId,
             videoUlid: $video->ulid,
         );
@@ -74,71 +61,16 @@ class VodController extends Controller
 
     private function buildLink(
         Output $output,
-        VodService $service,
         string $schema,
         Node $node,
-        ?int $resolution,
-        string $ip,
         string $sessionId,
         string $videoUlid,
     ): VodOutputData {
         $format = $output->formats()[0] ?? 'hls';
-        $manifest = self::FORMAT_MANIFEST[$format];
 
-        $resourceId = $output->ulid;
-        if ($resolution) {
-            $resourceId .= "_$resolution";
-        }
-
-        $hostname = $node->hostname;
-        $url = $service->generateVodSignedUrl(
-            "$schema$hostname/$format/$resourceId/$sessionId/$manifest",
-            $resourceId,
-            $format,
-            $ip,
-        );
+        $url = "{$schema}{$node->hostname}/{$output->manifestPath($format)}?s={$sessionId}";
 
         return VodOutputData::fromOutput($output, $url, $videoUlid);
-    }
-
-    public function getConfig(Request $request, string $resourceId, string $session)
-    {
-        [$ulid, $resolution] = [...explode('_', $resourceId, 2), null];
-        $resolution = (int) ($resolution ?? 0);
-
-        $includeSubtitles = app(GeneralSettings::class)->include_subtitles;
-
-        $with = ['streams'];
-        if ($includeSubtitles) {
-            $with['video.streams'] = fn ($q) => $q->where('type', 'subtitle');
-        }
-
-        $output = Output::with($with)->where('ulid', $ulid)->firstOrFail();
-
-        $streams = $output->streams;
-
-        if ($includeSubtitles) {
-            $streams = $streams->merge($output->video->streams);
-        }
-
-        $sequences = $streams
-            ->filter(fn ($s) => \in_array($s->type, ['video', 'audio', 'subtitle'])
-                && ($s->type !== 'video' || $resolution === 0 || $s->height <= $resolution))
-            ->map(function ($s) {
-                $entry = [
-                    'label' => $s->name ?? $s->height ?? 'und',
-                    'clips' => [['type' => 'source', 'path' => $s->path]],
-                ];
-
-                if ($s->language) {
-                    $entry['language'] = $s->language;
-                }
-
-                return $entry;
-            })
-            ->values();
-
-        return response()->json(['sequences' => $sequences->take(32)]);
     }
 
     public function subtitles(Request $request, string $ulid)
@@ -147,10 +79,15 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
+        // Subtitles are served as sidecar VTT (not packaged into the CMAF manifest). Route them
+        // through the proxy like the media, so the private bucket is read via aws-auth.
+        $node = Node::findProxyForVideo($video->ulid);
+        $schema = app()->isLocal() ? 'http://' : 'https://';
+
         $subtitles = $video->streams->map(fn ($s) => new SubtitleData(
             name: $s->name ?? $s->language ?? 'und',
             language: $s->language,
-            url: Storage::url($s->path),
+            url: $node ? "{$schema}{$node->hostname}/{$s->path}" : Storage::url($s->path),
         ));
 
         return response()->json(['data' => $subtitles]);

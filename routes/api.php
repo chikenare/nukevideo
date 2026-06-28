@@ -100,7 +100,6 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
     ->middleware(VerifyWebhookSignature::class);
 
 // VOD
-Route::get('vod/config/{id}/{session}', [VodController::class, 'getConfig']);
 Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])->middleware('auth:sanctum');
 
 Route::get('videos/{ulid}/subtitles', [VodController::class, 'subtitles']);
