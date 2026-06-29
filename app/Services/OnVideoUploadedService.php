@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\DTOs\UploadMeta;
+use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\User;
@@ -205,7 +206,8 @@ class OnVideoUploadedService
         $this->audioStreamCache = [];
 
         foreach ($outputs as $outputConfig) {
-            $this->createRenditionOutput($video, $streamCollection, $outputConfig);
+            $format = OutputFormat::from($outputConfig['format']);
+            $this->createRenditionOutput($video, $streamCollection, $outputConfig, $format);
         }
 
         $this->createSubtitleStreams($video, $streamCollection->all());
@@ -215,16 +217,12 @@ class OnVideoUploadedService
         Video $video,
         StreamCollection $streamCollection,
         array $outputConfig,
+        OutputFormat $format,
     ): void {
-        $output = $video->outputs()->create();
+        $output = $video->outputs()->create(['format' => $format]);
         $sourceVideo = $streamCollection->videos()->first();
 
-        $streamIds = $this->resolveVideoStreams(
-            $video,
-            $sourceVideo,
-            $outputConfig['variants'] ?? [],
-            $outputConfig['video_codec'] ?? null,
-        );
+        $streamIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);
 
         $audioConfig = $outputConfig['audio'] ?? [];
         $audioIds = $this->getOrCreateAudioStreams($video, $streamCollection, $audioConfig);
@@ -252,15 +250,11 @@ class OnVideoUploadedService
         return $kept;
     }
 
-    private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants, ?string $videoCodec): array
+    private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants): array
     {
         $streamIds = [];
 
         foreach ($this->filterVariants($sourceVideo, $variants) as $variantConfig) {
-            // The codec lives on the output (one codec per ABR ladder); fold it into each variant so
-            // the stream carries it in input_params, exactly like the shared audio params.
-            $variantConfig = array_merge(['video_codec' => $videoCodec], $variantConfig);
-
             $key = $this->streamSignature($variantConfig);
 
             if (! isset($this->videoStreamCache[$key])) {
@@ -324,6 +318,8 @@ class OnVideoUploadedService
 
     private function createSubtitleStreams(Video $video, array $streams): void
     {
+        $usedNames = [];
+
         foreach ($streams as $stream) {
             if ($stream->get('codec_type') !== 'subtitle') {
                 continue;
@@ -339,11 +335,23 @@ class OnVideoUploadedService
                 continue;
             }
 
+            if ($this->isEmptySubtitle($stream)) {
+                Log::info('Skipping empty subtitle stream', [
+                    'video' => $video->id,
+                    'index' => $stream->get('index'),
+                ]);
+
+                continue;
+            }
+
+            $tags = $stream->get('tags') ?? [];
+
             $this->createStream(
                 video: $video,
                 stream: $stream,
                 codecType: 'subtitle',
-                inputParams: null
+                inputParams: null,
+                name: $this->uniqueName($this->streamDisplayName($tags), $usedNames),
             );
         }
     }
@@ -351,6 +359,47 @@ class OnVideoUploadedService
     private function isTextSubtitle(FFStream $stream): bool
     {
         return in_array($stream->get('codec_name'), self::TEXT_SUBTITLE_CODECS, true);
+    }
+
+    /**
+     * A source subtitle track with no cues yields an empty (header-only) VTT that the packager
+     * rejects with PARSER_FAILURE, so drop it at ingestion. Detected from the cue count ffprobe
+     * exposes (MKV carries it as `NUMBER_OF_FRAMES` tags); when no count is available we keep the
+     * track rather than guess it away.
+     */
+    private function isEmptySubtitle(FFStream $stream): bool
+    {
+        $nbFrames = $stream->get('nb_frames');
+
+        if (is_numeric($nbFrames)) {
+            return (int) $nbFrames === 0;
+        }
+
+        foreach (($stream->get('tags') ?? []) as $tag => $value) {
+            if (stripos((string) $tag, 'NUMBER_OF_FRAMES') === 0 && is_numeric($value)) {
+                return (int) $value === 0;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Keep each track's display name unique within the video: a repeated name gets a " (n)" suffix
+     * so players (and the HLS subtitle group) don't collide on same-named tracks. Case-insensitive.
+     */
+    private function uniqueName(string $name, array &$used): string
+    {
+        $candidate = $name;
+        $n = 1;
+
+        while (isset($used[mb_strtolower($candidate)])) {
+            $candidate = $name.' ('.(++$n).')';
+        }
+
+        $used[mb_strtolower($candidate)] = true;
+
+        return $candidate;
     }
 
     /** Source titles often already carry the language, so avoid "Inglés (eng) (eng)". */
@@ -371,10 +420,11 @@ class OnVideoUploadedService
         FFStream $stream,
         string $codecType,
         ?array $inputParams = null,
+        ?string $name = null,
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType, $inputParams);
-        $path = "{$video->ulid}/{$codecType}/{$ulid}.{$extension}";
+        $path = "$video->ulid/$codecType/$ulid.$extension";
 
         [$width, $height] = $this->resolveStreamDimensions($stream, $codecType, $inputParams);
 
@@ -399,8 +449,12 @@ class OnVideoUploadedService
                     'source_sample_rate' => $stream->get('sample_rate'),
                     'source_channels' => $stream->get('channels'),
                 ] : []),
+                // Carry the source's forced flag so packaging emits forced_subtitle=1 for it.
+                ...($codecType === 'subtitle' ? [
+                    'forced' => (bool) data_get($stream->get('disposition'), 'forced', 0),
+                ] : []),
             ],
-            'name' => $this->streamDisplayName($tags),
+            'name' => $name ?? $this->streamDisplayName($tags),
             'input_params' => $inputParams,
             'width' => $width,
             'height' => $height,

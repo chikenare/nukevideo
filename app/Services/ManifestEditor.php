@@ -16,8 +16,9 @@ use Illuminate\Support\Facades\Storage;
  * stream is removed or an audio track relabelled — without re-running the packager. Every stream is
  * packaged into a directory named by its ULID ({@see PackagerCommandBuilder}), so each variant is
  * located by that ULID in the manifests (HLS `URI`, DASH `SegmentTemplate@media`). Manifests are KB,
- * so this runs inline. Subtitles are sidecar WebVTT (shaka can't pack them un-segmented and they're
- * only a few KB) so {@see injectSubtitles} stitches them into the manifests post-packaging instead.
+ * so this runs inline. Subtitles are grafted in at package time: DASH gets a packaged single-segment
+ * raw-WebVTT (`text/vtt`) set ({@see importDashSubtitles}); HLS keeps a plain-VTT playlist
+ * ({@see hlsAddSubtitles}) with its own media-playlist structure.
  */
 class ManifestEditor
 {
@@ -100,9 +101,9 @@ class ManifestEditor
     }
 
     /**
-     * Rewrite a subtitle track's display label/language across every manifest that carries it.
-     * The track is located by its relative VTT URI (DASH `BaseURL`, HLS subtitle `EXT-X-MEDIA URI`),
-     * so manifests where the subtitle was never injected are left untouched.
+     * Rewrite a subtitle track's display label/language across every manifest that carries it. The
+     * track is located by its packaged `subtitles/{ulid}/` segment path (DASH `SegmentTemplate@media`,
+     * HLS subtitle `EXT-X-MEDIA URI`), so manifests without that track are left untouched.
      */
     public function relabelSubtitle(Video $video, Stream $stream): void
     {
@@ -126,43 +127,86 @@ class ManifestEditor
     }
 
     /**
-     * Embed the video's sidecar WebVTT subtitles into every manifest on S3 as external text tracks,
-     * so players load them straight from the manifest instead of a side API call. Runs post-packaging
-     * (own job, after the video is COMPLETED and synced), editing the manifests in place beside the
-     * VTTs they reference relatively (`subtitle/{ulid}.vtt`). DASH takes a text AdaptationSet with a
-     * direct BaseURL; HLS needs a one-segment media playlist per track (EXT-X-MEDIA can't point at a
-     * raw VTT) plus a SUBTITLES group tagged onto every variant. Idempotent, so a retry is harmless.
+     * Graft the packager-generated text AdaptationSet(s) from a throwaway subtitles MPD into a real
+     * manifest's `<Period>`. Subtitles are packaged separately as single-segment raw WebVTT
+     * ({@see \App\Services\PackagerCommandBuilder::buildText}) referenced via `SegmentTemplate`, so the
+     * imported set is *fragmented* text that dashjs can play — unlike a raw `<BaseURL>` VTT, which
+     * makes dashjs deref null and crash. Renumbers ids so they don't collide with the video/audio
+     * sets and adds a `<Label>` from
+     * the stream name. Idempotent (skips a track already present). Returns null if nothing changed.
+     *
+     * @param  Collection<int,Stream>  $subs
      */
-    public function injectSubtitles(Video $video): void
+    public function importDashSubtitles(string $masterXml, string $subsXml, Collection $subs): ?string
     {
-        $subs = $video->streams->where('type', 'subtitle')->values();
+        [$doc, $xpath] = $this->loadMpd($masterXml);
+        [$subsDoc, $subsXpath] = $this->loadMpd($subsXml);
 
-        if ($subs->isEmpty()) {
-            return;
+        if (! $doc || ! $subsDoc) {
+            return null;
         }
 
-        $disk = Storage::disk('s3');
-        $manifests = $this->existingManifests($video);
+        $period = $xpath->query('//m:Period')->item(0);
 
-        if (collect($manifests)->contains(fn ($m) => $m['format'] === 'hls')) {
-            foreach ($subs as $sub) {
-                $key = preg_replace('/\.vtt$/', '.m3u8', $sub->path);
-                $disk->put($key, $this->hlsSubtitlePlaylist($video, $sub), ['ContentType' => self::CONTENT_TYPES['hls']]);
+        if (! $period instanceof DOMElement) {
+            return null;
+        }
+
+        $nextSetId = $this->maxNumericId($xpath, '//m:AdaptationSet') + 1;
+        $nextRepId = $this->maxNumericId($xpath, '//m:Representation') + 1;
+        $changed = false;
+
+        foreach ($subsXpath->query("//m:AdaptationSet[@contentType='text']") as $set) {
+            $tpl = $subsXpath->query('.//m:SegmentTemplate', $set)->item(0);
+
+            if (! $tpl instanceof DOMElement || ! preg_match('#subtitles/([^/]+)/#', $tpl->getAttribute('media'), $m)) {
+                continue;
+            }
+
+            $ulid = $m[1];
+
+            // Idempotent: this track's segments are already referenced in the master.
+            if ($xpath->query("//m:SegmentTemplate[contains(@media, 'subtitles/{$ulid}/')]")->length) {
+                continue;
+            }
+
+            $imported = $doc->importNode($set, true);
+
+            if (! $imported instanceof DOMElement) {
+                continue;
+            }
+
+            $imported->setAttribute('id', (string) $nextSetId++);
+
+            foreach (iterator_to_array($imported->getElementsByTagNameNS(self::DASH_NS, 'Representation')) as $rep) {
+                $rep->setAttribute('id', (string) $nextRepId++);
+            }
+
+            if ($name = $subs->firstWhere('ulid', $ulid)?->name) {
+                $label = $doc->createElementNS(self::DASH_NS, 'Label');
+                $label->appendChild($doc->createTextNode($name));
+                $imported->insertBefore($label, $imported->firstChild);
+            }
+
+            $period->appendChild($imported);
+            $changed = true;
+        }
+
+        return $changed ? $doc->saveXML() : null;
+    }
+
+    /** Largest numeric `id` attribute among the nodes matched by `$query`, or -1 if none. */
+    private function maxNumericId(DOMXPath $xpath, string $query): int
+    {
+        $max = -1;
+
+        foreach ($xpath->query($query) as $node) {
+            if ($node instanceof DOMElement && is_numeric($id = $node->getAttribute('id'))) {
+                $max = max($max, (int) $id);
             }
         }
 
-        foreach ($manifests as $manifest) {
-            ['format' => $format, 'path' => $path] = $manifest;
-            $content = $disk->get($path);
-
-            $edited = $format === 'dash'
-                ? $this->dashAddSubtitles($content, $subs)
-                : $this->hlsAddSubtitles($content, $subs);
-
-            if ($edited !== null && $edited !== $content) {
-                $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
-            }
-        }
+        return $max;
     }
 
     /** A subtitle's VTT path relative to the manifest (strips the video-ulid prefix). */
@@ -280,7 +324,7 @@ class ManifestEditor
         return $doc->saveXML();
     }
 
-    /** Set the subtitle's text AdaptationSet `lang` and `<Label>`, found via its VTT BaseURL. Null if absent. */
+    /** Set the subtitle text AdaptationSet's `lang` and `<Label>`, found via its packaged segment path. Null if absent. */
     private function dashRelabelSubtitle(string $xml, Stream $stream): ?string
     {
         [$doc, $xpath] = $this->loadMpd($xml);
@@ -289,14 +333,13 @@ class ManifestEditor
             return null;
         }
 
-        $uri = $this->subtitleVttUri($stream);
-        $base = $xpath->query("//m:AdaptationSet[@contentType='text']/m:Representation/m:BaseURL[. = '{$uri}']")->item(0);
+        $tpl = $xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, 'subtitles/{$stream->ulid}/')]")->item(0);
 
-        if (! $base) {
+        if (! $tpl instanceof DOMElement) {
             return null;
         }
 
-        $set = $base->parentNode->parentNode; // BaseURL -> Representation -> AdaptationSet
+        $set = $tpl->parentNode->parentNode; // SegmentTemplate -> Representation -> AdaptationSet
 
         if (! $set instanceof DOMElement) {
             return null;
@@ -318,70 +361,6 @@ class ManifestEditor
         }
 
         return $doc->saveXML();
-    }
-
-    /**
-     * Append a text AdaptationSet per subtitle to the Period, each a single Representation whose
-     * BaseURL is the relative VTT. Idempotent: skips a track whose VTT is already referenced.
-     *
-     * @param  Collection<int,Stream>  $subs
-     */
-    private function dashAddSubtitles(string $xml, Collection $subs): ?string
-    {
-        [$doc, $xpath] = $this->loadMpd($xml);
-
-        if (! $doc) {
-            return null;
-        }
-
-        $period = $xpath->query('//m:Period')->item(0);
-
-        if (! $period instanceof DOMElement) {
-            return null;
-        }
-
-        $changed = false;
-
-        foreach ($subs as $sub) {
-            $uri = $this->subtitleVttUri($sub);
-
-            if ($xpath->query("//m:AdaptationSet[@contentType='text']/m:Representation/m:BaseURL[. = '{$uri}']")->length) {
-                continue;
-            }
-
-            $set = $doc->createElementNS(self::DASH_NS, 'AdaptationSet');
-            $set->setAttribute('contentType', 'text');
-            $set->setAttribute('mimeType', 'text/vtt');
-
-            if ($sub->language) {
-                $set->setAttribute('lang', $sub->language);
-            }
-
-            $role = $doc->createElementNS(self::DASH_NS, 'Role');
-            $role->setAttribute('schemeIdUri', 'urn:mpeg:dash:role:2011');
-            $role->setAttribute('value', 'subtitle');
-            $set->appendChild($role);
-
-            if ($sub->name) {
-                $label = $doc->createElementNS(self::DASH_NS, 'Label');
-                $label->appendChild($doc->createTextNode($sub->name));
-                $set->appendChild($label);
-            }
-
-            $rep = $doc->createElementNS(self::DASH_NS, 'Representation');
-            $rep->setAttribute('id', "text_{$sub->ulid}");
-            $rep->setAttribute('bandwidth', '256');
-
-            $base = $doc->createElementNS(self::DASH_NS, 'BaseURL');
-            $base->appendChild($doc->createTextNode($uri));
-            $rep->appendChild($base);
-            $set->appendChild($rep);
-
-            $period->appendChild($set);
-            $changed = true;
-        }
-
-        return $changed ? $doc->saveXML() : null;
     }
 
     /** @return array{0:?DOMDocument,1:?DOMXPath} */
@@ -526,12 +505,13 @@ class ManifestEditor
     }
 
     /**
-     * Add a `#EXT-X-MEDIA:TYPE=SUBTITLES` line per track (pointing at its generated media playlist)
-     * and tag every variant with `SUBTITLES="subs"`. Idempotent via the TYPE=SUBTITLES guard.
+     * Add a `#EXT-X-MEDIA:TYPE=SUBTITLES` line per track (pointing at its raw-VTT media playlist
+     * `subtitle/{ulid}.m3u8`) and tag every variant with `SUBTITLES="subs"`. hls.js can't parse fMP4
+     * WebVTT, so HLS keeps the plain-VTT path. Idempotent via the TYPE=SUBTITLES guard.
      *
      * @param  Collection<int,Stream>  $subs
      */
-    private function hlsAddSubtitles(string $content, Collection $subs): ?string
+    public function hlsAddSubtitles(string $content, Collection $subs): ?string
     {
         if (str_contains($content, 'TYPE=SUBTITLES')) {
             return null;
@@ -580,7 +560,7 @@ class ManifestEditor
      * duration — the rendition an HLS `#EXT-X-MEDIA:TYPE=SUBTITLES` points at. The segment is the VTT
      * filename, relative to this playlist (both sit under `{video}/subtitle/`).
      */
-    private function hlsSubtitlePlaylist(Video $video, Stream $sub): string
+    public function hlsSubtitlePlaylist(Video $video, Stream $sub): string
     {
         $seconds = max((float) $video->duration, 1.0);
 

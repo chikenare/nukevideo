@@ -78,4 +78,58 @@ class PackagerCommandBuilder
 
         return implode(',', $parts);
     }
+
+    /**
+     * Build a packager run that turns each subtitle VTT into a single-segment raw WebVTT (`text/vtt`)
+     * track under `subtitles/{ulid}/`, emitting a throwaway DASH manifest (`_subs.mpd`) whose text
+     * AdaptationSet is grafted into the real manifests ({@see ManifestEditor::importDashSubtitles}).
+     * A `$segmentDuration` longer than the video forces a single segment. DASH only — HLS subtitles
+     * use their own plain-VTT media playlists built separately.
+     *
+     * @param  list<array{ulid:string,path:string,language:?string,forced:bool}>  $subs
+     * @return list<string>
+     */
+    public function buildText(array $subs, string $outputDir, int $segmentDuration): array
+    {
+        $args = [$this->bin];
+
+        foreach ($subs as $sub) {
+            $args[] = $this->textDescriptor($sub, $outputDir);
+        }
+
+        $args[] = '--segment_duration';
+        $args[] = (string) $segmentDuration;
+        $args[] = '--generate_static_live_mpd';
+        $args[] = '--mpd_output';
+        $args[] = "{$outputDir}/_subs.mpd";
+
+        return $args;
+    }
+
+    /**
+     * @param  array{ulid:string,path:string,language:?string,forced:bool}  $sub
+     */
+    private function textDescriptor(array $sub, string $outputDir): string
+    {
+        $segmentDir = "{$outputDir}/subtitles/{$sub['ulid']}";
+
+        $parts = [
+            "in={$sub['path']}",
+            'stream=text',
+            "init_segment={$segmentDir}/init.mp4",
+            'segment_template='.$segmentDir.'/$Number$.vtt',
+        ];
+
+        if ($sub['language']) {
+            $parts[] = "lang={$sub['language']}";
+        }
+
+        if ($sub['forced']) {
+            $parts[] = 'forced_subtitle=1';
+        } else {
+            $parts[] = 'dash_roles=subtitle';
+        }
+
+        return implode(',', $parts);
+    }
 }
