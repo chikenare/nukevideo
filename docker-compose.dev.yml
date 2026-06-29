@@ -16,6 +16,7 @@ services:
         aliases:
           - api.nukevideo.localhost
           - app.nukevideo.localhost
+      traefik: {}
   nukevideo-api:
     build:
       context: .
@@ -184,6 +185,10 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-redis.rule=Host(`redis.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-redis.loadbalancer.server.port=5540"
+
+networks:
+  traefik:
+    external: true
 
 volumes:
   mariadb-data:
