@@ -16,7 +16,6 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
@@ -259,8 +258,8 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Map the output's video/audio streams to their gathered local files. Subtitles are handled
-     * separately ({@see packageSubtitles}) — DASH packages them as raw WebVTT, HLS as plain VTT.
+     * Map the output's video/audio streams to their gathered local files. Subtitles aren't attached
+     * to outputs; they're added per video by {@see subtitleInputs}.
      *
      * @return list<array{path:string,type:string,ulid:string,height:?int}>
      */
@@ -284,6 +283,41 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 'type' => $stream->type,
                 'ulid' => $stream->ulid,
                 'height' => $stream->type === 'video' ? (int) $stream->height : null,
+            ];
+        }
+
+        return $inputs;
+    }
+
+    /**
+     * Subtitle packager inputs for the video (shared across outputs). Invalid tracks (bitmap, empty
+     * source) are already dropped at ingestion ({@see \App\Services\OnVideoUploadedService}); here we
+     * additionally skip any VTT that didn't reach the gather tree or carries no cue (`-->`), since a
+     * cue-less VTT makes shaka fail the whole run with PARSER_FAILURE.
+     *
+     * @return list<array{path:string,type:string,ulid:string,height:?int,language:?string,forced:bool,name:?string}>
+     */
+    private function subtitleInputs(Video $video, string $gatherDir): array
+    {
+        $inputs = [];
+
+        foreach ($video->streams->where('type', 'subtitle') as $sub) {
+            $local = $this->localRenditionPath($sub, $gatherDir);
+
+            if (! is_file($local) || ! str_contains((string) file_get_contents($local), '-->')) {
+                Log::warning('Skipping subtitle with missing/cue-less VTT', ['video' => $video->id, 'stream' => $sub->id]);
+
+                continue;
+            }
+
+            $inputs[] = [
+                'path' => $local,
+                'type' => 'subtitle',
+                'ulid' => $sub->ulid,
+                'height' => null,
+                'language' => $sub->language,
+                'forced' => (bool) data_get($sub->meta, 'forced', false),
+                'name' => $sub->name,
             ];
         }
 
@@ -315,136 +349,78 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Embed subtitles into the freshly-packaged manifests in the gather tree, before the sync, so it
-     * all reaches S3 in one pass. DASH packages each VTT as a single-segment raw WebVTT (`text/vtt`)
-     * under `subtitles/{ulid}/` referenced via SegmentTemplate, and grafts its text AdaptationSet in
-     * (a raw `<BaseURL>` VTT crashes dashjs). HLS keeps a plain-VTT media playlist per track.
+     * Package subtitles in a SEPARATE single-segment run (a few KB each — no point segmenting them
+     * like video), then graft their text entries into the already-written DASH/HLS manifests in the
+     * gather tree before the sync. Separate because `--segment_duration` is global: this run uses a
+     * duration longer than the video so each subtitle is one `.vtt`, while the main run keeps small
+     * video segments. Subtitles are non-critical, so a failed run leaves the video servable without
+     * them rather than aborting.
      */
     private function packageSubtitles(Video $video, string $gatherDir, ManifestEditor $manifests): void
     {
-        // Invalid subtitle tracks (bitmap, empty source) are dropped at ingestion
-        // ({@see \App\Services\OnVideoUploadedService}); here we only guard against a VTT that never
-        // landed in the gather tree (an extraction gap), so the packager always gets a real input.
-        $subs = $video->streams->where('type', 'subtitle')
-            ->filter(fn (Stream $sub) => is_file($this->localRenditionPath($sub, $gatherDir)))
-            ->values();
+        $subs = $this->subtitleInputs($video, $gatherDir);
 
-        if ($subs->isEmpty()) {
+        if (empty($subs)) {
             return;
         }
 
-        $formats = $this->manifestFormatsPresent($gatherDir);
-
-        // DASH packages (and thereby validates) each VTT through the packager; only the tracks that
-        // packaged cleanly get embedded — and reused for HLS — so one malformed VTT can't drop the
-        // others. With no DASH manifest there's nothing to validate against, so HLS takes them all.
-        $packaged = in_array('dash', $formats, true)
-            ? $this->packageDashSubtitles($video, $gatherDir, $subs, $manifests)
-            : $subs;
-
-        if ($packaged->isNotEmpty() && in_array('hls', $formats, true)) {
-            $this->packageHlsSubtitles($video, $gatherDir, $packaged, $manifests);
+        $formats = [];
+        if (glob("{$gatherDir}/manifest*.mpd")) {
+            $formats[] = 'dash';
         }
-    }
+        if (glob("{$gatherDir}/master*.m3u8")) {
+            $formats[] = 'hls';
+        }
 
-    /**
-     * Package each subtitle VTT into a single-segment raw WebVTT track and graft its generated text
-     * AdaptationSet (from the throwaway `_subs.mpd`) into every DASH manifest. One packager run per
-     * subtitle: a malformed VTT (`PARSER_FAILURE`) is logged and skipped rather than failing the run
-     * — and the whole video — alongside the good tracks. Returns the tracks that packaged cleanly.
-     *
-     * @param  Collection<int,Stream>  $subs
-     * @return Collection<int,Stream>
-     */
-    private function packageDashSubtitles(Video $video, string $gatherDir, Collection $subs, ManifestEditor $manifests): Collection
-    {
-        // A segment longer than the video yields exactly one segment that spans it.
+        if (empty($formats)) {
+            return;
+        }
+
         $segmentDuration = (int) ceil((float) $video->duration) + 2;
         $builder = new PackagerCommandBuilder(config('packager.bin'), (int) config('packager.segment_duration'));
-        $subsMpd = "{$gatherDir}/_subs.mpd";
-        $packaged = collect();
 
-        foreach ($subs as $sub) {
-            $input = [[
-                'ulid' => $sub->ulid,
-                'path' => $this->localRenditionPath($sub, $gatherDir),
-                'language' => $sub->language,
-                'forced' => (bool) data_get($sub->meta, 'forced', false),
-            ]];
+        $result = Process::timeout($this->timeout - 120)->run(
+            $builder->buildText($subs, $gatherDir, $segmentDuration, $formats),
+            fn () => $this->heartbeat($video),
+        );
 
-            $result = Process::timeout($this->timeout - 120)->run(
-                $builder->buildText($input, $gatherDir, $segmentDuration),
-                fn () => $this->heartbeat($video),
-            );
+        if (! $result->successful()) {
+            Log::warning('Subtitle packaging failed; leaving the video without subtitles', [
+                'video' => $video->id, 'error' => $result->errorOutput(),
+            ]);
 
-            if (! $result->successful()) {
-                Log::warning('Skipping unpackageable subtitle VTT', [
-                    'video' => $video->id, 'stream' => $sub->id, 'error' => $result->errorOutput(),
-                ]);
-                @unlink($subsMpd);
+            return;
+        }
 
-                continue;
-            }
-
-            if (! is_file($subsMpd)) {
-                continue;
-            }
-
+        if (in_array('dash', $formats, true) && is_file($subsMpd = "{$gatherDir}/_subs.mpd")) {
             $subsXml = file_get_contents($subsMpd);
 
             foreach (glob("{$gatherDir}/manifest*.mpd") ?: [] as $mpd) {
                 $original = file_get_contents($mpd);
-                $edited = $manifests->importDashSubtitles($original, $subsXml, $subs);
+                $edited = $manifests->importDashSubtitles($original, $subsXml);
 
                 if ($edited !== null && $edited !== $original) {
                     file_put_contents($mpd, $edited);
                 }
             }
 
-            @unlink($subsMpd); // throwaway: only its AdaptationSet was harvested
-            $packaged->push($sub);
+            @unlink($subsMpd); // throwaway master; the grafted text set references the kept segments
         }
 
-        return $packaged;
-    }
+        if (in_array('hls', $formats, true) && is_file($subsM3u8 = "{$gatherDir}/_subs.m3u8")) {
+            $subsContent = file_get_contents($subsM3u8);
 
-    /**
-     * Write a plain-VTT media playlist per subtitle (beside its VTT under `subtitle/`) and tag the
-     * subtitle group onto every HLS variant.
-     *
-     * @param  Collection<int,Stream>  $subs
-     */
-    private function packageHlsSubtitles(Video $video, string $gatherDir, Collection $subs, ManifestEditor $manifests): void
-    {
-        foreach ($subs as $sub) {
-            $playlist = preg_replace('/\.vtt$/', '.m3u8', $this->localRenditionPath($sub, $gatherDir));
-            file_put_contents($playlist, $manifests->hlsSubtitlePlaylist($video, $sub));
-        }
+            foreach (glob("{$gatherDir}/master*.m3u8") ?: [] as $m3u8) {
+                $original = file_get_contents($m3u8);
+                $edited = $manifests->hlsAddSubtitles($original, $subsContent);
 
-        foreach (glob("{$gatherDir}/master*.m3u8") ?: [] as $m3u8) {
-            $original = file_get_contents($m3u8);
-            $edited = $manifests->hlsAddSubtitles($original, $subs);
-
-            if ($edited !== null && $edited !== $original) {
-                file_put_contents($m3u8, $edited);
+                if ($edited !== null && $edited !== $original) {
+                    file_put_contents($m3u8, $edited);
+                }
             }
+
+            @unlink($subsM3u8);
         }
-    }
-
-    /** Which manifest formats the packager actually emitted into the gather tree. */
-    private function manifestFormatsPresent(string $gatherDir): array
-    {
-        $formats = [];
-
-        if (glob("{$gatherDir}/manifest*.mpd")) {
-            $formats[] = 'dash';
-        }
-
-        if (glob("{$gatherDir}/master*.m3u8")) {
-            $formats[] = 'hls';
-        }
-
-        return $formats;
     }
 
     /**

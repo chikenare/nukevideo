@@ -8,7 +8,6 @@ use App\Models\Video;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -16,9 +15,9 @@ use Illuminate\Support\Facades\Storage;
  * stream is removed or an audio track relabelled — without re-running the packager. Every stream is
  * packaged into a directory named by its ULID ({@see PackagerCommandBuilder}), so each variant is
  * located by that ULID in the manifests (HLS `URI`, DASH `SegmentTemplate@media`). Manifests are KB,
- * so this runs inline. Subtitles are grafted in at package time: DASH gets a packaged single-segment
- * raw-WebVTT (`text/vtt`) set ({@see importDashSubtitles}); HLS keeps a plain-VTT playlist
- * ({@see hlsAddSubtitles}) with its own media-playlist structure.
+ * so this runs inline. Subtitles are packaged single-segment in a separate run and grafted into the
+ * manifests at package time ({@see importDashSubtitles}, {@see hlsAddSubtitles}); this class also
+ * relabels/removes them afterwards.
  */
 class ManifestEditor
 {
@@ -128,16 +127,13 @@ class ManifestEditor
 
     /**
      * Graft the packager-generated text AdaptationSet(s) from a throwaway subtitles MPD into a real
-     * manifest's `<Period>`. Subtitles are packaged separately as single-segment raw WebVTT
-     * ({@see \App\Services\PackagerCommandBuilder::buildText}) referenced via `SegmentTemplate`, so the
-     * imported set is *fragmented* text that dashjs can play — unlike a raw `<BaseURL>` VTT, which
-     * makes dashjs deref null and crash. Renumbers ids so they don't collide with the video/audio
-     * sets and adds a `<Label>` from
-     * the stream name. Idempotent (skips a track already present). Returns null if nothing changed.
-     *
-     * @param  Collection<int,Stream>  $subs
+     * manifest's `<Period>`. Subtitles are packaged in a separate single-segment run
+     * ({@see \App\Services\PackagerCommandBuilder::buildText}), so the imported set is *fragmented*
+     * text (`SegmentTemplate`) that dashjs plays — a raw `<BaseURL>` VTT would make it deref null and
+     * crash. Renumbers ids so they don't collide with the video/audio sets. Idempotent (skips a track
+     * already present). Returns null if nothing changed. Labels come from the DB, not the manifest.
      */
-    public function importDashSubtitles(string $masterXml, string $subsXml, Collection $subs): ?string
+    public function importDashSubtitles(string $masterXml, string $subsXml): ?string
     {
         [$doc, $xpath] = $this->loadMpd($masterXml);
         [$subsDoc, $subsXpath] = $this->loadMpd($subsXml);
@@ -163,10 +159,8 @@ class ManifestEditor
                 continue;
             }
 
-            $ulid = $m[1];
-
             // Idempotent: this track's segments are already referenced in the master.
-            if ($xpath->query("//m:SegmentTemplate[contains(@media, 'subtitles/{$ulid}/')]")->length) {
+            if ($xpath->query("//m:SegmentTemplate[contains(@media, 'subtitles/{$m[1]}/')]")->length) {
                 continue;
             }
 
@@ -180,12 +174,6 @@ class ManifestEditor
 
             foreach (iterator_to_array($imported->getElementsByTagNameNS(self::DASH_NS, 'Representation')) as $rep) {
                 $rep->setAttribute('id', (string) $nextRepId++);
-            }
-
-            if ($name = $subs->firstWhere('ulid', $ulid)?->name) {
-                $label = $doc->createElementNS(self::DASH_NS, 'Label');
-                $label->appendChild($doc->createTextNode($name));
-                $imported->insertBefore($label, $imported->firstChild);
             }
 
             $period->appendChild($imported);
@@ -207,12 +195,6 @@ class ManifestEditor
         }
 
         return $max;
-    }
-
-    /** A subtitle's VTT path relative to the manifest (strips the video-ulid prefix). */
-    private function subtitleVttUri(Stream $stream): string
-    {
-        return preg_replace('#^[^/]+/#', '', $stream->path, 1);
     }
 
     /**
@@ -469,7 +451,7 @@ class ManifestEditor
     /** Rewrite NAME/LANGUAGE on the subtitle `#EXT-X-MEDIA:TYPE=SUBTITLES` line for this track's playlist. */
     private function hlsRelabelSubtitle(string $content, Stream $stream): ?string
     {
-        $playlist = preg_replace('/\.vtt$/', '.m3u8', $this->subtitleVttUri($stream));
+        $playlist = "subtitles/{$stream->ulid}/index.m3u8"; // packager-emitted subtitle media playlist
         $lines = preg_split('/\R/', $content);
         $hit = false;
 
@@ -505,39 +487,38 @@ class ManifestEditor
     }
 
     /**
-     * Add a `#EXT-X-MEDIA:TYPE=SUBTITLES` line per track (pointing at its raw-VTT media playlist
-     * `subtitle/{ulid}.m3u8`) and tag every variant with `SUBTITLES="subs"`. hls.js can't parse fMP4
-     * WebVTT, so HLS keeps the plain-VTT path. Idempotent via the TYPE=SUBTITLES guard.
-     *
-     * @param  Collection<int,Stream>  $subs
+     * Merge the `#EXT-X-MEDIA:TYPE=SUBTITLES` lines from a throwaway subtitles master (the separate
+     * subtitle run, {@see \App\Services\PackagerCommandBuilder::buildText}) into the real master, and
+     * tag every variant with the subtitle group. The lines are shaka's own (URI points at the kept
+     * `subtitles/{ulid}/index.m3u8`). Idempotent via the TYPE=SUBTITLES guard. Null if nothing merged.
      */
-    public function hlsAddSubtitles(string $content, Collection $subs): ?string
+    public function hlsAddSubtitles(string $masterContent, string $subsMaster): ?string
     {
-        if (str_contains($content, 'TYPE=SUBTITLES')) {
+        if (str_contains($masterContent, 'TYPE=SUBTITLES')) {
             return null;
         }
 
         $media = [];
+        $group = null;
 
-        foreach ($subs as $sub) {
-            $playlist = preg_replace('/\.vtt$/', '.m3u8', $this->subtitleVttUri($sub));
-            $name = str_replace('"', '', $sub->name ?? $sub->language ?? 'Subtitles');
+        foreach (preg_split('/\R/', $subsMaster) as $line) {
+            if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, 'TYPE=SUBTITLES')) {
+                $media[] = $line;
 
-            $attrs = ['TYPE=SUBTITLES', 'GROUP-ID="subs"', "NAME=\"{$name}\"", 'DEFAULT=NO', 'AUTOSELECT=YES', 'FORCED=NO'];
-
-            if ($sub->language) {
-                $attrs[] = 'LANGUAGE="'.str_replace('"', '', $sub->language).'"';
+                if (preg_match('/GROUP-ID="([^"]+)"/', $line, $g)) {
+                    $group = $g[1];
+                }
             }
-
-            $attrs[] = "URI=\"{$playlist}\"";
-            $media[] = '#EXT-X-MEDIA:'.implode(',', $attrs);
         }
 
-        $lines = preg_split('/\R/', $content);
+        if (empty($media) || $group === null) {
+            return null;
+        }
+
         $out = [];
         $inserted = false;
 
-        foreach ($lines as $line) {
+        foreach (preg_split('/\R/', $masterContent) as $line) {
             if (str_starts_with($line, '#EXT-X-STREAM-INF')) {
                 if (! $inserted) {
                     array_push($out, ...$media);
@@ -545,7 +526,7 @@ class ManifestEditor
                 }
 
                 if (! str_contains($line, 'SUBTITLES=')) {
-                    $line .= ',SUBTITLES="subs"';
+                    $line .= ",SUBTITLES=\"{$group}\"";
                 }
             }
 
@@ -553,27 +534,5 @@ class ManifestEditor
         }
 
         return $inserted ? implode("\n", $out) : null;
-    }
-
-    /**
-     * A one-segment VOD media playlist wrapping the whole VTT as a single segment spanning the video
-     * duration — the rendition an HLS `#EXT-X-MEDIA:TYPE=SUBTITLES` points at. The segment is the VTT
-     * filename, relative to this playlist (both sit under `{video}/subtitle/`).
-     */
-    public function hlsSubtitlePlaylist(Video $video, Stream $sub): string
-    {
-        $seconds = max((float) $video->duration, 1.0);
-
-        return implode("\n", [
-            '#EXTM3U',
-            '#EXT-X-VERSION:3',
-            '#EXT-X-TARGETDURATION:'.(int) ceil($seconds),
-            '#EXT-X-MEDIA-SEQUENCE:0',
-            '#EXT-X-PLAYLIST-TYPE:VOD',
-            '#EXTINF:'.number_format($seconds, 3, '.', '').',',
-            basename($sub->path),
-            '#EXT-X-ENDLIST',
-            '',
-        ]);
     }
 }

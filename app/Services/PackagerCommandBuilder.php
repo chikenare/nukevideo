@@ -21,7 +21,7 @@ class PackagerCommandBuilder
      * a height (e.g. 720) yields `master.720`/`manifest.720` listing only the renditions passed in.
      * Every run writes the same per-stream segment tree, so all manifests share the segments.
      *
-     * @param  list<array{path:string,type:string,ulid:string}>  $inputs  local rendition files
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $inputs
      * @param  list<string>  $formats  any of 'hls', 'dash'
      * @return list<string>
      */
@@ -53,7 +53,7 @@ class PackagerCommandBuilder
     }
 
     /**
-     * @param  array{path:string,type:string,ulid:string}  $input
+     * @param  array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}  $input
      * @param  list<string>  $formats
      */
     private function streamDescriptor(array $input, string $outputDir, array $formats): string
@@ -80,55 +80,73 @@ class PackagerCommandBuilder
     }
 
     /**
-     * Build a packager run that turns each subtitle VTT into a single-segment raw WebVTT (`text/vtt`)
-     * track under `subtitles/{ulid}/`, emitting a throwaway DASH manifest (`_subs.mpd`) whose text
-     * AdaptationSet is grafted into the real manifests ({@see ManifestEditor::importDashSubtitles}).
-     * A `$segmentDuration` longer than the video forces a single segment. DASH only — HLS subtitles
-     * use their own plain-VTT media playlists built separately.
+     * Build a SEPARATE packager run for subtitles, with `$segmentDuration` longer than the video so
+     * each track becomes a SINGLE raw-WebVTT (`text/vtt`) segment under `subtitles/{ulid}/` — they're
+     * a few KB, so segmenting them like video is pointless. Emits throwaway `_subs.mpd` / `_subs.m3u8`
+     * whose text entries are grafted into the real manifests ({@see ManifestEditor}). It's a separate
+     * run because `--segment_duration` is global; the main run keeps small segments for video.
      *
-     * @param  list<array{ulid:string,path:string,language:?string,forced:bool}>  $subs
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $subs
+     * @param  list<string>  $formats
      * @return list<string>
      */
-    public function buildText(array $subs, string $outputDir, int $segmentDuration): array
+    public function buildText(array $subs, string $outputDir, int $segmentDuration, array $formats): array
     {
         $args = [$this->bin];
 
         foreach ($subs as $sub) {
-            $args[] = $this->textDescriptor($sub, $outputDir);
+            $args[] = $this->textDescriptor($sub, $outputDir, $formats);
         }
 
         $args[] = '--segment_duration';
         $args[] = (string) $segmentDuration;
-        $args[] = '--generate_static_live_mpd';
-        $args[] = '--mpd_output';
-        $args[] = "{$outputDir}/_subs.mpd";
+
+        if (in_array('hls', $formats, true)) {
+            $args[] = '--hls_master_playlist_output';
+            $args[] = "{$outputDir}/_subs.m3u8";
+            $args[] = '--hls_playlist_type';
+            $args[] = 'VOD';
+        }
+
+        if (in_array('dash', $formats, true)) {
+            $args[] = '--generate_static_live_mpd';
+            $args[] = '--mpd_output';
+            $args[] = "{$outputDir}/_subs.mpd";
+        }
 
         return $args;
     }
 
     /**
-     * @param  array{ulid:string,path:string,language:?string,forced:bool}  $sub
+     * Subtitle stream descriptor: raw WebVTT segments (`text/vtt`, not fMP4 `wvtt`) under
+     * `subtitles/{ulid}/`. `SegmentTemplate` is kept (a non-fragmented `<BaseURL>` VTT would make
+     * dashjs deref null and crash); with a long segment duration it yields a single segment.
+     *
+     * @param  array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}  $input
+     * @param  list<string>  $formats
      */
-    private function textDescriptor(array $sub, string $outputDir): string
+    private function textDescriptor(array $input, string $outputDir, array $formats): string
     {
-        $segmentDir = "{$outputDir}/subtitles/{$sub['ulid']}";
+        $segmentDir = "{$outputDir}/subtitles/{$input['ulid']}";
 
         $parts = [
-            "in={$sub['path']}",
+            "in={$input['path']}",
             'stream=text',
-            "init_segment={$segmentDir}/init.mp4",
             'segment_template='.$segmentDir.'/$Number$.vtt',
         ];
 
-        if ($sub['language']) {
-            $parts[] = "lang={$sub['language']}";
+        if (in_array('hls', $formats, true)) {
+            $parts[] = "playlist_name=subtitles/{$input['ulid']}/index.m3u8";
+            $parts[] = 'hls_group_id=subs';
+            // Commas delimit descriptor fields, so strip them from the label.
+            $parts[] = 'hls_name='.str_replace(',', ' ', $input['name'] ?? $input['language'] ?? 'Subtitles');
         }
 
-        if ($sub['forced']) {
-            $parts[] = 'forced_subtitle=1';
-        } else {
-            $parts[] = 'dash_roles=subtitle';
+        if (! empty($input['language'])) {
+            $parts[] = "lang={$input['language']}";
         }
+
+        $parts[] = ! empty($input['forced']) ? 'forced_subtitle=1' : 'dash_roles=subtitle';
 
         return implode(',', $parts);
     }
