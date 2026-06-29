@@ -100,6 +100,32 @@ class ManifestEditor
     }
 
     /**
+     * Rewrite a subtitle track's display label/language across every manifest that carries it.
+     * The track is located by its relative VTT URI (DASH `BaseURL`, HLS subtitle `EXT-X-MEDIA URI`),
+     * so manifests where the subtitle was never injected are left untouched.
+     */
+    public function relabelSubtitle(Video $video, Stream $stream): void
+    {
+        if ($stream->type !== 'subtitle') {
+            return;
+        }
+
+        $disk = Storage::disk('s3');
+
+        foreach ($this->existingManifests($video) as $manifest) {
+            $content = $disk->get($manifest['path']);
+
+            $edited = $manifest['format'] === 'dash'
+                ? $this->dashRelabelSubtitle($content, $stream)
+                : $this->hlsRelabelSubtitle($content, $stream);
+
+            if ($edited !== null && $edited !== $content) {
+                $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
+            }
+        }
+    }
+
+    /**
      * Embed the video's sidecar WebVTT subtitles into every manifest on S3 as external text tracks,
      * so players load them straight from the manifest instead of a side API call. Runs post-packaging
      * (own job, after the video is COMPLETED and synced), editing the manifests in place beside the
@@ -231,6 +257,46 @@ class ManifestEditor
         }
 
         $set = $tpl->parentNode->parentNode;
+
+        if (! $set instanceof DOMElement) {
+            return null;
+        }
+
+        if ($stream->language) {
+            $set->setAttribute('lang', $stream->language);
+        }
+
+        if ($stream->name) {
+            $label = $xpath->query('m:Label', $set)->item(0)
+                ?? $set->insertBefore($doc->createElementNS(self::DASH_NS, 'Label'), $set->firstChild);
+
+            while ($label->firstChild) {
+                $label->removeChild($label->firstChild);
+            }
+
+            $label->appendChild($doc->createTextNode($stream->name));
+        }
+
+        return $doc->saveXML();
+    }
+
+    /** Set the subtitle's text AdaptationSet `lang` and `<Label>`, found via its VTT BaseURL. Null if absent. */
+    private function dashRelabelSubtitle(string $xml, Stream $stream): ?string
+    {
+        [$doc, $xpath] = $this->loadMpd($xml);
+
+        if (! $doc) {
+            return null;
+        }
+
+        $uri = $this->subtitleVttUri($stream);
+        $base = $xpath->query("//m:AdaptationSet[@contentType='text']/m:Representation/m:BaseURL[. = '{$uri}']")->item(0);
+
+        if (! $base) {
+            return null;
+        }
+
+        $set = $base->parentNode->parentNode; // BaseURL -> Representation -> AdaptationSet
 
         if (! $set instanceof DOMElement) {
             return null;
@@ -411,6 +477,27 @@ class ManifestEditor
 
         foreach ($lines as $i => $line) {
             if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, "URI=\"{$stream->ulid}/")) {
+                $line = $this->setHlsAttr($line, 'NAME', $stream->name);
+                $line = $this->setHlsAttr($line, 'LANGUAGE', $stream->language);
+                $lines[$i] = $line;
+                $hit = true;
+            }
+        }
+
+        return $hit ? implode("\n", $lines) : null;
+    }
+
+    /** Rewrite NAME/LANGUAGE on the subtitle `#EXT-X-MEDIA:TYPE=SUBTITLES` line for this track's playlist. */
+    private function hlsRelabelSubtitle(string $content, Stream $stream): ?string
+    {
+        $playlist = preg_replace('/\.vtt$/', '.m3u8', $this->subtitleVttUri($stream));
+        $lines = preg_split('/\R/', $content);
+        $hit = false;
+
+        foreach ($lines as $i => $line) {
+            if (str_starts_with($line, '#EXT-X-MEDIA')
+                && str_contains($line, 'TYPE=SUBTITLES')
+                && str_contains($line, "URI=\"{$playlist}\"")) {
                 $line = $this->setHlsAttr($line, 'NAME', $stream->name);
                 $line = $this->setHlsAttr($line, 'LANGUAGE', $stream->language);
                 $lines[$i] = $line;

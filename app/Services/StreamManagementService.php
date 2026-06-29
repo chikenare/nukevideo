@@ -17,12 +17,15 @@ class StreamManagementService
         $stream = $this->findOrFail($ulid, $user);
         $stream->update($data);
 
-        // An audio track's label/language is written into the manifests; sync them once the video
-        // is live. Subtitle labels are read live from the DB (sidecar VTT) and video has no label.
-        if ($stream->type === 'audio'
-            && $stream->video->status === VideoStatus::COMPLETED->value
+        // Audio and subtitle labels/languages are baked into the manifests, so sync them once the
+        // video is live. Video renditions carry no label, so they need no manifest rewrite.
+        if ($stream->video->status === VideoStatus::COMPLETED->value
             && (array_key_exists('name', $data) || array_key_exists('language', $data))) {
-            $this->manifests->relabelAudio($stream->video, $stream);
+            if ($stream->type === 'audio') {
+                $this->manifests->relabelAudio($stream->video, $stream);
+            } elseif ($stream->type === 'subtitle') {
+                $this->manifests->relabelSubtitle($stream->video, $stream);
+            }
         }
 
         return $stream;
