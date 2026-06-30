@@ -22,7 +22,6 @@ return [
         'query' => [
             'outputs' => [
                 [
-                    'format' => 'hls',
                     'video_codec' => 'libx264',
                     'variants' => [
                         [
@@ -80,7 +79,6 @@ return [
         'query' => [
             'outputs' => [
                 [
-                    'format' => 'hls',
                     'video_codec' => 'libx265',
                     'variants' => [
                         [
@@ -139,7 +137,6 @@ return [
         'query' => [
             'outputs' => [
                 [
-                    'format' => 'dash',
                     'video_codec' => 'libsvtav1',
                     'variants' => [
                         [
@@ -181,7 +178,6 @@ return [
         'query' => [
             'outputs' => [
                 [
-                    'format' => 'hls',
                     'video_codec' => 'libx264',
                     'variants' => [
                         [

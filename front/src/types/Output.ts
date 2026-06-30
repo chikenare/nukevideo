@@ -4,7 +4,7 @@ export type OutputFormat = 'hls' | 'dash'
 
 export type Output = {
   ulid: string
-  format: OutputFormat
+  formats: OutputFormat[]
   status: VideoStatus
   progress: number
   streams: Stream[]

@@ -1,6 +1,4 @@
 // Server response structure
-import type { OutputFormat } from './Output'
-
 export type Template = {
   ulid: string
   name: string
@@ -13,7 +11,6 @@ export type Template = {
 }
 
 export type TemplateOutput = {
-  format: OutputFormat
   videoCodec: string
   variants: TemplateVariant[]
   audio: AudioConfig

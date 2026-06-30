@@ -34,10 +34,13 @@ class ManifestEditor
 
     /**
      * Drop a stream from every manifest that references it and delete its packaged segment tree.
-     * For subtitle streams: removes the text AdaptationSet / EXT-X-MEDIA line and deletes the CMAF
-     * dir. For video: audio appears in all manifests; a rendition only in the full master and caps ≥
-     * its height. A capped set whose cap equals the removed height becomes redundant and is deleted.
-     * For audio: present in every manifest. Call before deleting the DB row so heights resolve.
+     * Manifests are scoped per output ({@see \App\Models\Output::manifestFile}) and a stream can be
+     * attached to more than one output (the same rendition reused across outputs that share a
+     * config), so the relevant manifest set is gathered per output the stream actually belongs to —
+     * never deleted outright as a file, only edited in place, or a cap still serving another
+     * stream/output would vanish. Subtitles aren't pivoted to outputs (they're grafted into every
+     * output's manifest at package time), so removal walks every output of the video instead. Call
+     * before deleting the DB row so heights resolve.
      */
     public function removeStream(Video $video, Stream $stream): void
     {
@@ -45,14 +48,16 @@ class ManifestEditor
         $ulid = $stream->ulid;
 
         if ($stream->type === 'subtitle') {
-            foreach ($this->existingManifests($video) as $manifest) {
-                $content = $disk->get($manifest['path']);
-                $edited = $manifest['format'] === 'dash'
-                    ? $this->dashRemoveSubtitle($content, $ulid)
-                    : $this->hlsRemoveSubtitle($content, $ulid);
+            foreach ($video->outputs as $output) {
+                foreach ($this->existingManifests($video, $output) as $manifest) {
+                    $content = $disk->get($manifest['path']);
+                    $edited = $manifest['format'] === 'dash'
+                        ? $this->dashRemoveSubtitle($content, $ulid)
+                        : $this->hlsRemoveSubtitle($content, $ulid);
 
-                if ($edited !== null && $edited !== $content) {
-                    $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
+                    if ($edited !== null && $edited !== $content) {
+                        $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
+                    }
                 }
             }
 
@@ -63,28 +68,23 @@ class ManifestEditor
 
         $height = $stream->type === 'video' ? (int) $stream->height : null;
 
-        foreach ($this->existingManifests($video) as $manifest) {
-            ['cap' => $cap, 'format' => $format, 'path' => $path] = $manifest;
+        foreach ($stream->outputs as $output) {
+            foreach ($this->existingManifests($video, $output) as $manifest) {
+                ['cap' => $cap, 'format' => $format, 'path' => $path] = $manifest;
 
-            if ($height !== null && $cap !== null) {
-                if ($cap === $height) {
-                    $disk->delete($path); // dedicated cap for this height is now redundant
-
-                    continue;
-                }
-                if ($cap < $height) {
+                if ($height !== null && $cap !== null && $cap < $height) {
                     continue; // this manifest caps below the rendition; it never listed it
                 }
-            }
 
-            $content = $disk->get($path);
+                $content = $disk->get($path);
 
-            $edited = $format === 'dash'
-                ? $this->dashRemove($content, $ulid)
-                : $this->hlsRemove($content, $ulid);
+                $edited = $format === 'dash'
+                    ? $this->dashRemove($content, $ulid)
+                    : $this->hlsRemove($content, $ulid);
 
-            if ($edited !== null && $edited !== $content) {
-                $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+                if ($edited !== null && $edited !== $content) {
+                    $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+                }
             }
         }
 
@@ -164,18 +164,19 @@ class ManifestEditor
     }
 
     /**
-     * The manifest set actually present on S3: the full master plus one capped manifest per
-     * non-max video height, in each format the packager emitted. Probes S3 so DASH-only outputs
-     * (no `.m3u8`) and absent caps are skipped without knowing the output's codecs.
+     * The manifest set actually present on S3 for one output: its own master plus one capped
+     * manifest per non-max video height among its own video streams, in each format the packager
+     * emitted. Probes S3 so DASH-only outputs (no `.m3u8`) and absent caps are skipped without
+     * knowing the output's codecs.
      *
      * @return list<array{cap:?int,format:string,path:string}>
      */
-    private function existingManifests(Video $video): array
+    private function existingManifests(Video $video, Output $output): array
     {
-        $video->loadMissing('streams');
+        $output->loadMissing('streams');
         $disk = Storage::disk('s3');
 
-        $heights = $video->streams
+        $heights = $output->streams
             ->where('type', 'video')
             ->pluck('height')
             ->filter()
@@ -191,7 +192,7 @@ class ManifestEditor
 
         foreach ($caps as $cap) {
             foreach (['hls', 'dash'] as $format) {
-                $path = "{$video->ulid}/".Output::manifestFile($format, $cap);
+                $path = "{$video->ulid}/".$output->manifestFile($format, $cap);
 
                 if ($disk->exists($path)) {
                     $files[] = ['cap' => $cap, 'format' => $format, 'path' => $path];

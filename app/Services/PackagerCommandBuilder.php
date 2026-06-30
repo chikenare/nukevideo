@@ -17,15 +17,17 @@ class PackagerCommandBuilder
     ) {}
 
     /**
-     * Build one packager run. `$cap` names the manifest set: null is the full `master`/`manifest`,
-     * a height (e.g. 720) yields `master.720`/`manifest.720` listing only the renditions passed in.
-     * Every run writes the same per-stream segment tree, so all manifests share the segments.
+     * Build one packager run. `$cap` names the manifest set: null is the full master, a height
+     * (e.g. 720) yields a capped manifest listing only the renditions passed in. Every run writes
+     * the same per-stream segment tree, so all manifests of this output share the segments. The
+     * manifest filename is keyed by `$output`'s own ulid ({@see \App\Models\Output::manifestFile})
+     * so it never collides with another output of the same video.
      *
      * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $inputs
      * @param  list<string>  $formats  any of 'hls', 'dash'
      * @return list<string>
      */
-    public function build(array $inputs, string $outputDir, array $formats, ?int $cap = null): array
+    public function build(array $inputs, string $outputDir, array $formats, Output $output, ?int $cap = null): array
     {
         $args = [$this->bin];
 
@@ -38,7 +40,7 @@ class PackagerCommandBuilder
 
         if (in_array('hls', $formats, true)) {
             $args[] = '--hls_master_playlist_output';
-            $args[] = "{$outputDir}/".Output::manifestFile('hls', $cap);
+            $args[] = "{$outputDir}/".$output->manifestFile('hls', $cap);
             $args[] = '--hls_playlist_type';
             $args[] = 'VOD';
         }
@@ -46,7 +48,7 @@ class PackagerCommandBuilder
         if (in_array('dash', $formats, true)) {
             $args[] = '--generate_static_live_mpd';
             $args[] = '--mpd_output';
-            $args[] = "{$outputDir}/".Output::manifestFile('dash', $cap);
+            $args[] = "{$outputDir}/".$output->manifestFile('dash', $cap);
         }
 
         return $args;

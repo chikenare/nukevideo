@@ -220,20 +220,22 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             mkdir($gatherDir, 0755, true);
         }
 
-        $this->packageManifests($video, $inputs, $gatherDir, $formats);
+        $this->packageManifests($video, $output, $inputs, $gatherDir, $formats);
 
         Log::info('Output packaged', ['video' => $video->id, 'output' => $output->id, 'formats' => $formats]);
     }
 
     /**
      * One packager run per supported resolution (the distinct video heights), all sharing the same
-     * segment tree. The tallest is the full `master`; each lower height yields a capped manifest
-     * (`master.720`, …) listing only the renditions at or below it, plus every audio track.
+     * segment tree. The tallest is the full master; each lower height yields a capped manifest
+     * listing only the renditions at or below it, plus every audio track. Filenames are keyed by
+     * `$output`'s own ulid ({@see \App\Models\Output::manifestFile}), so a second output of the same
+     * video landing on the same height never overwrites this one.
      *
      * @param  list<array{path:string,type:string,ulid:string,height:?int}>  $inputs
      * @param  list<string>  $formats
      */
-    private function packageManifests(Video $video, array $inputs, string $outputDir, array $formats): void
+    private function packageManifests(Video $video, Output $output, array $inputs, string $outputDir, array $formats): void
     {
         $heights = collect($inputs)
             ->where('type', 'video')
@@ -253,7 +255,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 fn (array $input) => $input['type'] !== 'video' || $input['height'] <= $height,
             ));
 
-            $this->runPackager($video, $subset, $outputDir, $formats, $isMax ? null : $height);
+            $this->runPackager($video, $subset, $outputDir, $formats, $output, $isMax ? null : $height);
         }
     }
 
@@ -342,12 +344,12 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         );
     }
 
-    private function runPackager(Video $video, array $inputs, string $outputDir, array $formats, ?int $cap): void
+    private function runPackager(Video $video, array $inputs, string $outputDir, array $formats, Output $output, ?int $cap): void
     {
         $builder = $this->makeBuilder();
 
         $result = Process::timeout($this->timeout - 120)->run(
-            $builder->build($inputs, $outputDir, $formats, $cap),
+            $builder->build($inputs, $outputDir, $formats, $output, $cap),
             fn () => $this->heartbeat($video),
         );
 
@@ -376,10 +378,13 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         $segmentDuration = (int) ceil((float) $video->duration) + 2;
         $builder = $this->makeBuilder();
 
-        if (glob("{$gatherDir}/manifest*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
+        // Manifests are named after each output's own ulid now ({@see \App\Models\Output::manifestFile}),
+        // so they're matched by extension and the `_subs.*` throwaway is excluded by its leading
+        // underscore — a real output ulid never starts with one.
+        if (glob("{$gatherDir}/[!_]*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
             $subsXml = file_get_contents("{$gatherDir}/_subs.mpd");
 
-            foreach (glob("{$gatherDir}/manifest*.mpd") ?: [] as $mpd) {
+            foreach (glob("{$gatherDir}/[!_]*.mpd") ?: [] as $mpd) {
                 $original = file_get_contents($mpd);
                 $edited = $manifests->importDashSubtitles($original, $subsXml);
 
@@ -391,10 +396,10 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             @unlink("{$gatherDir}/_subs.mpd"); // throwaway master; the grafted text set references the kept segments
         }
 
-        if (glob("{$gatherDir}/master*.m3u8") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'hls')) {
+        if (glob("{$gatherDir}/[!_]*.m3u8") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'hls')) {
             $subsContent = file_get_contents("{$gatherDir}/_subs.m3u8");
 
-            foreach (glob("{$gatherDir}/master*.m3u8") ?: [] as $m3u8) {
+            foreach (glob("{$gatherDir}/[!_]*.m3u8") ?: [] as $m3u8) {
                 $original = file_get_contents($m3u8);
                 $edited = $manifests->hlsAddSubtitles($original, $subsContent);
 

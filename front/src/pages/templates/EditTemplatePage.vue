@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +14,6 @@ import AudioChannelForm from './components/AudioChannelForm.vue'
 import { useCodecConfig } from '@/composables/useCodecConfig'
 import TemplateService from '@/services/TemplateService'
 import type { Template, TemplateOutput, CreateTemplateDto, UpdateTemplateDto } from '@/types/Template'
-import type { OutputFormat } from '@/types/Output'
 import { Plus, Save, ArrowLeft, Trash2 } from '@lucide/vue'
 import { ApiException } from '@/exceptions/ApiException'
 import { toast } from 'vue-sonner'
@@ -29,40 +28,16 @@ const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Templa
 const templateName = ref('')
 const keepProcessedFiles = ref(true)
 const outputs = ref<TemplateOutput[]>([
-  { format: 'hls' as OutputFormat, videoCodec: '', variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
+  { videoCodec: '', variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
 ])
 
-// Video codecs available for an output's format (the codec is per output, shared by its variants).
-const videoCodecsFor = (format?: string) => {
-  const codecs = config.value?.codecs.filter(c => c.type === 'video') ?? []
-  if (!format || !config.value?.formats) return codecs
-
-  const formatConfig = config.value.formats[format]
-  if (!formatConfig) return codecs
-
-  return codecs.filter(c =>
-    formatConfig.protocols.length === 0 ||
-    (c.protocols && c.protocols.some((p: string) => formatConfig.protocols.includes(p)))
-  )
-}
+const videoCodecs = computed(() => config.value?.codecs.filter(c => c.type === 'video') ?? [])
 const loading = ref(false)
 const saving = ref(false)
 
-const availableFormats = computed(() => {
-  if (!config.value?.formats) return []
-  return Object.entries(config.value.formats).map(([key, fmt]) => ({
-    value: key,
-    label: fmt.label,
-    description: fmt.description,
-  }))
-})
-
 // --- Outputs ---
 const addOutput = () => {
-  const usedFormats = outputs.value.map(o => o.format)
-  const nextFormat = availableFormats.value.find(f => !usedFormats.includes(f.value as OutputFormat))
   outputs.value.push({
-    format: (nextFormat?.value ?? 'hls') as OutputFormat,
     videoCodec: '',
     variants: [{}],
     audio: { channels: [{ channels: '', audioBitrate: '' }] },
@@ -86,32 +61,6 @@ const removeVariant = (outputIndex: number, variantIndex: number) => {
     output.variants.splice(variantIndex, 1)
   }
 }
-
-const isCodecCompatible = (codecName: string, format: string): boolean => {
-  if (!codecName || !config.value?.formats) return true
-  const formatConfig = config.value.formats[format]
-  if (!formatConfig) return true
-  if (formatConfig.protocols.length === 0) return true
-  const codec = config.value.codecs.find(c => c.codec === codecName)
-  return !!codec?.protocols?.some(p => formatConfig.protocols.includes(p))
-}
-
-watch(outputs, (newOutputs) => {
-  for (const output of newOutputs) {
-    // Clear codec selections that are no longer compatible with the format
-    // (e.g. Opus is DASH-only, so switching an output to HLS must drop it).
-    for (const variant of output.variants) {
-      if (variant.videoCodec && !isCodecCompatible(variant.videoCodec as string, output.format)) {
-        delete variant.videoCodec
-      }
-    }
-    if (output.audio?.audioCodec && !isCodecCompatible(output.audio.audioCodec, output.format)) {
-      delete output.audio.audioCodec
-    }
-  }
-}, { deep: true })
-
-
 // --- Load / Save ---
 const loadTemplate = async () => {
   if (!route.params.id) return
@@ -140,18 +89,18 @@ const saveTemplate = async () => {
 
   for (const [index, output] of outputs.value.entries()) {
     if (!output.videoCodec) {
-      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please select a video codec`)
+      toast.info(`Output ${index + 1}: please select a video codec`)
       return
     }
     if (!output.variants || output.variants.length === 0 || !output.variants[0]?.width) {
-      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please configure at least one variant`)
+      toast.info(`Output ${index + 1}: please configure at least one variant`)
       return
     }
   }
 
   for (const [index, output] of outputs.value.entries()) {
     if (!output.audio?.audioCodec) {
-      toast.info(`Output ${index + 1} (${output.format.toUpperCase()}): please configure the audio track`)
+      toast.info(`Output ${index + 1}: please configure the audio track`)
       return
     }
   }
@@ -263,12 +212,13 @@ onMounted(async () => {
         </CardContent>
       </Card>
 
-      <!-- Output Formats -->
+      <!-- Outputs -->
       <div class="space-y-4">
         <div>
-          <h2 class="text-lg font-semibold">Output Formats</h2>
+          <h2 class="text-lg font-semibold">Outputs</h2>
           <p class="text-sm text-muted-foreground">
-            Each output format can have multiple quality variants.
+            Each output is a codec with multiple quality variants. HLS and DASH manifests are
+            generated automatically for whichever the codecs support.
           </p>
         </div>
 
@@ -291,24 +241,6 @@ onMounted(async () => {
               </div>
             </CardHeader>
             <CardContent class="space-y-5">
-              <!-- Format Selection -->
-              <div class="space-y-2">
-                <Label>Format *</Label>
-                <Select v-model="output.format" class="max-w-xs">
-                  <SelectTrigger class="max-w-xs">
-                    <SelectValue placeholder="Select format" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem v-for="fmt in availableFormats" :key="fmt.value" :value="fmt.value">
-                      <div>
-                        <div class="font-medium">{{ fmt.label }}</div>
-                        <div class="text-xs text-muted-foreground">{{ fmt.description }}</div>
-                      </div>
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
               <!-- Video Codec (per output: variants share it) -->
               <div class="space-y-2">
                 <Label>Video Codec *</Label>
@@ -317,7 +249,7 @@ onMounted(async () => {
                     <SelectValue placeholder="Select video codec" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem v-for="codec in videoCodecsFor(output.format)" :key="codec.codec" :value="codec.codec">
+                    <SelectItem v-for="codec in videoCodecs" :key="codec.codec" :value="codec.codec">
                       <div>
                         <div class="font-medium">{{ codec.label }}</div>
                         <div class="text-xs text-muted-foreground">{{ codec.description }}</div>
@@ -369,7 +301,7 @@ onMounted(async () => {
                   :model-value="output.audio"
                   @update:model-value="output.audio = $event"
                   :config="config"
-                  :format="output.format"
+                  :video-codec="output.videoCodec"
                 />
               </div>
             </CardContent>
@@ -377,13 +309,12 @@ onMounted(async () => {
         </div>
 
         <Button
-          v-if="availableFormats.length > outputs.length"
           @click="addOutput"
           variant="outline"
           class="w-full border-dashed"
         >
           <Plus :size="16" class="mr-2" />
-          Add Output Format
+          Add Output
         </Button>
       </div>
 

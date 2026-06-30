@@ -375,17 +375,4 @@ return [
         ],
 
     ],
-
-    'formats' => [
-        'hls' => [
-            'label' => 'HLS',
-            'protocols' => ['hls'],
-
-        ],
-        'dash' => [
-            'label' => 'DASH',
-            'protocols' => ['dash'],
-
-        ],
-    ],
 ];

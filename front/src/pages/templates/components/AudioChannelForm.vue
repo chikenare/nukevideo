@@ -20,7 +20,7 @@ import { Trash2, Plus, Settings2, Music } from '@lucide/vue'
 const props = defineProps<{
   modelValue: AudioConfig
   config: CodecConfig
-  format?: string
+  videoCodec?: string
 }>()
 
 const emit = defineEmits<{
@@ -33,15 +33,9 @@ const localCodec = ref('')
 
 const audioCodecs = computed(() => {
   const codecs = props.config.codecs.filter(c => c.type === 'audio')
-  if (!props.format || !props.config.formats) return codecs
+  if (!props.videoCodec) return codecs
 
-  const formatConfig = props.config.formats[props.format]
-  if (!formatConfig) return codecs
-
-  return codecs.filter(c => {
-    return formatConfig.protocols.length === 0 ||
-      (c.protocols && c.protocols.some((p: string) => formatConfig.protocols.includes(p)))
-  })
+  return codecs.filter(c => !c.availableFor?.length || c.availableFor.includes(props.videoCodec as string))
 })
 
 const audioParameters = computed(() => {

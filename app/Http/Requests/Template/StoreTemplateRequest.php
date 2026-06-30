@@ -21,7 +21,6 @@ class StoreTemplateRequest extends FormRequest
             'name' => 'required|string|max:255',
             'keep_processed_files' => 'sometimes|boolean',
             'query.outputs' => 'required|array|min:1',
-            'query.outputs.*.format' => 'required|string|in:hls,dash',
             'query.outputs.*.video_codec' => ['required', 'string', new TemplateVideoCodecRule],
             'query.outputs.*.variants' => 'required|array|min:1',
             'query.outputs.*.variants.*' => new TemplateFormatRule,

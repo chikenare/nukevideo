@@ -15,15 +15,20 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
 import type { Stream } from '@/types/Video'
-import { MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown } from '@lucide/vue'
+import { MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk } from '@lucide/vue'
 import prettyBytes from 'pretty-bytes'
 import { toast } from 'vue-sonner'
 
-const { stream } = defineProps<{ stream: Stream }>()
+const { stream, codecLabel } = defineProps<{
+  stream: Stream
+  /** Resolves an ffmpeg codec name (e.g. `libx264`) to its display label; falls back to the raw name. */
+  codecLabel: (codec?: string | null) => string | null
+}>()
 const emit = defineEmits(['onDeleted'])
 
 const isErrorExpanded = ref(false)
 const isDeleteDialogOpen = ref(false)
+const isForced = computed(() => stream.type === 'subtitle' && Boolean(stream.meta?.forced))
 
 const handleDelete = async () => {
   try {
@@ -44,27 +49,13 @@ const typeIcon = computed(() => {
   return Subtitles
 })
 
-const codecMap: Record<string, string> = {
-  libx264: 'H.264',
-  libx265: 'H.265',
-  libvpx: 'VP8',
-  'libvpx-vp9': 'VP9',
-  'libaom-av1': 'AV1',
-  aac: 'AAC',
-  libopus: 'Opus',
-  libmp3lame: 'MP3',
-  copy: 'Copy',
-}
-
 const codec = computed((): string | null => {
   if (stream.type === 'video') return (stream.inputParams?.video_codec as string) ?? null
   if (stream.type === 'audio') return (stream.inputParams?.audio_codec as string) ?? null
   return null
 })
 
-const codecLabel = computed(() =>
-  codec.value ? (codecMap[codec.value] ?? codec.value) : null
-)
+const codecText = computed(() => codecLabel(codec.value))
 
 const formatChannels = (ch: number): string => {
   if (ch === 1) return 'Mono'
@@ -83,7 +74,7 @@ const label = computed(() => {
 
 const details = computed(() => {
   const parts: string[] = []
-  if (codecLabel.value) parts.push(codecLabel.value)
+  if (codecText.value) parts.push(codecText.value)
   if (stream.type === 'video' && stream.width && stream.height) parts.push(`${stream.width}×${stream.height}`)
   if (stream.type === 'audio' && stream.channels) parts.push(formatChannels(stream.channels))
   if (stream.language && stream.type !== 'video') parts.push(stream.language.toUpperCase())
@@ -100,7 +91,10 @@ const details = computed(() => {
       <div class="flex items-center gap-2.5 min-w-0">
         <component :is="typeIcon" :size="15" class="text-muted-foreground shrink-0" />
         <div class="min-w-0">
-          <div class="text-sm font-medium leading-tight">{{ label }}</div>
+          <div class="flex items-center gap-1.5">
+            <span class="text-sm font-medium leading-tight">{{ label }}</span>
+            <Asterisk v-if="isForced" :size="13" class="text-amber-500 shrink-0" title="Forced subtitle" />
+          </div>
           <div v-if="details.length" class="text-xs text-muted-foreground mt-0.5">
             <span v-for="(d, i) in details" :key="i">
               <span v-if="i > 0" class="mx-1 opacity-30">·</span>{{ d }}

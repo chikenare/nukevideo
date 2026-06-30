@@ -87,11 +87,6 @@ const formatVariantsSummary = (preset: TemplatePreset): string => {
   return dimensions.join(', ')
 }
 
-const formatFormat = (preset: TemplatePreset): string => {
-  const output = preset.query.outputs[0]
-  return output?.format?.toUpperCase() || ''
-}
-
 const handleEdit = (template: Template) => {
   router.push({ name: 'EditTemplate', params: { id: template.ulid } })
 }
@@ -212,7 +207,6 @@ onMounted(() => {
           </CardHeader>
           <CardContent class="pb-3">
             <div class="flex flex-wrap gap-2 text-xs">
-              <Badge variant="outline">{{ formatFormat(preset) }}</Badge>
               <Badge variant="outline">{{ formatVariantsSummary(preset) }}</Badge>
             </div>
           </CardContent>

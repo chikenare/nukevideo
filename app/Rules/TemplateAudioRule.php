@@ -2,15 +2,11 @@
 
 namespace App\Rules;
 
-use App\Rules\Concerns\ValidatesCodecProtocol;
 use Closure;
-use Illuminate\Contracts\Validation\DataAwareRule;
 use Illuminate\Contracts\Validation\ValidationRule;
 
-class TemplateAudioRule implements DataAwareRule, ValidationRule
+class TemplateAudioRule implements ValidationRule
 {
-    use ValidatesCodecProtocol;
-
     /**
      * @param  \Closure(string, ?string=): \Illuminate\Translation\PotentiallyTranslatedString  $fail
      */
@@ -31,10 +27,6 @@ class TemplateAudioRule implements DataAwareRule, ValidationRule
         if ($audioCodec['type'] !== 'audio') {
             $fail("The codec '{$audioCodecKey}' is not an audio codec.");
 
-            return;
-        }
-
-        if (! $this->assertCodecProtocol($attribute, $audioCodec, $fail)) {
             return;
         }
 

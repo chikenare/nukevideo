@@ -25,14 +25,7 @@ export type Parameter = {
     availableFor: string[]
 }
 
-export type FormatConfig = {
-    label: string
-    description: string
-    protocols: string[]
-}
-
 export type CodecConfig = {
     codecs: Codec[]
     parameters: Record<string, Parameter>
-    formats: Record<string, FormatConfig>
 }

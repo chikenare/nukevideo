@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\DTOs\UploadMeta;
-use App\Enums\OutputFormat;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\User;
@@ -205,9 +204,8 @@ class OnVideoUploadedService
         $this->videoStreamCache = [];
         $this->audioStreamCache = [];
 
-        foreach ($outputs as $outputConfig) {
-            $format = OutputFormat::from($outputConfig['format']);
-            $this->createRenditionOutput($video, $streamCollection, $outputConfig, $format);
+        foreach ($outputs as $index => $outputConfig) {
+            $this->createRenditionOutput($video, $streamCollection, $outputConfig, $index);
         }
 
         $this->createSubtitleStreams($video, $streamCollection->all());
@@ -217,9 +215,9 @@ class OnVideoUploadedService
         Video $video,
         StreamCollection $streamCollection,
         array $outputConfig,
-        OutputFormat $format,
+        int $index,
     ): void {
-        $output = $video->outputs()->create(['format' => $format]);
+        $output = $video->outputs()->create();
         $sourceVideo = $streamCollection->videos()->first();
 
         $videoIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);
@@ -228,7 +226,7 @@ class OnVideoUploadedService
         // zero video streams; PackageVideoJob only discovers that deep into packaging, as an empty
         // input list to shaka-packager. Fail loudly here instead.
         if (empty($videoIds)) {
-            throw new Exception("Output \"{$format->value}\" resolved no video renditions from template {$this->meta->template}");
+            throw new Exception("Output {$index} resolved no video renditions from template {$this->meta->template}");
         }
 
         $audioConfig = $outputConfig['audio'] ?? [];
@@ -324,6 +322,8 @@ class OnVideoUploadedService
 
     private function createSubtitleStreams(Video $video, array $streams): void
     {
+        $usedNames = [];
+
         foreach ($streams as $stream) {
             if ($stream->get('codec_type') !== 'subtitle') {
                 continue;
@@ -348,11 +348,14 @@ class OnVideoUploadedService
                 continue;
             }
 
+            $tags = $stream->get('tags') ?? [];
+
             $this->createStream(
                 video: $video,
                 stream: $stream,
                 codecType: 'subtitle',
                 inputParams: null,
+                name: $this->uniqueName($this->streamDisplayName($tags), $usedNames),
             );
         }
     }
@@ -385,6 +388,24 @@ class OnVideoUploadedService
         return false;
     }
 
+    /**
+     * Keep each track's display name unique within the video: a repeated name gets a " (n)" suffix
+     * so players (and the HLS subtitle group) don't collide on same-named tracks. Case-insensitive.
+     */
+    private function uniqueName(string $name, array &$used): string
+    {
+        $candidate = $name;
+        $n = 1;
+
+        while (isset($used[mb_strtolower($candidate)])) {
+            $candidate = $name.' ('.(++$n).')';
+        }
+
+        $used[mb_strtolower($candidate)] = true;
+
+        return $candidate;
+    }
+
     /** Source titles often already carry the language, so avoid "Inglés (eng) (eng)". */
     private function streamDisplayName(array $tags): string
     {
@@ -403,6 +424,7 @@ class OnVideoUploadedService
         FFStream $stream,
         string $codecType,
         ?array $inputParams = null,
+        ?string $name = null,
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType, $inputParams);
@@ -436,7 +458,7 @@ class OnVideoUploadedService
                     'forced' => (bool) data_get($stream->get('disposition'), 'forced', 0),
                 ] : []),
             ],
-            'name' => $this->streamDisplayName($tags),
+            'name' => $name ?? $this->streamDisplayName($tags),
             'input_params' => $inputParams,
             'width' => $width,
             'height' => $height,

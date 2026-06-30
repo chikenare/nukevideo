@@ -2,14 +2,21 @@
 
 namespace App\Rules;
 
-use App\Rules\Concerns\ValidatesCodecProtocol;
 use Closure;
 use Illuminate\Contracts\Validation\DataAwareRule;
 use Illuminate\Contracts\Validation\ValidationRule;
 
 class TemplateFormatRule implements DataAwareRule, ValidationRule
 {
-    use ValidatesCodecProtocol;
+    /** Full data under validation, injected via DataAwareRule::setData(). */
+    protected array $data = [];
+
+    public function setData(array $data): static
+    {
+        $this->data = $data;
+
+        return $this;
+    }
 
     /**
      * @param  \Closure(string, ?string=): \Illuminate\Translation\PotentiallyTranslatedString  $fail
@@ -34,6 +41,17 @@ class TemplateFormatRule implements DataAwareRule, ValidationRule
             ->toArray();
 
         $this->validateParameters($value, $videoParameters, $fail);
+    }
+
+    /** The video codec is set on the output; variants inherit it. Attributes look like
+     *  "query.outputs.0.variants.1". */
+    protected function outputVideoCodec(string $attribute): ?string
+    {
+        if (! preg_match('/outputs\.(\d+)\b/', $attribute, $matches)) {
+            return null;
+        }
+
+        return data_get($this->data, "query.outputs.{$matches[1]}.video_codec");
     }
 
     protected function validateParameters(array $data, array $parameters, Closure $fail): void

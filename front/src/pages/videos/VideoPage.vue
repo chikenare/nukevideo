@@ -12,20 +12,37 @@ import { Label } from '@/components/ui/label'
 import { useRoute } from 'vue-router'
 import VideoService from '@/services/VideoService'
 import prettyBytes from 'pretty-bytes'
-import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon } from '@lucide/vue'
+import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon, Clock, HardDrive, CalendarDays } from '@lucide/vue'
 import { formatSecondsToTime } from '@/utils/timeFormatter'
 import DeleteVideoButton from './components/DeleteVideoButton.vue'
 import StreamItem from './components/StreamItem.vue'
 import { toast } from 'vue-sonner'
 import { ApiException } from '@/exceptions/ApiException'
 import ShakaVideoPlayer from './components/ShakaVideoPlayer.vue'
+import { useCodecConfig } from '@/composables/useCodecConfig'
 
 const route = useRoute()
+const { config: codecConfig, fetchConfig: fetchCodecConfig } = useCodecConfig()
 
 const video = ref<Video>()
 const isEditDialogOpen = ref(false)
 const editName = ref('')
 const playerOutput = ref<Output | null>(null)
+
+const codecLabel = (codec?: string | null): string | null => {
+  if (!codec) return null
+  return codecConfig.value?.codecs.find(c => c.codec === codec)?.label ?? codec
+}
+
+const outputCodecs = (output: Output): string[] => {
+  const codecs = new Set<string>()
+  for (const s of output.streams) {
+    const raw = s.type === 'video' ? s.inputParams?.video_codec : s.type === 'audio' ? s.inputParams?.audio_codec : null
+    const label = codecLabel(raw as string | undefined)
+    if (label) codecs.add(label)
+  }
+  return Array.from(codecs)
+}
 
 const show = async () => {
   video.value = await VideoService.show(route.params.id!.toString())
@@ -128,6 +145,7 @@ const isStillProcessing = computed(() => {
 let refreshInterval: number | null = null
 
 onMounted(async () => {
+  fetchCodecConfig()
   await show()
   if (video.value && isStillProcessing.value) {
     refreshInterval = setInterval(() => show(), 5000)
@@ -165,15 +183,24 @@ onUnmounted(() => {
         </div>
         <div class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Duration</span>
-          <span class="text-sm font-semibold">{{ formatSecondsToTime(video.duration) }}</span>
+          <div class="flex items-center gap-1.5">
+            <Clock :size="14" class="text-muted-foreground" />
+            <span class="text-sm font-semibold">{{ formatSecondsToTime(video.duration) }}</span>
+          </div>
         </div>
         <div class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Size</span>
-          <span class="text-sm font-semibold">{{ sizeFormatted }}</span>
+          <div class="flex items-center gap-1.5">
+            <HardDrive :size="14" class="text-muted-foreground" />
+            <span class="text-sm font-semibold">{{ sizeFormatted }}</span>
+          </div>
         </div>
         <div class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Created</span>
-          <span class="text-sm font-semibold">{{ formatDate(video.createdAt) }}</span>
+          <div class="flex items-center gap-1.5">
+            <CalendarDays :size="14" class="text-muted-foreground" />
+            <span class="text-sm font-semibold">{{ formatDate(video.createdAt) }}</span>
+          </div>
         </div>
         <div v-if="video.externalUserId" class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">External User ID</span>
@@ -198,8 +225,8 @@ onUnmounted(() => {
       <DialogContent class="sm:max-w-4xl p-0 overflow-hidden" @pointer-down-outside.prevent @interact-outside.prevent>
         <DialogHeader class="p-6 pb-0">
           <div class="flex items-center gap-2">
-            <component v-if="playerOutput" :is="formatIcon[playerOutput.format] ?? FileVideo" :size="18" class="text-muted-foreground" />
-            <DialogTitle>{{ playerOutput ? (formatLabel[playerOutput.format] ?? playerOutput.format) : '' }} Player</DialogTitle>
+            <component v-if="playerOutput" :is="formatIcon[playerOutput.formats[0]] ?? FileVideo" :size="18" class="text-muted-foreground" />
+            <DialogTitle>{{ playerOutput ? playerOutput.formats.map(f => formatLabel[f] ?? f).join(' / ') : '' }} Player</DialogTitle>
           </div>
         </DialogHeader>
         <div class="px-6 pb-6">
@@ -219,9 +246,11 @@ onUnmounted(() => {
         <Card v-for="output in video.outputs" :key="output.ulid">
           <CardHeader class="pb-3">
             <div class="flex items-center justify-between gap-2">
-              <div class="flex items-center gap-2 min-w-0">
-                <component :is="formatIcon[output.format] ?? FileVideo" :size="16" class="text-muted-foreground shrink-0" />
-                <span class="font-semibold text-sm">{{ formatLabel[output.format] ?? output.format }}</span>
+              <div class="flex items-center gap-1.5 min-w-0 flex-wrap">
+                <Badge v-for="f in output.formats" :key="f" variant="secondary" class="text-xs gap-1">
+                  <component :is="formatIcon[f] ?? FileVideo" :size="12" />
+                  {{ formatLabel[f] ?? f }}
+                </Badge>
                 <Badge :variant="getStatusVariant(output.status)" class="text-xs">{{ output.status }}</Badge>
               </div>
               <div class="flex items-center gap-2 shrink-0">
@@ -239,9 +268,16 @@ onUnmounted(() => {
             </div>
 
             <!-- Summary line -->
-            <p v-if="getOutputSummary(output)" class="text-xs text-muted-foreground mt-0.5 ml-6">
+            <p v-if="getOutputSummary(output)" class="text-xs text-muted-foreground mt-2">
               {{ getOutputSummary(output) }}
             </p>
+
+            <!-- Codecs -->
+            <div v-if="outputCodecs(output).length" class="flex flex-wrap gap-1 mt-1.5">
+              <Badge v-for="c in outputCodecs(output)" :key="c" variant="outline" class="text-[10px] px-1.5 py-0 font-normal text-muted-foreground">
+                {{ c }}
+              </Badge>
+            </div>
 
             <!-- Progress (only while running) -->
             <div v-if="output.status === 'running'" class="flex items-center gap-2 mt-2">
@@ -256,6 +292,7 @@ onUnmounted(() => {
                 v-for="stream in outputStreams(output)"
                 :key="stream.ulid"
                 :stream="stream"
+                :codec-label="codecLabel"
                 @on-deleted="() => onStreamDeleted(stream)"
               />
             </div>

@@ -47,33 +47,26 @@ class Output extends Model
         return $this->video->ulid;
     }
 
-    /** Master manifest filenames — shared with {@see \App\Services\PackagerCommandBuilder} so the
-     *  packager output and the served path can never diverge. */
-    public const HLS_MANIFEST = 'master.m3u8';
-
-    public const DASH_MANIFEST = 'manifest.mpd';
-
     /**
-     * Manifest filename for a format, optionally capped to a height: `master.m3u8` /
-     * `master.720.m3u8` (HLS) or `manifest.mpd` / `manifest.720.mpd` (DASH).
+     * This output's manifest filename for a format, optionally capped to a height: `{ulid}.m3u8` /
+     * `{ulid}.720.m3u8` (HLS) or `{ulid}.mpd` / `{ulid}.720.mpd` (DASH). Keyed by the output's own
+     * ulid (not a fixed `master`/`manifest` name) so two outputs of the same video — which can land
+     * on the same cap if their video renditions share a height — never collide on the same S3 key;
+     * segments stay shared at `{videoUlid}/{streamUlid}/…` regardless, only the manifest is scoped
+     * per output. Shared with {@see \App\Services\PackagerCommandBuilder} so the packager output and
+     * the served path can never diverge.
      */
-    public static function manifestFile(string $format, ?int $cap = null): string
+    public function manifestFile(string $format, ?int $cap = null): string
     {
-        $name = $format === 'hls' ? self::HLS_MANIFEST : self::DASH_MANIFEST;
+        $ext = $format === 'hls' ? 'm3u8' : 'mpd';
 
-        if ($cap === null) {
-            return $name;
-        }
-
-        $dot = strrpos($name, '.');
-
-        return substr($name, 0, $dot).".{$cap}".substr($name, $dot);
+        return $cap === null ? "{$this->ulid}.{$ext}" : "{$this->ulid}.{$cap}.{$ext}";
     }
 
     /** Public path of this output's master manifest, mirroring its S3 key (`{videoUlid}/file`). */
     public function manifestPath(string $format): string
     {
-        return "{$this->packagePrefix()}/".self::manifestFile($format);
+        return "{$this->packagePrefix()}/".$this->manifestFile($format);
     }
 
     /**
