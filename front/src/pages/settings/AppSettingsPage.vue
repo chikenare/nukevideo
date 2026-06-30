@@ -1,42 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import { Skeleton } from '@/components/ui/skeleton'
-import { UserPlus, CircleCheck, TriangleAlert } from '@lucide/vue'
+import { CircleCheck, TriangleAlert } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
-import type { GeneralSettings } from '@/types/Settings'
 import SettingsService from '@/services/SettingsService'
-import { toast } from 'vue-sonner'
 
-const settings = ref<GeneralSettings | null>(null)
-const loading = ref(true)
-const saving = ref<string | null>(null)
 const version = ref<{ current: string; latest: string; behind: number } | null>(null)
-
-async function fetchSettings() {
-  try {
-    settings.value = await SettingsService.getAll()
-  } finally {
-    loading.value = false
-  }
-}
-
-async function toggle(key: keyof GeneralSettings, value: boolean) {
-  if (!settings.value) return
-
-  saving.value = key
-  try {
-    await SettingsService.update({ [key]: value })
-    toast.success('Setting updated')
-  } catch {
-    settings.value[key] = !value
-    toast.error('Failed to update setting')
-  } finally {
-    saving.value = null
-  }
-}
 
 async function fetchVersion() {
   try {
@@ -46,10 +15,7 @@ async function fetchVersion() {
   }
 }
 
-onMounted(() => {
-  fetchSettings()
-  fetchVersion()
-})
+onMounted(fetchVersion)
 </script>
 
 <template>
@@ -58,31 +24,6 @@ onMounted(() => {
       <h1 class="text-2xl font-bold">Settings</h1>
       <p class="text-muted-foreground">Manage application configuration.</p>
     </div>
-
-    <Skeleton v-if="loading" class="h-48 w-full rounded-xl" />
-
-    <Card v-else-if="settings">
-      <CardHeader>
-        <CardTitle>General</CardTitle>
-        <CardDescription>Core application settings.</CardDescription>
-      </CardHeader>
-      <CardContent class="space-y-6">
-        <div class="flex items-start gap-4">
-          <div class="rounded-md border p-2 text-muted-foreground">
-            <UserPlus class="h-5 w-5" />
-          </div>
-          <div class="flex-1 space-y-0.5">
-            <Label class="text-sm font-medium">User Registration</Label>
-            <p class="text-sm text-muted-foreground">Allow new users to create accounts on the platform.</p>
-          </div>
-          <Switch
-            v-model="settings.registrationEnabled"
-            :disabled="saving === 'registrationEnabled'"
-            @update:model-value="(v: boolean) => toggle('registrationEnabled', v)"
-          />
-        </div>
-      </CardContent>
-    </Card>
 
     <Card v-if="version">
       <CardHeader>

@@ -3,12 +3,6 @@ export type LoginPayload = {
   password: string
 }
 
-export type RegisterPayload = {
-  name: string
-  email: string
-  password: string
-}
-
 import type { Project } from './Project'
 
 export type User = {

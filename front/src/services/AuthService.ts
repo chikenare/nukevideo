@@ -1,4 +1,4 @@
-import type { LoginPayload, RegisterPayload, User } from '@/types/Auth'
+import type { LoginPayload, User } from '@/types/Auth'
 import apiClient from './api'
 import axios from 'axios'
 
@@ -17,11 +17,6 @@ export default {
 
     await httpClient.get('/sanctum/csrf-cookie')
     const { data } = await httpClient.post('/login', payload)
-    return data
-  },
-
-  async register(payload: RegisterPayload) {
-    const { data } = await httpClient.post('/register', payload)
     return data
   },
 

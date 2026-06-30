@@ -12,7 +12,6 @@ import ApiKeysPage from '@/pages/settings/ApiKeysPage.vue'
 import SshKeysPage from '@/pages/settings/SshKeysPage.vue'
 import AppSettingsPage from '@/pages/settings/AppSettingsPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
-import RegisterPage from '@/pages/auth/RegisterPage.vue'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -20,7 +19,6 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { name: 'Login', path: '/login', component: LoginPage, meta: { guest: true } },
-    { name: 'Register', path: '/register', component: RegisterPage, meta: { guest: true } },
     { name: 'Home', path: '/', component: HomePage },
     { name: 'Videos', path: '/videos', component: VideosPage },
     { name: 'Video', path: '/videos/:id', component: VideoPage },

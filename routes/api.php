@@ -84,14 +84,11 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::apiResource('users', UserController::class);
 
-        Route::get('settings', [SettingsController::class, 'index']);
-        Route::patch('settings', [SettingsController::class, 'update']);
         Route::get('settings/version', [SettingsController::class, 'versionCheck']);
     });
 });
 
 // Public
-Route::get('settings/public', [SettingsController::class, 'publicSettings']);
 Route::get('nodes/{node}/bootstrap', [NodeController::class, 'bootstrapScript'])
     ->middleware('signed')->name('nodes.bootstrap');
 

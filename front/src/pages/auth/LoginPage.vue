@@ -1,27 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import AuthService from '@/services/AuthService'
-import SettingsService from '@/services/SettingsService'
 import { ValidationException } from '@/exceptions/ValidationException'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
-const registrationEnabled = ref(true)
-
-onMounted(async () => {
-  try {
-    const pub = await SettingsService.getPublic()
-    registrationEnabled.value = pub.registrationEnabled
-  } catch {
-    // default to showing the link
-  }
-})
 
 const form = ref({
   email: '',
@@ -74,13 +63,6 @@ async function handleLogin() {
           <Button type="submit" class="w-full" :disabled="loading">
             {{ loading ? 'Loading...' : 'Login' }}
           </Button>
-
-          <p v-if="registrationEnabled" class="text-center text-sm text-muted-foreground">
-            Don't you have an account?
-            <RouterLink to="/register" class="text-primary underline-offset-4 hover:underline">
-              Register
-            </RouterLink>
-          </p>
         </form>
       </CardContent>
     </Card>
