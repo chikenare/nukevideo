@@ -39,7 +39,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
 
         // Safety net for runs that never reached finalizeVideoIfReady. Only our own subtrees
         // (the store reuses the default bucket), never the whole `{ulid}/` prefix.
-        Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::CHUNKS_DIR);
+        Storage::disk('chunks')->deleteDirectory(Video::chunksDirFor($this->videoUlid));
         Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::SOURCE_DIR);
 
         $original = $video?->streams()->where('type', 'original')->first();

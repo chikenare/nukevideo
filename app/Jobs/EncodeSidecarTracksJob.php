@@ -86,7 +86,7 @@ class EncodeSidecarTracksJob implements ShouldQueue
         $outputPaths = [];
         foreach ($streams as $stream) {
             $ext = $stream->type === 'subtitle' ? 'vtt' : 'mp4';
-            $local = Storage::disk('local')->path("{$video->ulid}/sidecar/{$stream->ulid}.{$ext}");
+            $local = Storage::disk('local')->path($video->sidecarPath($stream, $ext));
             $dir = dirname($local);
             if (! is_dir($dir)) {
                 mkdir($dir, 0755, true);

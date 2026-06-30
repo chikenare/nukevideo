@@ -46,6 +46,7 @@ class ManifestEditor
     {
         $disk = Storage::disk('s3');
         $ulid = $stream->ulid;
+        $segmentsPath = $stream->segmentsPath($video);
 
         if ($stream->type === 'subtitle') {
             foreach ($video->outputs as $output) {
@@ -61,7 +62,7 @@ class ManifestEditor
                 }
             }
 
-            $disk->deleteDirectory("{$video->ulid}/{$ulid}");
+            $disk->deleteDirectory($segmentsPath);
 
             return;
         }
@@ -88,7 +89,7 @@ class ManifestEditor
             }
         }
 
-        $disk->deleteDirectory("{$video->ulid}/{$ulid}");
+        $disk->deleteDirectory($segmentsPath);
     }
 
     /**

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Data\VideoData;
 use App\Http\Requests\Video\UpdateVideoRequest;
+use App\Models\Video;
 use App\Services\VideoService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -70,7 +71,7 @@ class VideoController extends Controller
 
     public function getAsset(Request $request, string $ulid, string $filename)
     {
-        $path = "$ulid/$filename";
+        $path = Video::assetPath($ulid, $filename);
 
         if (! Storage::exists($path)) {
             return response()->json([

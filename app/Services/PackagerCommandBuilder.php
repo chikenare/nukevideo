@@ -11,6 +11,13 @@ use App\Models\Output;
  */
 class PackagerCommandBuilder
 {
+    /** Throwaway subtitle-only manifest names ({@see buildText}); never a real output's filename
+     *  ({@see \App\Models\Output::manifestFile} always names a real one after the output's own ulid),
+     *  so {@see \App\Jobs\PackageVideoJob::packageSubtitles} can glob for "every manifest but these". */
+    public const SUBS_DASH_MANIFEST = '_subs.mpd';
+
+    public const SUBS_HLS_MANIFEST = '_subs.m3u8';
+
     public function __construct(
         private string $bin,
         private int $segmentDuration,
@@ -54,13 +61,20 @@ class PackagerCommandBuilder
         return $args;
     }
 
+    /** Where one stream's CMAF segments are written, relative to the run's output dir — matches
+     *  {@see \App\Models\Stream::segmentsPath} (which builds the same shape for deletion). */
+    private function segmentDir(string $outputDir, string $ulid): string
+    {
+        return "{$outputDir}/{$ulid}";
+    }
+
     /**
      * @param  array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}  $input
      * @param  list<string>  $formats
      */
     private function streamDescriptor(array $input, string $outputDir, array $formats): string
     {
-        $segmentDir = "{$outputDir}/{$input['ulid']}";
+        $segmentDir = $this->segmentDir($outputDir, $input['ulid']);
 
         $parts = [
             "in={$input['path']}",
@@ -107,13 +121,13 @@ class PackagerCommandBuilder
 
         if ($format === 'hls') {
             $args[] = '--hls_master_playlist_output';
-            $args[] = "{$outputDir}/_subs.m3u8";
+            $args[] = "{$outputDir}/".self::SUBS_HLS_MANIFEST;
             $args[] = '--hls_playlist_type';
             $args[] = 'VOD';
         } else {
             $args[] = '--generate_static_live_mpd';
             $args[] = '--mpd_output';
-            $args[] = "{$outputDir}/_subs.mpd";
+            $args[] = "{$outputDir}/".self::SUBS_DASH_MANIFEST;
         }
 
         return $args;
@@ -130,7 +144,7 @@ class PackagerCommandBuilder
      */
     private function textDescriptor(array $input, string $outputDir, string $format): string
     {
-        $segmentDir = "{$outputDir}/{$input['ulid']}";
+        $segmentDir = $this->segmentDir($outputDir, $input['ulid']);
 
         $parts = ["in={$input['path']}", 'stream=text'];
 

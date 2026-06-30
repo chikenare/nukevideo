@@ -3,6 +3,7 @@
 namespace App\Data;
 
 use App\Models\Output;
+use App\Models\Video;
 use Spatie\LaravelData\Data;
 
 class VodOutputData extends Data
@@ -22,8 +23,8 @@ class VodOutputData extends Data
             ulid: $output->ulid,
             formats: $output->formats(),
             url: $vodUrl,
-            thumbnailUrl: url("api/videos/{$videoUlid}/thumbnail.jpg"),
-            storyboardUrl: url("api/videos/{$videoUlid}/storyboard.vtt"),
+            thumbnailUrl: url('api/videos/'.Video::assetPath($videoUlid, Video::THUMBNAIL_FILENAME)),
+            storyboardUrl: url('api/videos/'.Video::assetPath($videoUlid, Video::STORYBOARD_VTT_FILENAME)),
         );
     }
 }

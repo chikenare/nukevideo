@@ -41,13 +41,13 @@ class ExtractThumbnailJob implements ShouldQueue
 
             $sourceUrl = SegmentVideoJob::sourceUrl($this->mirrorPath);
 
-            $thumbnailLocalPath = Storage::disk('tmp')->path("{$video->ulid}/thumbnail.jpg");
+            $thumbnailLocalPath = Storage::disk('tmp')->path("{$video->ulid}/".Video::THUMBNAIL_FILENAME);
 
             $offset = (int) (self::POSITION_PERCENT / 100 * $video->duration);
 
             app(ThumbnailService::class)->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
 
-            $this->publish($video->stagingKey('thumbnail.jpg'), $thumbnailLocalPath);
+            $this->publish($video->stagingKey(Video::THUMBNAIL_FILENAME), $thumbnailLocalPath);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }

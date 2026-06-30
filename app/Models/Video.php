@@ -76,16 +76,67 @@ class Video extends Model
 
     public const CHUNKSTAGE_DIR = 'chunkstage';
 
+    public const SIDECAR_DIR = 'sidecar';
+
+    /** Filename of every video's thumbnail/storyboard assets, shared by the jobs that produce them
+     *  and the controller/DTOs that serve/link them. */
+    public const THUMBNAIL_FILENAME = 'thumbnail.jpg';
+
+    public const STORYBOARD_VTT_FILENAME = 'storyboard.vtt';
+
+    /** printf-style pattern ffmpeg fills in (`%d`) when emitting one sprite sheet per call; mirrors
+     *  {@see storyboardSpriteFilename} so the writer and reader of these files never disagree. */
+    public const STORYBOARD_SPRITE_PATTERN = 'storyboard_%d.jpg';
+
+    public static function storyboardSpriteFilename(int $index): string
+    {
+        return sprintf(self::STORYBOARD_SPRITE_PATTERN, $index);
+    }
+
+    /** Glob matching every chunk filename `chunkKey()` produces, for jobs that need to enumerate
+     *  staged chunks rather than address one by index. */
+    public const CHUNK_FILENAME_GLOB = 'chunk_*.mp4';
+
     /** Internal-mirror key of one encoded chunk: `{ulid}/chunks/{streamUlid}/chunk_NNN.mp4` (built in two jobs). */
     public function chunkKey(Stream $stream, int $index): string
     {
-        return sprintf('%s/%s/%s/chunk_%03d.mp4', $this->ulid, self::CHUNKS_DIR, $stream->ulid, $index);
+        return sprintf('%s/%s/chunk_%03d.mp4', $this->chunksDir(), $stream->ulid, $index);
+    }
+
+    /** Internal-mirror dir holding every stream's staged chunks: `{ulid}/chunks` (synced/pruned by several jobs). */
+    public function chunksDir(): string
+    {
+        return self::chunksDirFor($this->ulid);
+    }
+
+    /** Same as {@see chunksDir()} for call sites that only have the bare ulid (e.g. scratch-dir sweeps). */
+    public static function chunksDirFor(string $ulid): string
+    {
+        return "{$ulid}/".self::CHUNKS_DIR;
+    }
+
+    /** Internal-mirror dir holding every single-pass staged asset: `{ulid}/final` (synced/pruned by several jobs). */
+    public function finalDir(): string
+    {
+        return "{$this->ulid}/".self::FINAL_DIR;
     }
 
     /** Internal-mirror staging key for a single-pass asset: `{ulid}/final/{name}` (thumbnail/storyboard jobs). */
     public function stagingKey(string $name): string
     {
-        return "{$this->ulid}/".self::FINAL_DIR."/{$name}";
+        return "{$this->finalDir()}/{$name}";
+    }
+
+    /** Internal-mirror key of the mirrored source upload: `{ulid}/source/original.{ext}`. */
+    public function sourceMirrorPath(string $extension): string
+    {
+        return "{$this->ulid}/".self::SOURCE_DIR."/original.{$extension}";
+    }
+
+    /** Local scratch path for one sidecar track before it's staged to the mirror: `{ulid}/sidecar/{streamUlid}.{ext}`. */
+    public function sidecarPath(Stream $stream, string $extension): string
+    {
+        return "{$this->ulid}/".self::SIDECAR_DIR."/{$stream->ulid}.{$extension}";
     }
 
     /** Local scratch dir (relative) where renditions are concatenated and packaged. */
@@ -98,6 +149,12 @@ class Video extends Model
     public function chunkstageDir(): string
     {
         return "{$this->ulid}/".self::CHUNKSTAGE_DIR;
+    }
+
+    /** Primary-S3 key of a video-root asset (thumbnail/storyboard): `{ulid}/{filename}`. */
+    public static function assetPath(string $ulid, string $filename): string
+    {
+        return "{$ulid}/{$filename}";
     }
 
     public function user(): BelongsTo

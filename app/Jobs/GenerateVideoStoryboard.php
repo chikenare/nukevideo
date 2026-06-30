@@ -63,7 +63,7 @@ class GenerateVideoStoryboard implements ShouldQueue
 
             $spriteCount = app(ThumbnailService::class)->generateStoryboardSprites(
                 inputPath: $sourceUrl,
-                outputPattern: "{$tmpDir}/storyboard_%d.jpg",
+                outputPattern: "{$tmpDir}/".Video::STORYBOARD_SPRITE_PATTERN,
                 interval: self::THUMBNAIL_INTERVAL,
                 columns: self::SPRITE_COLUMNS,
                 rows: self::SPRITE_ROWS,
@@ -74,7 +74,7 @@ class GenerateVideoStoryboard implements ShouldQueue
             );
 
             $vtt = $this->buildVtt($totalThumbs, $perSprite, $spriteCount, $thumbHeight);
-            file_put_contents("{$tmpDir}/storyboard.vtt", $vtt);
+            file_put_contents("{$tmpDir}/".Video::STORYBOARD_VTT_FILENAME, $vtt);
 
             $this->uploadArtifacts($video, $spriteCount);
         } catch (Throwable $e) {
@@ -134,7 +134,7 @@ class GenerateVideoStoryboard implements ShouldQueue
             $end = $this->formatVttTime(($i + 1) * self::THUMBNAIL_INTERVAL);
 
             $vtt .= "{$start} --> {$end}\n";
-            $vtt .= "storyboard_{$sprite}.jpg#xywh={$x},{$y},".self::THUMB_WIDTH.",{$thumbHeight}\n\n";
+            $vtt .= Video::storyboardSpriteFilename($sprite)."#xywh={$x},{$y},".self::THUMB_WIDTH.",{$thumbHeight}\n\n";
         }
 
         return $vtt;
@@ -147,9 +147,9 @@ class GenerateVideoStoryboard implements ShouldQueue
 
     private function uploadArtifacts(Video $video, int $spriteCount): void
     {
-        $names = ['storyboard.vtt'];
+        $names = [Video::STORYBOARD_VTT_FILENAME];
         for ($i = 0; $i < $spriteCount; $i++) {
-            $names[] = "storyboard_{$i}.jpg";
+            $names[] = Video::storyboardSpriteFilename($i);
         }
 
         $tmp = Storage::disk('tmp');

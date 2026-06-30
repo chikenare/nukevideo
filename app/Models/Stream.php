@@ -52,9 +52,24 @@ class Stream extends Model
         return $this->belongsTo(Video::class);
     }
 
+    /** This stream's `path` with the leading `{videoUlid}/` segment stripped, e.g. `video/{ulid}.mp4`.
+     *  String-derived (no `video` relation load) since the prefix is already encoded in `path`. */
+    public function relativePath(): string
+    {
+        return preg_replace('#^[^/]+/#', '', $this->path, 1);
+    }
+
+    /** Internal-mirror staging key for this rendition: `{videoUlid}/final/{type}/{ulid}.{ext}`. */
     public function stagingPath(): string
     {
-        return preg_replace('#^([^/]+)/#', '$1/final/', $this->path, 1);
+        return strstr($this->path, '/', true).'/'.Video::FINAL_DIR.'/'.$this->relativePath();
+    }
+
+    /** This stream's packaged CMAF segment directory on primary S3: `{videoUlid}/{streamUlid}`.
+     *  Matches the layout the packager writes into ({@see \App\Services\PackagerCommandBuilder}). */
+    public function segmentsPath(Video $video): string
+    {
+        return "{$video->ulid}/{$this->ulid}";
     }
 
     public function outputs(): BelongsToMany

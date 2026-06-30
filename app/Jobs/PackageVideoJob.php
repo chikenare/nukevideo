@@ -114,7 +114,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     {
         $this->awsS3Sync(
             'chunks',
-            $this->awsS3Uri('chunks', "{$video->ulid}/".Video::FINAL_DIR.'/'),
+            $this->awsS3Uri('chunks', "{$video->finalDir()}/"),
             $gatherDir,
             $video,
             $this->timeout - 120,
@@ -134,7 +134,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
         $this->awsS3Sync(
             'chunks',
-            $this->awsS3Uri('chunks', "{$video->ulid}/".Video::CHUNKS_DIR.'/'),
+            $this->awsS3Uri('chunks', "{$video->chunksDir()}/"),
             $stageDir,
             $video,
             $this->timeout - 120,
@@ -147,7 +147,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     private function concatStream(Video $video, Stream $stream, string $stageDir, string $gatherDir): void
     {
-        $chunks = glob("{$stageDir}/{$stream->ulid}/chunk_*.mp4") ?: [];
+        $chunks = glob("{$stageDir}/{$stream->ulid}/".Video::CHUNK_FILENAME_GLOB) ?: [];
         sort($chunks); // zero-padded names sort into concat order
 
         if (empty($chunks)) {
@@ -204,15 +204,19 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     private function packageOutput(Video $video, Output $output, string $gatherDir): void
     {
-        $formats = $output->formats();
+        $formats = $output->computedFormats();
 
         if (empty($formats)) {
+            $output->recordFormats([]);
+
             return;
         }
 
         $inputs = $this->resolveInputs($output, $gatherDir);
 
         if (empty($inputs)) {
+            $output->recordFormats([]);
+
             return;
         }
 
@@ -221,6 +225,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         }
 
         $this->packageManifests($video, $output, $inputs, $gatherDir, $formats);
+        $output->recordFormats($formats);
 
         Log::info('Output packaged', ['video' => $video->id, 'output' => $output->id, 'formats' => $formats]);
     }
@@ -329,7 +334,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     /** Local path of a rendition in the gather tree, mirroring its `{ulid}/{type}/x.ext` S3 key. */
     private function localRenditionPath(Stream $stream, string $gatherDir): string
     {
-        return $gatherDir.'/'.preg_replace('#^[^/]+/#', '', $stream->path, 1);
+        return $gatherDir.'/'.$stream->relativePath();
     }
 
     /**
@@ -382,7 +387,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         // so they're matched by extension and the `_subs.*` throwaway is excluded by its leading
         // underscore — a real output ulid never starts with one.
         if (glob("{$gatherDir}/[!_]*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
-            $subsXml = file_get_contents("{$gatherDir}/_subs.mpd");
+            $subsXml = file_get_contents("{$gatherDir}/".PackagerCommandBuilder::SUBS_DASH_MANIFEST);
 
             foreach (glob("{$gatherDir}/[!_]*.mpd") ?: [] as $mpd) {
                 $original = file_get_contents($mpd);
@@ -393,11 +398,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 }
             }
 
-            @unlink("{$gatherDir}/_subs.mpd"); // throwaway master; the grafted text set references the kept segments
+            @unlink("{$gatherDir}/".PackagerCommandBuilder::SUBS_DASH_MANIFEST); // throwaway master; the grafted text set references the kept segments
         }
 
         if (glob("{$gatherDir}/[!_]*.m3u8") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'hls')) {
-            $subsContent = file_get_contents("{$gatherDir}/_subs.m3u8");
+            $subsContent = file_get_contents("{$gatherDir}/".PackagerCommandBuilder::SUBS_HLS_MANIFEST);
 
             foreach (glob("{$gatherDir}/[!_]*.m3u8") ?: [] as $m3u8) {
                 $original = file_get_contents($m3u8);
@@ -408,7 +413,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 }
             }
 
-            @unlink("{$gatherDir}/_subs.m3u8");
+            @unlink("{$gatherDir}/".PackagerCommandBuilder::SUBS_HLS_MANIFEST);
         }
     }
 
@@ -433,7 +438,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             return false;
         }
 
-        return is_file("{$gatherDir}/".($format === 'dash' ? '_subs.mpd' : '_subs.m3u8'));
+        return is_file("{$gatherDir}/".($format === 'dash' ? PackagerCommandBuilder::SUBS_DASH_MANIFEST : PackagerCommandBuilder::SUBS_HLS_MANIFEST));
     }
 
     /**

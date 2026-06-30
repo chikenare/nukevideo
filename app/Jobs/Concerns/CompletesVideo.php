@@ -62,9 +62,9 @@ trait CompletesVideo
         if ($this->completeVideoIfReady($video)) {
             Storage::disk('local')->deleteDirectory($video->ulid);
             // Only our own subtrees (the store reuses the default bucket), never the whole prefix.
-            Storage::disk('chunks')->deleteDirectory("{$video->ulid}/".Video::CHUNKS_DIR);
+            Storage::disk('chunks')->deleteDirectory($video->chunksDir());
             Storage::disk('chunks')->deleteDirectory("{$video->ulid}/".Video::SOURCE_DIR);
-            Storage::disk('chunks')->deleteDirectory("{$video->ulid}/".Video::FINAL_DIR);
+            Storage::disk('chunks')->deleteDirectory($video->finalDir());
             $video->outputs->each->clearChunkProgress();
 
             $fresh = $video->fresh();

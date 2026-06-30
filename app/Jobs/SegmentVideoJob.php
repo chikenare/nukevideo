@@ -105,7 +105,7 @@ class SegmentVideoJob implements ShouldQueue
     private function ensureSourceMirrored(Video $video): string
     {
         $ext = pathinfo($this->originalPath, PATHINFO_EXTENSION) ?: 'mp4';
-        $mirrorPath = "{$video->ulid}/".Video::SOURCE_DIR."/original.{$ext}";
+        $mirrorPath = $video->sourceMirrorPath($ext);
 
         if (Storage::disk('chunks')->exists($mirrorPath)) {
             return $mirrorPath;

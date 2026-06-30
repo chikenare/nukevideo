@@ -29,6 +29,7 @@ class Output extends Model
     {
         return [
             'status' => VideoStatus::class,
+            'packaged_formats' => 'array',
         ];
     }
 
@@ -63,20 +64,39 @@ class Output extends Model
         return $cap === null ? "{$this->ulid}.{$ext}" : "{$this->ulid}.{$cap}.{$ext}";
     }
 
-    /** Public path of this output's master manifest, mirroring its S3 key (`{videoUlid}/file`). */
-    public function manifestPath(string $format): string
+    /** Public path of this output's manifest, mirroring its S3 key (`{videoUlid}/file`), optionally capped. */
+    public function manifestPath(string $format, ?int $cap = null): string
     {
-        return "{$this->packagePrefix()}/".$this->manifestFile($format);
+        return "{$this->packagePrefix()}/".$this->manifestFile($format, $cap);
     }
 
     /**
-     * Streaming formats this output can serve, derived from its streams' codecs: the intersection
-     * of each codec's supported protocols (config/ffmpeg.php). One CMAF package emits a manifest
-     * per format over shared segments, so e.g. H.264+AAC yields both HLS and DASH, Opus only DASH.
+     * Streaming formats this output actually serves. Frozen in `packaged_formats` at package time
+     * ({@see recordFormats}) rather than recomputed live: a later stream deletion edits manifests in
+     * place but never deletes the file ({@see \App\Services\ManifestEditor::removeStream}), so a live
+     * recomputation from the currently-attached streams' codecs could silently drift from what's
+     * really packaged on S3 — e.g. deleting the only Opus (DASH-only) audio stream from an output
+     * would make a live computation claim HLS too, even though no `.m3u8` was ever packaged, breaking
+     * {@see \App\Http\Controllers\VodController::buildLink}. Falls back to the live computation only
+     * before packaging has run (`packaged_formats` is still null).
      *
      * @return list<string>
      */
     public function formats(): array
+    {
+        return $this->packaged_formats ?? $this->computedFormats();
+    }
+
+    /**
+     * Live computation from this output's streams' codecs: the intersection of each codec's
+     * supported protocols (config/ffmpeg.php). One CMAF package emits a manifest per format over
+     * shared segments, so e.g. H.264+AAC yields both HLS and DASH, Opus only DASH. Authoritative only
+     * at package time ({@see \App\Jobs\PackageVideoJob::packageOutput}, which freezes the result via
+     * {@see recordFormats}); use {@see formats()} everywhere else.
+     *
+     * @return list<string>
+     */
+    public function computedFormats(): array
     {
         $codecs = collect(config('ffmpeg.codecs'));
 
@@ -91,6 +111,13 @@ class Output extends Model
         }
 
         return array_values(array_intersect(...$protocolSets->all()));
+    }
+
+    /** Freeze the formats actually packaged so {@see formats()} never has to recompute (and can't
+     *  drift) after. Call once packaging for this output has genuinely finished. */
+    public function recordFormats(array $formats): void
+    {
+        $this->forceFill(['packaged_formats' => $formats])->save();
     }
 
     private function streamCodec(Stream $stream): ?string
