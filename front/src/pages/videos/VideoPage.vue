@@ -18,7 +18,7 @@ import DeleteVideoButton from './components/DeleteVideoButton.vue'
 import StreamItem from './components/StreamItem.vue'
 import { toast } from 'vue-sonner'
 import { ApiException } from '@/exceptions/ApiException'
-import VideoPlayer from './components/VideoPlayer.vue'
+import ShakaVideoPlayer from './components/ShakaVideoPlayer.vue'
 
 const route = useRoute()
 
@@ -203,7 +203,7 @@ onUnmounted(() => {
           </div>
         </DialogHeader>
         <div class="px-6 pb-6">
-          <VideoPlayer v-if="playerOutput" :video="video" :output-ulid="playerOutput.ulid" />
+          <ShakaVideoPlayer v-if="playerOutput" :video="video" :output-ulid="playerOutput.ulid" />
         </div>
       </DialogContent>
     </Dialog>

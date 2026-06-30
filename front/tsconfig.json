@@ -1,7 +1,6 @@
 {
   "files": [],
   "compilerOptions": {
-    "types": ["vidstack/vue"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
