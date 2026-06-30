@@ -334,9 +334,17 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * @param  list<array{path:string,type:string,ulid:string,height:?int}>  $inputs
      * @param  list<string>  $formats
      */
+    private function makeBuilder(): PackagerCommandBuilder
+    {
+        return new PackagerCommandBuilder(
+            (string) config('packager.bin'),
+            (int) config('packager.segment_duration'),
+        );
+    }
+
     private function runPackager(Video $video, array $inputs, string $outputDir, array $formats, ?int $cap): void
     {
-        $builder = new PackagerCommandBuilder(config('packager.bin'), (int) config('packager.segment_duration'));
+        $builder = $this->makeBuilder();
 
         $result = Process::timeout($this->timeout - 120)->run(
             $builder->build($inputs, $outputDir, $formats, $cap),
@@ -366,7 +374,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
         // A segment longer than the video spans it in one piece.
         $segmentDuration = (int) ceil((float) $video->duration) + 2;
-        $builder = new PackagerCommandBuilder(config('packager.bin'), (int) config('packager.segment_duration'));
+        $builder = $this->makeBuilder();
 
         if (glob("{$gatherDir}/manifest*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
             $subsXml = file_get_contents("{$gatherDir}/_subs.mpd");

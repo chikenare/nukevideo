@@ -1,50 +1,31 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
-import type { Stream, UpdateStreamDto } from '@/types/Video'
-import { Edit, MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown } from '@lucide/vue'
+import type { Stream } from '@/types/Video'
+import { MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown } from '@lucide/vue'
 import prettyBytes from 'pretty-bytes'
 import { toast } from 'vue-sonner'
 
 const { stream } = defineProps<{ stream: Stream }>()
-const emit = defineEmits(['onDeleted', 'onUpdated'])
+const emit = defineEmits(['onDeleted'])
 
-const isEditDialogOpen = ref(false)
 const isErrorExpanded = ref(false)
-const editName = ref('')
-const editLanguage = ref('')
-
-// Language is part of the manifest for audio and is the sidecar metadata for subtitles; video has none.
-const canEditLanguage = computed(() => stream.type === 'audio' || stream.type === 'subtitle')
-
-const handleEdit = () => {
-  editName.value = stream.name ?? ''
-  editLanguage.value = stream.language ?? ''
-  isEditDialogOpen.value = true
-}
-
-const handleUpdate = async () => {
-  try {
-    const dto: UpdateStreamDto = { name: editName.value }
-    if (canEditLanguage.value) dto.language = editLanguage.value || null
-    const res = await StreamService.update(stream.ulid, dto)
-    toast.success(res.data.message)
-    isEditDialogOpen.value = false
-    emit('onUpdated')
-  } catch (e) {
-    if (e instanceof ApiException) toast.error(e.message)
-    console.error(e)
-  }
-}
+const isDeleteDialogOpen = ref(false)
 
 const handleDelete = async () => {
-  if (!confirm(`Delete stream ${stream.name ?? stream.ulid}`)) return
   try {
     const res = await StreamService.destroy(stream.ulid)
     toast.info(res.data.message)
@@ -52,6 +33,8 @@ const handleDelete = async () => {
   } catch (e) {
     if (e instanceof ApiException) toast.error(e.message)
     console.error(e)
+  } finally {
+    isDeleteDialogOpen.value = false
   }
 }
 
@@ -146,10 +129,7 @@ const details = computed(() => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuItem @click="handleEdit">
-              <Edit :size="14" class="mr-2" /> Edit
-            </DropdownMenuItem>
-            <DropdownMenuItem @click="handleDelete" class="text-destructive">
+            <DropdownMenuItem @click="isDeleteDialogOpen = true" class="text-destructive">
               <Trash2 :size="14" class="mr-2" /> Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
@@ -162,25 +142,18 @@ const details = computed(() => {
     </div>
   </div>
 
-  <Dialog v-model:open="isEditDialogOpen">
-    <DialogContent class="sm:max-w-106.25">
-      <DialogHeader>
-        <DialogTitle>Edit Stream Label</DialogTitle>
-      </DialogHeader>
-      <div class="grid gap-4 py-4">
-        <div class="grid grid-cols-4 items-center gap-4">
-          <Label for="label" class="text-right">Label</Label>
-          <Input id="label" v-model="editName" class="col-span-3" @keyup.enter="handleUpdate" />
-        </div>
-        <div v-if="canEditLanguage" class="grid grid-cols-4 items-center gap-4">
-          <Label for="language" class="text-right">Language</Label>
-          <Input id="language" v-model="editLanguage" placeholder="es, en, es-MX…" class="col-span-3" @keyup.enter="handleUpdate" />
-        </div>
-      </div>
-      <DialogFooter>
-        <Button variant="outline" @click="isEditDialogOpen = false">Cancel</Button>
-        <Button @click="handleUpdate">Save changes</Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
+  <AlertDialog v-model:open="isDeleteDialogOpen">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Delete stream</AlertDialogTitle>
+        <AlertDialogDescription>
+          Delete stream "{{ stream.name ?? stream.ulid }}"? This action cannot be undone.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogAction @click="handleDelete">Delete</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>

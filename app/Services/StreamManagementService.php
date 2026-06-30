@@ -12,25 +12,6 @@ class StreamManagementService
 {
     public function __construct(private ManifestEditor $manifests) {}
 
-    public function update(string $ulid, array $data, User $user): Stream
-    {
-        $stream = $this->findOrFail($ulid, $user);
-        $stream->update($data);
-
-        // Audio and subtitle labels/languages are baked into the manifests, so sync them once the
-        // video is live. Video renditions carry no label, so they need no manifest rewrite.
-        if ($stream->video->status === VideoStatus::COMPLETED->value
-            && (array_key_exists('name', $data) || array_key_exists('language', $data))) {
-            if ($stream->type === 'audio') {
-                $this->manifests->relabelAudio($stream->video, $stream);
-            } elseif ($stream->type === 'subtitle') {
-                $this->manifests->relabelSubtitle($stream->video, $stream);
-            }
-        }
-
-        return $stream;
-    }
-
     public function destroy(string $ulid, User $user): void
     {
         $stream = $this->findOrFail($ulid, $user);
@@ -46,9 +27,10 @@ class StreamManagementService
 
         // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery.
         if ($video->status === VideoStatus::COMPLETED->value) {
-            if (in_array($stream->type, ['video', 'audio'], true)) {
-                $this->manifests->removeStream($video, $stream);
-            } elseif ($stream->type === 'subtitle') {
+            $this->manifests->removeStream($video, $stream);
+
+            // removeStream cleans up CMAF segments; the original staged file (VTT) is separate.
+            if ($stream->type === 'subtitle') {
                 Storage::disk('s3')->delete($stream->path);
             }
         }

@@ -17,6 +17,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ref, onMounted } from 'vue'
 import UserService from '@/services/UserService'
 import type { User } from '@/types/Auth'
@@ -28,6 +38,7 @@ import EditUserDialog from './EditUserDialog.vue'
 const authStore = useAuthStore()
 const users = ref<User[]>([])
 const loading = ref(true)
+const userToDelete = ref<User | null>(null)
 
 const editDialog = ref<InstanceType<typeof EditUserDialog> | null>(null)
 
@@ -48,13 +59,15 @@ const onUserUpdated = (updated: User) => {
   }
 }
 
-const deleteUser = async (user: User) => {
-  if (!confirm(`Are you sure you want to delete "${user.name}"?`)) return
+const confirmDeleteUser = async () => {
+  if (!userToDelete.value) return
   try {
-    await UserService.deleteUser(user.id)
-    users.value = users.value.filter(u => u.id !== user.id)
+    await UserService.deleteUser(userToDelete.value.id)
+    users.value = users.value.filter(u => u.id !== userToDelete.value!.id)
   } catch (error) {
     console.error('Error deleting user:', error)
+  } finally {
+    userToDelete.value = null
   }
 }
 
@@ -112,7 +125,7 @@ onMounted(fetchUsers)
                   </DropdownMenuItem>
                   <template v-if="user.id !== authStore.user?.id">
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem class="text-destructive" @click="deleteUser(user)">
+                    <DropdownMenuItem class="text-destructive" @click="userToDelete = user">
                       <Trash2 class="mr-2 h-4 w-4" />
                       Delete
                     </DropdownMenuItem>
@@ -127,4 +140,19 @@ onMounted(fetchUsers)
 
     <EditUserDialog ref="editDialog" @updated="onUserUpdated" />
   </div>
+
+  <AlertDialog :open="!!userToDelete" @update:open="(v) => { if (!v) userToDelete = null }">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Delete user</AlertDialogTitle>
+        <AlertDialogDescription>
+          Are you sure you want to delete "{{ userToDelete?.name }}"? This action cannot be undone.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogAction @click="confirmDeleteUser">Delete</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>

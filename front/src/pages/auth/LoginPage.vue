@@ -61,12 +61,12 @@ async function handleLogin() {
         <form @submit.prevent="handleLogin" class="grid gap-4">
           <div class="grid gap-2">
             <Label for="email">Email</Label>
-            <Input id="email" v-model="form.email" type="email" placeholder="correo@ejemplo.com" required />
+            <Input id="email" v-model="form.email" type="email" placeholder="email@example.com" required />
             <p v-if="errors.email" class="text-sm text-destructive">{{ errors.email[0] }}</p>
           </div>
 
           <div class="grid gap-2">
-            <Label for="password">Contraseña</Label>
+            <Label for="password">Password</Label>
             <Input id="password" v-model="form.password" type="password" placeholder="••••••••" required />
             <p v-if="errors.password" class="text-sm text-destructive">{{ errors.password[0] }}</p>
           </div>

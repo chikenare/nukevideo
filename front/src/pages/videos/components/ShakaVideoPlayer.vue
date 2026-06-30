@@ -97,7 +97,7 @@ onBeforeUnmount(destroyPlayer)
       <img v-if="video.thumbnailUrl" :src="video.thumbnailUrl" class="object-contain w-full h-full" alt="">
       <Button class="rounded-full absolute" variant="ghost" @click="handlePlayVideo" :disabled="isLoadingVideo">
         <PlayIcon v-if="!isLoadingVideo" />
-        <span v-else class="animate-spin">⏳</span>
+        <Spinner v-else class="size-4" />
       </Button>
     </template>
     <Spinner v-else-if="isLoadingVideo" class="text-secondary size-10 absolute" />

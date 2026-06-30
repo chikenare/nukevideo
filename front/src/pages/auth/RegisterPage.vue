@@ -55,25 +55,25 @@ async function handleRegister() {
   <div class="flex min-h-screen items-center justify-center px-4">
     <Card v-if="!checkingSettings && !registrationEnabled" class="w-full max-w-md">
       <CardHeader class="text-center">
-        <CardTitle class="text-2xl">Registro deshabilitado</CardTitle>
-        <CardDescription>El registro de nuevos usuarios no esta disponible en este momento.</CardDescription>
+        <CardTitle class="text-2xl">Registration Disabled</CardTitle>
+        <CardDescription>User registration is not available at this time.</CardDescription>
       </CardHeader>
       <CardContent class="text-center">
         <RouterLink to="/login" class="text-primary underline-offset-4 hover:underline text-sm">
-          Volver al inicio de sesion
+          Back to login
         </RouterLink>
       </CardContent>
     </Card>
 
     <Card v-else-if="!checkingSettings" class="w-full max-w-md">
       <CardHeader class="text-center">
-        <CardTitle class="text-2xl">Crear cuenta</CardTitle>
-        <CardDescription>Completa los campos para registrarte</CardDescription>
+        <CardTitle class="text-2xl">Create Account</CardTitle>
+        <CardDescription>Fill in the fields to create your account</CardDescription>
       </CardHeader>
       <CardContent>
         <form @submit.prevent="handleRegister" class="grid gap-4">
           <div class="grid gap-2">
-            <Label for="name">Nombre</Label>
+            <Label for="name">Name</Label>
             <Input id="name" v-model="form.name" type="text" placeholder="Name" required />
             <p v-if="errors.name" class="text-sm text-destructive">{{ errors.name[0] }}</p>
           </div>
@@ -95,9 +95,9 @@ async function handleRegister() {
           </Button>
 
           <p class="text-center text-sm text-muted-foreground">
-            ¿Ya tienes cuenta?
+            Already have an account?
             <RouterLink to="/login" class="text-primary underline-offset-4 hover:underline">
-              Inicia sesión
+              Sign in
             </RouterLink>
           </p>
         </form>

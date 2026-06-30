@@ -1,14 +1,5 @@
-<script lang="ts">
-
-import 'vue-sonner/style.css'
-import { Toaster } from '@/components/ui/sonner'
-
-export const iframeHeight = "800px"
-export const description
-  = "A simple sidebar with navigation grouped by section."
-</script>
-
 <script setup lang="ts">
+import 'vue-sonner/style.css'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -18,6 +9,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar"
+import { Toaster } from '@/components/ui/sonner'
 import ModeToggle from "./components/ModeToggle.vue"
 import Separator from "./components/ui/separator/Separator.vue"
 import UploadProgress from "./components/upload/UploadProgress.vue"
@@ -26,6 +18,7 @@ const route = useRoute()
 const authStore = useAuthStore()
 const isGuestRoute = computed(() => route.meta.guest === true)
 const isReady = computed(() => authStore.loaded)
+const pageTitle = computed(() => String(route.name ?? ''))
 </script>
 
 <template>
@@ -48,9 +41,7 @@ const isReady = computed(() => authStore.loaded)
           <div class="flex items-center">
             <SidebarTrigger class="-ml-1" />
             <Separator orientation="vertical" class="mx-2 data-[orientation=vertical]:h-4" />
-            <h1 class="text-base font-medium">
-              Videos
-            </h1>
+            <h1 class="text-base font-medium">{{ pageTitle }}</h1>
           </div>
           <ModeToggle />
         </header>

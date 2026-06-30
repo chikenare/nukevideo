@@ -12,12 +12,11 @@ use Illuminate\Support\Facades\Storage;
 
 /**
  * Surgically edits a completed video's CMAF manifests on primary S3 so they stay consistent when a
- * stream is removed or an audio track relabelled — without re-running the packager. Every stream is
- * packaged into a directory named by its ULID ({@see PackagerCommandBuilder}), so each variant is
- * located by that ULID in the manifests (HLS `URI`, DASH `SegmentTemplate@media`). Manifests are KB,
- * so this runs inline. Subtitles are packaged single-segment in a separate run and grafted into the
- * manifests at package time ({@see importDashSubtitles}, {@see hlsAddSubtitles}); this class also
- * relabels/removes them afterwards.
+ * stream is removed — without re-running the packager. Every stream is packaged into a directory
+ * named by its ULID ({@see PackagerCommandBuilder}), so each variant is located by that ULID in the
+ * manifests (HLS `URI`, DASH `SegmentTemplate@media`). Manifests are KB, so this runs inline.
+ * Subtitles are packaged single-segment in a separate run and grafted into the manifests at package
+ * time ({@see importDashSubtitles}, {@see hlsAddSubtitles}); this class also removes them afterwards.
  */
 class ManifestEditor
 {
@@ -34,19 +33,34 @@ class ManifestEditor
     ];
 
     /**
-     * Drop a video/audio stream from every manifest that lists it and delete its segment tree.
-     * Audio appears in all manifests; a video rendition only in the full master and caps ≥ its
-     * height. A capped set whose cap equals the removed height becomes redundant (it would mirror the
-     * next-lower cap) and is deleted outright. Call before deleting the DB row so heights resolve.
+     * Drop a stream from every manifest that references it and delete its packaged segment tree.
+     * For subtitle streams: removes the text AdaptationSet / EXT-X-MEDIA line and deletes the CMAF
+     * dir. For video: audio appears in all manifests; a rendition only in the full master and caps ≥
+     * its height. A capped set whose cap equals the removed height becomes redundant and is deleted.
+     * For audio: present in every manifest. Call before deleting the DB row so heights resolve.
      */
     public function removeStream(Video $video, Stream $stream): void
     {
+        $disk = Storage::disk('s3');
+        $ulid = $stream->ulid;
+
         if ($stream->type === 'subtitle') {
+            foreach ($this->existingManifests($video) as $manifest) {
+                $content = $disk->get($manifest['path']);
+                $edited = $manifest['format'] === 'dash'
+                    ? $this->dashRemoveSubtitle($content, $ulid)
+                    : $this->hlsRemoveSubtitle($content, $ulid);
+
+                if ($edited !== null && $edited !== $content) {
+                    $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
+                }
+            }
+
+            $disk->deleteDirectory("{$video->ulid}/{$ulid}");
+
             return;
         }
 
-        $disk = Storage::disk('s3');
-        $ulid = $stream->ulid;
         $height = $stream->type === 'video' ? (int) $stream->height : null;
 
         foreach ($this->existingManifests($video) as $manifest) {
@@ -75,54 +89,6 @@ class ManifestEditor
         }
 
         $disk->deleteDirectory("{$video->ulid}/{$ulid}");
-    }
-
-    /** Rewrite an audio track's display label/language across every manifest that carries it. */
-    public function relabelAudio(Video $video, Stream $stream): void
-    {
-        if ($stream->type !== 'audio') {
-            return;
-        }
-
-        $disk = Storage::disk('s3');
-
-        foreach ($this->existingManifests($video) as $manifest) {
-            $content = $disk->get($manifest['path']);
-
-            $edited = $manifest['format'] === 'dash'
-                ? $this->dashRelabel($content, $stream)
-                : $this->hlsRelabel($content, $stream);
-
-            if ($edited !== null && $edited !== $content) {
-                $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
-            }
-        }
-    }
-
-    /**
-     * Rewrite a subtitle track's display label/language across every manifest that carries it. The
-     * track is located by its packaged `{ulid}/` segment path (DASH `SegmentTemplate@media`, HLS
-     * subtitle `EXT-X-MEDIA URI`), so manifests without that track are left untouched.
-     */
-    public function relabelSubtitle(Video $video, Stream $stream): void
-    {
-        if ($stream->type !== 'subtitle') {
-            return;
-        }
-
-        $disk = Storage::disk('s3');
-
-        foreach ($this->existingManifests($video) as $manifest) {
-            $content = $disk->get($manifest['path']);
-
-            $edited = $manifest['format'] === 'dash'
-                ? $this->dashRelabelSubtitle($content, $stream)
-                : $this->hlsRelabelSubtitle($content, $stream);
-
-            if ($edited !== null && $edited !== $content) {
-                $disk->put($manifest['path'], $edited, ['ContentType' => self::CONTENT_TYPES[$manifest['format']]]);
-            }
-        }
     }
 
     /**
@@ -236,6 +202,82 @@ class ManifestEditor
         return $files;
     }
 
+    // --- Subtitle removal --------------------------------------------------
+
+    /** Drop the text `<AdaptationSet>` whose segments live under `$ulid/`. Null if not present. */
+    private function dashRemoveSubtitle(string $xml, string $ulid): ?string
+    {
+        [$doc, $xpath] = $this->loadMpd($xml);
+
+        if (! $doc) {
+            return null;
+        }
+
+        $tpl = $xpath->query(
+            "//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, '{$ulid}/')]"
+        )->item(0);
+
+        if (! $tpl instanceof DOMElement) {
+            return null;
+        }
+
+        $set = $tpl->parentNode->parentNode; // SegmentTemplate → Representation → AdaptationSet
+
+        if (! $set instanceof DOMElement) {
+            return null;
+        }
+
+        $set->parentNode->removeChild($set);
+
+        return $doc->saveXML();
+    }
+
+    /**
+     * Drop the `#EXT-X-MEDIA:TYPE=SUBTITLES` line for `$ulid`'s playlist. If no other subtitle
+     * groups remain, also strips the `SUBTITLES=` attribute from every `#EXT-X-STREAM-INF` line.
+     * Null if nothing was removed.
+     */
+    private function hlsRemoveSubtitle(string $content, string $ulid): ?string
+    {
+        $playlist = "{$ulid}/index.m3u8";
+        $lines = preg_split('/\R/', $content);
+        $removedGroup = null;
+        $out = [];
+
+        foreach ($lines as $line) {
+            if (str_starts_with($line, '#EXT-X-MEDIA')
+                && str_contains($line, 'TYPE=SUBTITLES')
+                && str_contains($line, "URI=\"{$playlist}\"")) {
+                if (preg_match('/GROUP-ID="([^"]+)"/', $line, $g)) {
+                    $removedGroup = $g[1];
+                }
+
+                continue; // drop this EXT-X-MEDIA line
+            }
+
+            $out[] = $line;
+        }
+
+        if ($removedGroup === null) {
+            return null;
+        }
+
+        $hasOtherSubs = collect($out)->contains(
+            fn ($l) => str_starts_with($l, '#EXT-X-MEDIA') && str_contains($l, 'TYPE=SUBTITLES')
+        );
+
+        if (! $hasOtherSubs) {
+            $out = array_map(
+                fn ($l) => str_starts_with($l, '#EXT-X-STREAM-INF')
+                    ? preg_replace('/,SUBTITLES="[^"]*"/', '', $l)
+                    : $l,
+                $out,
+            );
+        }
+
+        return implode("\n", $out);
+    }
+
     // --- DASH (.mpd) -------------------------------------------------------
 
     /** Remove the Representation packaged under `$ulid`, dropping its empty AdaptationSet or
@@ -262,84 +304,6 @@ class ManifestEditor
             $set->parentNode->removeChild($set);
         } elseif ($set instanceof DOMElement && $set->hasAttribute('maxWidth')) {
             $this->recomputeVideoMaxes($xpath, $set);
-        }
-
-        return $doc->saveXML();
-    }
-
-    /** Set the audio AdaptationSet's `lang` and a `<Label>` child. Returns null if absent. */
-    private function dashRelabel(string $xml, Stream $stream): ?string
-    {
-        [$doc, $xpath] = $this->loadMpd($xml);
-
-        if (! $doc) {
-            return null;
-        }
-
-        $tpl = $this->segmentTemplate($xpath, $stream->ulid);
-
-        if (! $tpl) {
-            return null;
-        }
-
-        $set = $tpl->parentNode->parentNode;
-
-        if (! $set instanceof DOMElement) {
-            return null;
-        }
-
-        if ($stream->language) {
-            $set->setAttribute('lang', $stream->language);
-        }
-
-        if ($stream->name) {
-            $label = $xpath->query('m:Label', $set)->item(0)
-                ?? $set->insertBefore($doc->createElementNS(self::DASH_NS, 'Label'), $set->firstChild);
-
-            while ($label->firstChild) {
-                $label->removeChild($label->firstChild);
-            }
-
-            $label->appendChild($doc->createTextNode($stream->name));
-        }
-
-        return $doc->saveXML();
-    }
-
-    /** Set the subtitle text AdaptationSet's `lang` and `<Label>`, found via its packaged segment path. Null if absent. */
-    private function dashRelabelSubtitle(string $xml, Stream $stream): ?string
-    {
-        [$doc, $xpath] = $this->loadMpd($xml);
-
-        if (! $doc) {
-            return null;
-        }
-
-        $tpl = $xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, '{$stream->ulid}/')]")->item(0);
-
-        if (! $tpl instanceof DOMElement) {
-            return null;
-        }
-
-        $set = $tpl->parentNode->parentNode; // SegmentTemplate -> Representation -> AdaptationSet
-
-        if (! $set instanceof DOMElement) {
-            return null;
-        }
-
-        if ($stream->language) {
-            $set->setAttribute('lang', $stream->language);
-        }
-
-        if ($stream->name) {
-            $label = $xpath->query('m:Label', $set)->item(0)
-                ?? $set->insertBefore($doc->createElementNS(self::DASH_NS, 'Label'), $set->firstChild);
-
-            while ($label->firstChild) {
-                $label->removeChild($label->firstChild);
-            }
-
-            $label->appendChild($doc->createTextNode($stream->name));
         }
 
         return $doc->saveXML();
@@ -428,62 +392,6 @@ class ManifestEditor
         }
 
         return $hit ? implode("\n", $out) : null;
-    }
-
-    /** Rewrite NAME/LANGUAGE on the audio `#EXT-X-MEDIA` line for `$ulid`. */
-    private function hlsRelabel(string $content, Stream $stream): ?string
-    {
-        $lines = preg_split('/\R/', $content);
-        $hit = false;
-
-        foreach ($lines as $i => $line) {
-            if (str_starts_with($line, '#EXT-X-MEDIA') && str_contains($line, "URI=\"{$stream->ulid}/")) {
-                $line = $this->setHlsAttr($line, 'NAME', $stream->name);
-                $line = $this->setHlsAttr($line, 'LANGUAGE', $stream->language);
-                $lines[$i] = $line;
-                $hit = true;
-            }
-        }
-
-        return $hit ? implode("\n", $lines) : null;
-    }
-
-    /** Rewrite NAME/LANGUAGE on the subtitle `#EXT-X-MEDIA:TYPE=SUBTITLES` line for this track's playlist. */
-    private function hlsRelabelSubtitle(string $content, Stream $stream): ?string
-    {
-        $playlist = "{$stream->ulid}/index.m3u8"; // packager-emitted subtitle media playlist
-        $lines = preg_split('/\R/', $content);
-        $hit = false;
-
-        foreach ($lines as $i => $line) {
-            if (str_starts_with($line, '#EXT-X-MEDIA')
-                && str_contains($line, 'TYPE=SUBTITLES')
-                && str_contains($line, "URI=\"{$playlist}\"")) {
-                $line = $this->setHlsAttr($line, 'NAME', $stream->name);
-                $line = $this->setHlsAttr($line, 'LANGUAGE', $stream->language);
-                $lines[$i] = $line;
-                $hit = true;
-            }
-        }
-
-        return $hit ? implode("\n", $lines) : null;
-    }
-
-    private function setHlsAttr(string $line, string $key, ?string $value): string
-    {
-        if ($value === null || $value === '') {
-            return $line;
-        }
-
-        $value = str_replace('"', '', $value);
-        $attr = "{$key}=\"{$value}\""; // built outside the replacement to keep $/\ in the value literal
-        $pattern = '/'.$key.'="[^"]*"/';
-
-        if (preg_match($pattern, $line)) {
-            return preg_replace_callback($pattern, fn () => $attr, $line);
-        }
-
-        return preg_replace_callback('/^#EXT-X-MEDIA:/', fn ($m) => $m[0].$attr.',', $line);
     }
 
     /**

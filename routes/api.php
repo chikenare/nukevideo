@@ -54,7 +54,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::delete('videos/{video}', [VideoController::class, 'destroy']);
 
     // Streams
-    Route::apiResource('streams', StreamController::class)->except(['show', 'index']);
+    Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
 
     // Usage / Analytics / Activity Log
     Route::get('usage', [UsageController::class, 'index'])->middleware('resolve.project');
@@ -74,7 +74,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware(EnsureAdmin::class)->group(function () {
         Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
 
-Route::apiResource('nodes', NodeController::class);
+        Route::apiResource('nodes', NodeController::class);
         Route::post('nodes/{node}/deploy', [NodeController::class, 'deploy']);
         Route::post('nodes/{node}/validate', [NodeController::class, 'validateNode']);
         Route::post('nodes/{node}/bootstrap-token', [NodeController::class, 'generateBootstrapToken']);

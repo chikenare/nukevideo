@@ -16,9 +16,9 @@ const profileForm = ref({
 })
 
 const passwordForm = ref({
-  current_password: '',
+  currentPassword: '',
   password: '',
-  password_confirmation: '',
+  passwordConfirmation: '',
 })
 
 const profileErrors = ref<Record<string, string[]>>({})
@@ -53,7 +53,7 @@ async function handleUpdatePassword() {
 
   try {
     await ProfileService.updatePassword(passwordForm.value)
-    passwordForm.value = { current_password: '', password: '', password_confirmation: '' }
+    passwordForm.value = { currentPassword: '', password: '', passwordConfirmation: '' }
     passwordSuccess.value = true
   } catch (error) {
     if (error instanceof ValidationException) {
@@ -112,8 +112,8 @@ async function handleUpdatePassword() {
         <form @submit.prevent="handleUpdatePassword" class="grid gap-4">
           <div class="grid gap-2">
             <Label for="current_password">Current Password</Label>
-            <Input id="current_password" v-model="passwordForm.current_password" type="password" required />
-            <p v-if="passwordErrors.current_password" class="text-sm text-destructive">{{ passwordErrors.current_password[0] }}</p>
+            <Input id="current_password" v-model="passwordForm.currentPassword" type="password" required />
+            <p v-if="passwordErrors.currentPassword" class="text-sm text-destructive">{{ passwordErrors.currentPassword[0] }}</p>
           </div>
 
           <div class="grid gap-2">
@@ -124,7 +124,7 @@ async function handleUpdatePassword() {
 
           <div class="grid gap-2">
             <Label for="password_confirmation">Confirm Password</Label>
-            <Input id="password_confirmation" v-model="passwordForm.password_confirmation" type="password" required />
+            <Input id="password_confirmation" v-model="passwordForm.passwordConfirmation" type="password" required />
           </div>
 
           <div class="flex items-center gap-3">

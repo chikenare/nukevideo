@@ -222,13 +222,19 @@ class OnVideoUploadedService
         $output = $video->outputs()->create(['format' => $format]);
         $sourceVideo = $streamCollection->videos()->first();
 
-        $streamIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);
+        $videoIds = $this->resolveVideoStreams($video, $sourceVideo, $outputConfig['variants'] ?? []);
+
+        // A misconfigured template (e.g. an empty/malformed `variants` list) would otherwise attach
+        // zero video streams; PackageVideoJob only discovers that deep into packaging, as an empty
+        // input list to shaka-packager. Fail loudly here instead.
+        if (empty($videoIds)) {
+            throw new Exception("Output \"{$format->value}\" resolved no video renditions from template {$this->meta->template}");
+        }
 
         $audioConfig = $outputConfig['audio'] ?? [];
         $audioIds = $this->getOrCreateAudioStreams($video, $streamCollection, $audioConfig);
-        $streamIds = array_merge($streamIds, $audioIds);
 
-        $output->streams()->attach($streamIds);
+        $output->streams()->attach([...$videoIds, ...$audioIds]);
     }
 
     private function filterVariants(FFStream $sourceVideo, array $variants): array

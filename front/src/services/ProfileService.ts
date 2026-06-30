@@ -8,9 +8,9 @@ class ProfileService {
   }
 
   async updatePassword(payload: {
-    current_password: string
+    currentPassword: string
     password: string
-    password_confirmation: string
+    passwordConfirmation: string
   }): Promise<void> {
     await apiClient.put('/profile/password', payload)
   }

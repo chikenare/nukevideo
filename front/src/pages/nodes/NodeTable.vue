@@ -15,6 +15,16 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
 import type { Node } from '@/types/Node'
@@ -27,17 +37,19 @@ const emit = defineEmits<{ updated: [node: Node]; deleted: [nodeId: number] }>()
 
 const setupDialog = ref<InstanceType<typeof SetupDialog> | null>(null)
 const editDialog = ref<InstanceType<typeof EditNodeDialog> | null>(null)
+const nodeToDelete = ref<Node | null>(null)
 
-const deleteNode = async (node: Node) => {
-  if (!confirm(`Are you sure you want to delete node "${node.name}"?`)) return
+const confirmDelete = async () => {
+  if (!nodeToDelete.value) return
   try {
-    await NodeService.deleteNode(node.id)
-    emit('deleted', node.id)
+    await NodeService.deleteNode(nodeToDelete.value.id)
+    emit('deleted', nodeToDelete.value.id)
   } catch (error) {
     console.error('Error deleting node:', error)
+  } finally {
+    nodeToDelete.value = null
   }
 }
-
 </script>
 
 <template>
@@ -64,7 +76,6 @@ const deleteNode = async (node: Node) => {
             </div>
           </TableCell>
 
-
           <TableCell class="text-right text-xs text-muted-foreground">
             {{ node.lastSeenAt || '-' }}
           </TableCell>
@@ -86,7 +97,7 @@ const deleteNode = async (node: Node) => {
                   Setup
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem class="text-destructive" @click="deleteNode(node)">
+                <DropdownMenuItem class="text-destructive" @click="nodeToDelete = node">
                   <Trash2 class="mr-2 h-4 w-4" />
                   Delete
                 </DropdownMenuItem>
@@ -99,4 +110,19 @@ const deleteNode = async (node: Node) => {
     <SetupDialog ref="setupDialog" @node-updated="(node) => emit('updated', node)" />
     <EditNodeDialog ref="editDialog" @updated="(node) => emit('updated', node)" />
   </div>
+
+  <AlertDialog :open="!!nodeToDelete" @update:open="(v) => { if (!v) nodeToDelete = null }">
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Delete node</AlertDialogTitle>
+        <AlertDialogDescription>
+          Are you sure you want to delete node "{{ nodeToDelete?.name }}"? This action cannot be undone.
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <AlertDialogFooter>
+        <AlertDialogCancel>Cancel</AlertDialogCancel>
+        <AlertDialogAction @click="confirmDelete">Delete</AlertDialogAction>
+      </AlertDialogFooter>
+    </AlertDialogContent>
+  </AlertDialog>
 </template>
