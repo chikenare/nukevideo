@@ -349,12 +349,12 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Package subtitles in a SEPARATE single-segment run (a few KB each — no point segmenting them
-     * like video), then graft their text entries into the already-written DASH/HLS manifests in the
-     * gather tree before the sync. Separate because `--segment_duration` is global: this run uses a
-     * duration longer than the video so each subtitle is one `.vtt`, while the main run keeps small
-     * video segments. Subtitles are non-critical, so a failed run leaves the video servable without
-     * them rather than aborting.
+     * Package subtitles in SEPARATE single-segment runs (a few KB each — no point segmenting them like
+     * video), then graft their text entries into the already-written DASH/HLS manifests in the gather
+     * tree before the sync. One run PER format: DASH needs fMP4 `wvtt` (with an init segment, or dashjs
+     * 404s fetching the BaseURL dir) while HLS needs raw `text/vtt` (hls.js can't parse fMP4) — see
+     * {@see PackagerCommandBuilder::buildText}. Separate from the main run because `--segment_duration`
+     * is global. Subtitles are non-critical, so a failed run leaves the video servable without them.
      */
     private function packageSubtitles(Video $video, string $gatherDir, ManifestEditor $manifests): void
     {
@@ -364,36 +364,12 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        $formats = [];
-        if (glob("{$gatherDir}/manifest*.mpd")) {
-            $formats[] = 'dash';
-        }
-        if (glob("{$gatherDir}/master*.m3u8")) {
-            $formats[] = 'hls';
-        }
-
-        if (empty($formats)) {
-            return;
-        }
-
+        // A segment longer than the video spans it in one piece.
         $segmentDuration = (int) ceil((float) $video->duration) + 2;
         $builder = new PackagerCommandBuilder(config('packager.bin'), (int) config('packager.segment_duration'));
 
-        $result = Process::timeout($this->timeout - 120)->run(
-            $builder->buildText($subs, $gatherDir, $segmentDuration, $formats),
-            fn () => $this->heartbeat($video),
-        );
-
-        if (! $result->successful()) {
-            Log::warning('Subtitle packaging failed; leaving the video without subtitles', [
-                'video' => $video->id, 'error' => $result->errorOutput(),
-            ]);
-
-            return;
-        }
-
-        if (in_array('dash', $formats, true) && is_file($subsMpd = "{$gatherDir}/_subs.mpd")) {
-            $subsXml = file_get_contents($subsMpd);
+        if (glob("{$gatherDir}/manifest*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
+            $subsXml = file_get_contents("{$gatherDir}/_subs.mpd");
 
             foreach (glob("{$gatherDir}/manifest*.mpd") ?: [] as $mpd) {
                 $original = file_get_contents($mpd);
@@ -404,11 +380,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 }
             }
 
-            @unlink($subsMpd); // throwaway master; the grafted text set references the kept segments
+            @unlink("{$gatherDir}/_subs.mpd"); // throwaway master; the grafted text set references the kept segments
         }
 
-        if (in_array('hls', $formats, true) && is_file($subsM3u8 = "{$gatherDir}/_subs.m3u8")) {
-            $subsContent = file_get_contents($subsM3u8);
+        if (glob("{$gatherDir}/master*.m3u8") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'hls')) {
+            $subsContent = file_get_contents("{$gatherDir}/_subs.m3u8");
 
             foreach (glob("{$gatherDir}/master*.m3u8") ?: [] as $m3u8) {
                 $original = file_get_contents($m3u8);
@@ -419,8 +395,32 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 }
             }
 
-            @unlink($subsM3u8);
+            @unlink("{$gatherDir}/_subs.m3u8");
         }
+    }
+
+    /**
+     * Run the subtitle packager for one format ('dash'|'hls'); returns false (logged, non-fatal) when
+     * the run fails or wrote no throwaway manifest, so the caller skips grafting that format.
+     *
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $subs
+     */
+    private function runTextPackager(Video $video, PackagerCommandBuilder $builder, array $subs, string $gatherDir, int $segmentDuration, string $format): bool
+    {
+        $result = Process::timeout($this->timeout - 120)->run(
+            $builder->buildText($subs, $gatherDir, $segmentDuration, $format),
+            fn () => $this->heartbeat($video),
+        );
+
+        if (! $result->successful()) {
+            Log::warning('Subtitle packaging failed; leaving the video without subtitles for this format', [
+                'video' => $video->id, 'format' => $format, 'error' => $result->errorOutput(),
+            ]);
+
+            return false;
+        }
+
+        return is_file("{$gatherDir}/".($format === 'dash' ? '_subs.mpd' : '_subs.m3u8'));
     }
 
     /**
