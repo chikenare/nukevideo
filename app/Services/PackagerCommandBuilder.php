@@ -81,7 +81,7 @@ class PackagerCommandBuilder
 
     /**
      * Build a SEPARATE packager run for subtitles in ONE format, with `$segmentDuration` longer than
-     * the video so each track is a SINGLE segment under `subtitles/{ulid}/` (a few KB — segmenting
+     * the video so each track is a SINGLE segment under the stream's `{ulid}/` (a few KB — segmenting
      * them like video is pointless). DASH and HLS need DIFFERENT forms, so this runs once per format:
      * - `dash`: a single fMP4 WebVTT (`wvtt`) segment + an `init.mp4` — dashjs needs an init segment
      *   or it falls back to fetching the `<BaseURL>` directory (404). Emits throwaway `_subs.mpd`.
@@ -118,16 +118,17 @@ class PackagerCommandBuilder
     }
 
     /**
-     * Subtitle stream descriptor for ONE format under `subtitles/{ulid}/`. DASH = fMP4 WebVTT (`wvtt`)
-     * with an `init_segment` (so dashjs loads a real init instead of 404ing on the `<BaseURL>` dir);
-     * HLS = raw `text/vtt` segments + its media playlist (hls.js can't parse fMP4 WebVTT). A long
-     * segment duration ({@see buildText}) makes either a single segment.
+     * Subtitle stream descriptor for ONE format under the stream's own `{ulid}/` (same layout as the
+     * video/audio renditions). DASH = fMP4 WebVTT (`wvtt`) with an `init_segment` (so dashjs loads a
+     * real init instead of 404ing on the `<BaseURL>` dir); HLS = raw `text/vtt` segments + its media
+     * playlist (hls.js can't parse fMP4 WebVTT). A long segment duration ({@see buildText}) makes
+     * either a single segment.
      *
      * @param  array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}  $input
      */
     private function textDescriptor(array $input, string $outputDir, string $format): string
     {
-        $segmentDir = "{$outputDir}/subtitle/{$input['ulid']}";
+        $segmentDir = "{$outputDir}/{$input['ulid']}";
 
         $parts = ["in={$input['path']}", 'stream=text'];
 
@@ -136,7 +137,7 @@ class PackagerCommandBuilder
             $parts[] = 'segment_template='.$segmentDir.'/$Number$.m4s';
         } else {
             $parts[] = 'segment_template='.$segmentDir.'/$Number$.vtt';
-            $parts[] = "playlist_name=subtitle/{$input['ulid']}/index.m3u8";
+            $parts[] = "playlist_name={$input['ulid']}/index.m3u8";
             $parts[] = 'hls_group_id=subs';
             // Commas delimit descriptor fields, so strip them from the label.
             $parts[] = 'hls_name='.str_replace(',', ' ', $input['name'] ?? $input['language'] ?? 'Subtitles');

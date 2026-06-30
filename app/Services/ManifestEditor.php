@@ -101,8 +101,8 @@ class ManifestEditor
 
     /**
      * Rewrite a subtitle track's display label/language across every manifest that carries it. The
-     * track is located by its packaged `subtitles/{ulid}/` segment path (DASH `SegmentTemplate@media`,
-     * HLS subtitle `EXT-X-MEDIA URI`), so manifests without that track are left untouched.
+     * track is located by its packaged `{ulid}/` segment path (DASH `SegmentTemplate@media`, HLS
+     * subtitle `EXT-X-MEDIA URI`), so manifests without that track are left untouched.
      */
     public function relabelSubtitle(Video $video, Stream $stream): void
     {
@@ -155,12 +155,12 @@ class ManifestEditor
         foreach ($subsXpath->query("//m:AdaptationSet[@contentType='text']") as $set) {
             $tpl = $subsXpath->query('.//m:SegmentTemplate', $set)->item(0);
 
-            if (! $tpl instanceof DOMElement || ! preg_match('#subtitles/([^/]+)/#', $tpl->getAttribute('media'), $m)) {
+            if (! $tpl instanceof DOMElement || ! preg_match('#^([^/]+)/#', $tpl->getAttribute('media'), $m)) {
                 continue;
             }
 
-            // Idempotent: this track's segments are already referenced in the master.
-            if ($xpath->query("//m:SegmentTemplate[contains(@media, 'subtitles/{$m[1]}/')]")->length) {
+            // Idempotent: this track's segments are already referenced as a text set in the master.
+            if ($xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, '{$m[1]}/')]")->length) {
                 continue;
             }
 
@@ -315,7 +315,7 @@ class ManifestEditor
             return null;
         }
 
-        $tpl = $xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, 'subtitles/{$stream->ulid}/')]")->item(0);
+        $tpl = $xpath->query("//m:AdaptationSet[@contentType='text']//m:SegmentTemplate[contains(@media, '{$stream->ulid}/')]")->item(0);
 
         if (! $tpl instanceof DOMElement) {
             return null;
@@ -451,7 +451,7 @@ class ManifestEditor
     /** Rewrite NAME/LANGUAGE on the subtitle `#EXT-X-MEDIA:TYPE=SUBTITLES` line for this track's playlist. */
     private function hlsRelabelSubtitle(string $content, Stream $stream): ?string
     {
-        $playlist = "subtitles/{$stream->ulid}/index.m3u8"; // packager-emitted subtitle media playlist
+        $playlist = "{$stream->ulid}/index.m3u8"; // packager-emitted subtitle media playlist
         $lines = preg_split('/\R/', $content);
         $hit = false;
 
@@ -490,7 +490,7 @@ class ManifestEditor
      * Merge the `#EXT-X-MEDIA:TYPE=SUBTITLES` lines from a throwaway subtitles master (the separate
      * subtitle run, {@see \App\Services\PackagerCommandBuilder::buildText}) into the real master, and
      * tag every variant with the subtitle group. The lines are shaka's own (URI points at the kept
-     * `subtitles/{ulid}/index.m3u8`). Idempotent via the TYPE=SUBTITLES guard. Null if nothing merged.
+     * `{ulid}/index.m3u8`). Idempotent via the TYPE=SUBTITLES guard. Null if nothing merged.
      */
     public function hlsAddSubtitles(string $masterContent, string $subsMaster): ?string
     {
