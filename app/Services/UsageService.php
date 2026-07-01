@@ -11,14 +11,14 @@ class UsageService
     {
         try {
             app(Client::class)
-            ->https(app()->isProduction())
-            ->insert('usage', [[
-                'user_id' => $userId,
-                'metric' => $metric,
-                'external_user_id' => $externalUserId,
-                'value' => $value,
-                'date' => now()->format('Y-m-d'),
-            ]], ['user_id', 'metric', 'external_user_id', 'value', 'date']);
+                ->https(app()->isProduction())
+                ->insert('usage', [[
+                    'user_id' => $userId,
+                    'metric' => $metric,
+                    'external_user_id' => $externalUserId,
+                    'value' => $value,
+                    'date' => now()->format('Y-m-d'),
+                ]], ['user_id', 'metric', 'external_user_id', 'value', 'date']);
         } catch (\Throwable $e) {
             Log::warning("Failed to record usage ({$metric}) for user {$userId}: {$e->getMessage()}");
         }

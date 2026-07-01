@@ -152,5 +152,4 @@ class NodeController extends Controller
             'Content-Type' => 'text/x-sh',
         ]);
     }
-
 }

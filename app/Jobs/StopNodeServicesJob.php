@@ -29,7 +29,7 @@ class StopNodeServicesJob implements ShouldQueue
             ip: $node->ip_address,
             user: $node->user,
             privateKey: $node->sshKey->private_key,
-            command: "docker ps -q --filter name=nukevideo_ | xargs -r docker stop",
+            command: 'docker ps -q --filter name=nukevideo_ | xargs -r docker stop',
             timeout: 60,
         ));
 
