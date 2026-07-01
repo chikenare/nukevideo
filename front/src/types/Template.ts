@@ -11,7 +11,7 @@ export type Template = {
 }
 
 export type TemplateOutput = {
-  videoCodec: string
+  video_codec: string
   variants: TemplateVariant[]
   audio: AudioConfig
 }
@@ -20,11 +20,11 @@ export type TemplateVariant = Record<string, unknown>
 
 export type AudioChannelEntry = {
   channels: string
-  audioBitrate: string
+  audio_bitrate: string
 }
 
 export type AudioConfig = {
-  audioCodec?: string
+  audio_codec?: string
   channels: AudioChannelEntry[]
   [key: string]: unknown
 }

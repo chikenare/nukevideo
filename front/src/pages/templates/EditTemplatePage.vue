@@ -28,7 +28,7 @@ const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Templa
 const templateName = ref('')
 const keepProcessedFiles = ref(true)
 const outputs = ref<TemplateOutput[]>([
-  { videoCodec: '', variants: [{}], audio: { channels: [{ channels: '', audioBitrate: '' }] } }
+  { video_codec: '', variants: [{}], audio: { channels: [{ channels: '', audio_bitrate: '' }] } }
 ])
 
 const videoCodecs = computed(() => config.value?.codecs.filter(c => c.type === 'video') ?? [])
@@ -38,9 +38,9 @@ const saving = ref(false)
 // --- Outputs ---
 const addOutput = () => {
   outputs.value.push({
-    videoCodec: '',
+    video_codec: '',
     variants: [{}],
-    audio: { channels: [{ channels: '', audioBitrate: '' }] },
+    audio: { channels: [{ channels: '', audio_bitrate: '' }] },
   })
 }
 
@@ -88,7 +88,7 @@ const saveTemplate = async () => {
   }
 
   for (const [index, output] of outputs.value.entries()) {
-    if (!output.videoCodec) {
+    if (!output.video_codec) {
       toast.info(`Output ${index + 1}: please select a video codec`)
       return
     }
@@ -99,7 +99,7 @@ const saveTemplate = async () => {
   }
 
   for (const [index, output] of outputs.value.entries()) {
-    if (!output.audio?.audioCodec) {
+    if (!output.audio?.audio_codec) {
       toast.info(`Output ${index + 1}: please configure the audio track`)
       return
     }
@@ -244,7 +244,7 @@ onMounted(async () => {
               <!-- Video Codec (per output: variants share it) -->
               <div class="space-y-2">
                 <Label>Video Codec *</Label>
-                <Select v-model="output.videoCodec" class="max-w-xs">
+                <Select v-model="output.video_codec" class="max-w-xs">
                   <SelectTrigger class="max-w-xs">
                     <SelectValue placeholder="Select video codec" />
                   </SelectTrigger>
@@ -282,7 +282,7 @@ onMounted(async () => {
                     @update:model-value="output.variants[variantIndex] = $event"
                     :config="config"
                     :index="variantIndex"
-                    :video-codec="output.videoCodec"
+                    :video-codec="output.video_codec"
                     @remove="removeVariant(outputIndex, variantIndex)"
                   />
                 </div>
@@ -301,7 +301,7 @@ onMounted(async () => {
                   :model-value="output.audio"
                   @update:model-value="output.audio = $event"
                   :config="config"
-                  :video-codec="output.videoCodec"
+                  :video-codec="output.video_codec"
                 />
               </div>
             </CardContent>
