@@ -78,7 +78,7 @@ class NodeService
             'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.($timeout + 50),
             'DOMAIN' => "DOMAIN={$node->hostname}",
             'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
-            'INTERNAL_API_URL' => 'INTERNAL_API_URL='.rtrim((string) config('app.url'), '/').'/api/internal',
+            'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),
             'INTERNAL_API_SECRET' => 'INTERNAL_API_SECRET='.config('app.internal.secret'),
         ];
 

@@ -6,6 +6,7 @@ return [
     ],
 
     'internal' => [
+        'url' =>   env('INTERNAL_API_URL', config('app.url')) . '/api/internal',
         'secret' => env('INTERNAL_API_SECRET'),
     ],
 ];
