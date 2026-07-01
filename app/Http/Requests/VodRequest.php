@@ -19,6 +19,7 @@ class VodRequest extends FormRequest
             'external_resource_id' => 'nullable|string|max:255',
             'external_user_id' => 'nullable|string|max:255',
             'ip' => 'nullable|ip',
+            'format' => 'sometimes|in:dash,hls'
         ];
     }
 }

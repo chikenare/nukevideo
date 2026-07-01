@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class VodSessionService
 {
@@ -20,13 +21,14 @@ class VodSessionService
      * ClickHouse.
      */
     public static function create(
-        string $sessionId,
         int $userId,
         string $videoUlid,
         string $outputUlid,
         string $externalResourceId,
         string $externalUserId = '',
-    ): void {
+    ): string {
+        $sessionId = (string) Str::uuid();
+
         Cache::put(
             self::cacheKey($sessionId),
             [
@@ -38,6 +40,7 @@ class VodSessionService
             ],
             self::SESSION_TTL,
         );
+        return $sessionId;
     }
 
     /** @return array<string, mixed>|null */

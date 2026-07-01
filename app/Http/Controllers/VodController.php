@@ -9,7 +9,6 @@ use App\Models\Node;
 use App\Models\Output;
 use App\Services\VodService;
 use App\Services\VodSessionService;
-use Illuminate\Support\Str;
 
 class VodController extends Controller
 {
@@ -27,8 +26,6 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        // An output that produced no packageable formats was still marked COMPLETED, so guard here
-        // instead of handing out a manifest URL that was never written (would 404 at the edge).
         if (empty($output->formats())) {
             abort(422, 'Output has no playable formats');
         }
@@ -41,11 +38,7 @@ class VodController extends Controller
             abort(503, 'No node available');
         }
 
-        $schema = app()->isLocal() ? 'http://' : 'https://';
-        $sessionId = (string) Str::uuid();
-
-        VodSessionService::create(
-            sessionId: $sessionId,
+        $session = VodSessionService::create(
             userId: $video->user_id,
             videoUlid: $video->ulid,
             outputUlid: $output->ulid,
@@ -55,9 +48,8 @@ class VodController extends Controller
 
         $link = $this->buildLink(
             output: $output,
-            schema: $schema,
             node: $node,
-            sessionId: $sessionId,
+            sessionId: $session,
             videoUlid: $video->ulid,
             ip: $request->ip(),
         );
@@ -67,12 +59,13 @@ class VodController extends Controller
 
     private function buildLink(
         Output $output,
-        string $schema,
         Node $node,
         string $sessionId,
         string $videoUlid,
         string $ip,
     ): VodOutputData {
+        $schema = app()->isLocal() ? 'http://' : 'https://';
+
         $format = $output->formats()[0] ?? 'hls';
 
         $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format)}";
