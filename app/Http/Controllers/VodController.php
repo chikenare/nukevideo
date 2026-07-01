@@ -27,6 +27,12 @@ class VodController extends Controller
             ->where('ulid', $ulid)
             ->firstOrFail();
 
+        // An output that produced no packageable formats was still marked COMPLETED, so guard here
+        // instead of handing out a manifest URL that was never written (would 404 at the edge).
+        if (empty($output->formats())) {
+            abort(422, 'Output has no playable formats');
+        }
+
         $video = $output->video;
 
         $node = Node::findProxyForVideo($video->ulid);
