@@ -121,12 +121,6 @@ class Video extends Model
         return "{$this->ulid}/".self::FINAL_DIR;
     }
 
-    /** Internal-mirror staging key for a single-pass asset: `{ulid}/final/{name}` (thumbnail/storyboard jobs). */
-    public function stagingKey(string $name): string
-    {
-        return "{$this->finalDir()}/{$name}";
-    }
-
     /** Internal-mirror key of the mirrored source upload: `{ulid}/source/original.{ext}`. */
     public function sourceMirrorPath(string $extension): string
     {

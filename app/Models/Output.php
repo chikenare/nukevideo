@@ -138,27 +138,35 @@ class Output extends Model
         return "output-progress:{$outputId}";
     }
 
-    /** Seed `$total` chunks at 0% so the averaged percent has a stable divisor from tick one. */
-    public function seedChunkProgress(int $total): void
+    /** Seed one field per (chunk × rendition) at 0% so the averaged percent has a stable divisor
+     *  from tick one. `$streamIds` are this output's video stream ids. */
+    public function seedChunkProgress(int $chunks, array $streamIds): void
     {
-        if ($total < 1) {
+        if ($chunks < 1 || empty($streamIds)) {
             return;
         }
 
         $key = self::chunkProgressKey($this->id);
         $seed = [];
-        for ($i = 0; $i < $total; $i++) {
-            $seed[(string) $i] = 0;
+        for ($i = 0; $i < $chunks; $i++) {
+            foreach ($streamIds as $streamId) {
+                $seed["{$i}:{$streamId}"] = 0;
+            }
         }
 
         Redis::hmset($key, $seed);
         Redis::expire($key, 86400); // 24h
     }
 
-    /** HSET per chunk field, so retries are idempotent and parallel workers never clobber. */
-    public function reportChunkProgress(int $chunkIndex, int $percent): void
+    /** HSET per (chunk, rendition) field, so retries are idempotent and parallel workers never
+     *  clobber. The TTL is refreshed on every report so an active pipeline never loses the hash,
+     *  while an abandoned one still expires (a report can't resurrect an expired key forever). */
+    public function reportChunkProgress(int $chunkIndex, int $streamId, int $percent): void
     {
-        Redis::hset(self::chunkProgressKey($this->id), (string) $chunkIndex, max(0, min(100, $percent)));
+        $key = self::chunkProgressKey($this->id);
+
+        Redis::hset($key, "{$chunkIndex}:{$streamId}", max(0, min(100, $percent)));
+        Redis::expire($key, 86400);
     }
 
     /**

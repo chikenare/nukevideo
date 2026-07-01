@@ -19,7 +19,7 @@ use Throwable;
 
 /**
  * Plans keyframe-aligned chunk windows over the mirrored source and fans out one
- * {@see ProcessChunkJob} chain per window. Audio + subtitles run separately via
+ * {@see ProcessChunkJob} per (window × rendition). Audio + subtitles run separately via
  * {@see EncodeSidecarTracksJob}.
  */
 class SegmentVideoJob implements ShouldQueue
@@ -28,7 +28,9 @@ class SegmentVideoJob implements ShouldQueue
 
     public $tries = 2;
 
-    public $timeout = 3600;
+    // Must stay under the queue's retry_after (NodeService exports REDIS_QUEUE_RETRY_AFTER=1850
+    // to workers) or the job is re-delivered mid-run and two attempts race on the mirror staging.
+    public $timeout = 1800;
 
     private const CHUNK_SECONDS = 300; // 5 minutes
 
@@ -69,7 +71,17 @@ class SegmentVideoJob implements ShouldQueue
             throw new RuntimeException("Original {$this->originalPath} missing in S3");
         }
 
-        $video->update(['status' => VideoStatus::RUNNING->value, 'last_heartbeat_at' => now()]);
+        // Guarded transition: never revive a video the reaper (or a failure path) already
+        // moved to a terminal state — that would re-run work after `video.error` was emitted.
+        $claimed = Video::whereKey($video->id)
+            ->whereIn('status', Video::ACTIVE_STATUSES)
+            ->update(['status' => VideoStatus::RUNNING->value, 'last_heartbeat_at' => now()]);
+
+        if (! $claimed) {
+            Log::info('Segmentation skipped: video no longer active', ['video' => $this->videoId]);
+
+            return;
+        }
 
         $mirrorPath = $this->ensureSourceMirrored($video);
 
@@ -239,9 +251,9 @@ class SegmentVideoJob implements ShouldQueue
     }
 
     /**
-     * One batch, one chain per window: a {@see ProcessChunkJob} (encodes every rendition for
-     * the window) then one {@see UploadChunkJob} per rendition. The batch's then() dispatches
-     * the concat jobs once all chains finish.
+     * One flat batch with one {@see ProcessChunkJob} per (window × rendition); each job encodes
+     * AND uploads its own chunk, so no job depends on another job's local disk and any worker
+     * node can pick up any job. The batch's then() fires packaging once every chunk is staged.
      *
      * @param  list<array{0:float,1:float}>  $windows
      */
@@ -256,26 +268,21 @@ class SegmentVideoJob implements ShouldQueue
         $queue = self::QUEUE;
         $chunkCount = count($windows);
 
-        // Progress is tracked per Output (every rendition advances through the same chunks);
+        // Progress is tracked per Output as one field per (chunk × rendition it contains);
         // seed each output's Redis hash so its percent is meaningful from the first tick.
         foreach ($video->outputs as $output) {
             $output->update(['status' => VideoStatus::RUNNING->value]);
-            $output->seedChunkProgress($chunkCount);
+
+            $videoStreamIds = $output->streams()->where('type', 'video')->pluck('streams.id')->all();
+            $output->seedChunkProgress($chunkCount, $videoStreamIds);
         }
 
         $jobs = [];
 
         foreach ($windows as $index => [$start, $end]) {
-            $uploadJobs = [];
-
             foreach ($streams as $stream) {
-                $uploadJobs[] = new UploadChunkJob($stream->id, $index, $video->chunkKey($stream, $index));
+                $jobs[] = new ProcessChunkJob($stream->id, $mirrorPath, $index, $start, $end);
             }
-
-            $jobs[] = [
-                new ProcessChunkJob($video->id, $mirrorPath, $index, $start, $end),
-                ...$uploadJobs,
-            ];
         }
 
         // Only primitives in the closure — Eloquent models are not serializable there.

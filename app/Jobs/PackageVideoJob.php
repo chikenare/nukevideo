@@ -97,7 +97,10 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             $this->pruneProcessedRenditions($video);
             $this->syncToPrimary($video, $gatherDir);
 
-            $video->outputs()->update(['status' => VideoStatus::COMPLETED->value]);
+            // Conditional: never overwrite an output a concurrent failure path already FAILED.
+            $video->outputs()
+                ->whereNotIn('status', [VideoStatus::FAILED->value])
+                ->update(['status' => VideoStatus::COMPLETED->value]);
             $this->finalizeVideoIfReady($video);
         } finally {
             Storage::disk('local')->deleteDirectory($video->gatherDir());
@@ -106,9 +109,10 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Pull the single-pass tracks staged on the mirror (`final/`: audio, subtitle, thumbnail,
-     * storyboard) into the gather tree. Sync drops the prefix, so they land beside the concatenated
-     * video under the destination `{ulid}/` layout.
+     * Pull the single-pass tracks staged on the mirror (`final/`: audio, subtitle) into the gather
+     * tree. Sync drops the prefix, so they land beside the concatenated video under the destination
+     * `{ulid}/` layout. Thumbnail/storyboard don't pass through here — they upload straight to
+     * primary S3 from their own jobs, which run in parallel and must not race this sync.
      */
     private function gatherSidecars(Video $video, string $gatherDir): void
     {

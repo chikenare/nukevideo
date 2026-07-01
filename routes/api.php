@@ -23,7 +23,6 @@ use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
-use Tapp\LaravelUppyS3MultipartUpload\Http\Controllers\UppyS3MultipartController;
 
 Route::middleware('auth:sanctum')->group(function () {
     // Me & Profile
@@ -67,10 +66,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
     Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
     Route::post('s3/multipart', [MyCustomUppyController::class, 'createMultipartUpload']);
-    Route::get('s3/multipart/{uploadId}', [UppyS3MultipartController::class, 'getUploadedParts']);
-    Route::post('s3/multipart/{uploadId}/complete', [UppyS3MultipartController::class, 'completeMultipartUpload']);
-    Route::delete('s3/multipart/{uploadId}', [UppyS3MultipartController::class, 'abortMultipartUpload']);
-    Route::get('s3/multipart/{uploadId}/{partNumber}', [UppyS3MultipartController::class, 'signPartUpload']);
+    Route::get('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'getUploadedParts']);
+    Route::post('s3/multipart/{uploadId}/complete', [MyCustomUppyController::class, 'completeMultipartUpload']);
+    Route::delete('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'abortMultipartUpload']);
+    Route::get('s3/multipart/{uploadId}/{partNumber}', [MyCustomUppyController::class, 'signPartUpload']);
 
     // Admin
     Route::middleware(EnsureAdmin::class)->group(function () {

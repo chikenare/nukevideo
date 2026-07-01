@@ -47,7 +47,10 @@ class ExtractThumbnailJob implements ShouldQueue
 
             app(ThumbnailService::class)->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
 
-            $this->publish($video->stagingKey(Video::THUMBNAIL_FILENAME), $thumbnailLocalPath);
+            // Straight to primary S3 (not the mirror's final/ staging): this job races the encode
+            // batch, and packaging would sync final/ before a slow thumbnail lands there — the
+            // asset would then be deleted with the mirror and silently never reach primary.
+            $this->publish(Video::assetPath($video->ulid, Video::THUMBNAIL_FILENAME), $thumbnailLocalPath);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }
@@ -58,7 +61,7 @@ class ExtractThumbnailJob implements ShouldQueue
         $handle = fopen($localPath, 'r');
 
         try {
-            Storage::disk('chunks')->writeStream($key, $handle);
+            Storage::disk('s3')->writeStream($key, $handle);
         } finally {
             if (is_resource($handle)) {
                 fclose($handle);

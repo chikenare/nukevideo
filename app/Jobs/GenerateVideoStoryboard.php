@@ -142,9 +142,15 @@ class GenerateVideoStoryboard implements ShouldQueue
 
     private function formatVttTime(int $seconds): string
     {
-        return gmdate('H:i:s', $seconds).'.000';
+        // Not gmdate(): hours must keep counting past 24h or cues wrap for day-long videos.
+        return sprintf('%02d:%02d:%02d.000', intdiv($seconds, 3600), intdiv($seconds, 60) % 60, $seconds % 60);
     }
 
+    /**
+     * Straight to primary S3 (not the mirror's final/ staging): this job races the encode batch,
+     * and packaging would sync final/ before a slow storyboard lands there — the assets would
+     * then be deleted with the mirror and silently never reach primary.
+     */
     private function uploadArtifacts(Video $video, int $spriteCount): void
     {
         $names = [Video::STORYBOARD_VTT_FILENAME];
@@ -153,14 +159,14 @@ class GenerateVideoStoryboard implements ShouldQueue
         }
 
         $tmp = Storage::disk('tmp');
-        $mirror = Storage::disk('chunks');
+        $primary = Storage::disk('s3');
 
         foreach ($names as $name) {
             $localPath = $tmp->path("{$video->ulid}/{$name}");
 
             $handle = fopen($localPath, 'r');
             try {
-                $mirror->writeStream($video->stagingKey($name), $handle);
+                $primary->writeStream(Video::assetPath($video->ulid, $name), $handle);
             } finally {
                 if (is_resource($handle)) {
                     fclose($handle);

@@ -86,6 +86,49 @@ class MyCustomUppyController extends UppyS3MultipartController
         ]);
     }
 
+    /*
+     * The package endpoints below act on any key/uploadId the caller supplies; scope them to
+     * uploads the authenticated user actually started (their cached UploadMeta) so one tenant
+     * can't complete, abort or list another tenant's in-flight upload.
+     */
+
+    public function getUploadedParts(Request $request, string $uploadId)
+    {
+        $this->authorizeUploadKey($request);
+
+        return parent::getUploadedParts($request, $uploadId);
+    }
+
+    public function completeMultipartUpload(Request $request, string $uploadId)
+    {
+        $this->authorizeUploadKey($request);
+
+        return parent::completeMultipartUpload($request, $uploadId);
+    }
+
+    public function abortMultipartUpload(Request $request, string $uploadId)
+    {
+        $this->authorizeUploadKey($request);
+
+        return parent::abortMultipartUpload($request, $uploadId);
+    }
+
+    public function signPartUpload(Request $request)
+    {
+        $this->authorizeUploadKey($request);
+
+        return parent::signPartUpload($request);
+    }
+
+    private function authorizeUploadKey(Request $request): void
+    {
+        $request->validate(['key' => 'required|string']);
+
+        $meta = $this->uppyService->getUploadMeta($request->input('key'));
+
+        abort_unless($meta && $meta->user === $request->user()->ulid, 403, 'This upload does not belong to you.');
+    }
+
     private function resolveProject(Request $request): Project
     {
         $request->validate([

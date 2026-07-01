@@ -4,11 +4,13 @@ namespace App\Jobs;
 
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\UppyS3Service;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -37,6 +39,7 @@ class PruneScratchJob implements ShouldQueue
         $this->pruneLocalScratch();
         $this->pruneChunkStore();
         $this->pruneUploadTmp();
+        $this->pruneStaleMultipartUploads();
     }
 
     private function pruneLocalScratch(): void
@@ -133,6 +136,18 @@ class PruneScratchJob implements ShouldQueue
                 continue; // belongs to a live video's original stream
             }
 
+            // Uploaded object with live metadata but no ingested stream: the storage webhook was
+            // most likely lost. Re-dispatch ingestion (idempotent) once instead of letting the
+            // user's upload silently age out below.
+            if (app(UppyS3Service::class)->getUploadMeta($key)) {
+                if (Cache::add("reingest:{$key}", 1, self::UPLOAD_GRACE_SECONDS * 2)) {
+                    OnVideoUploaded::dispatch($key, (int) $disk->size($key))->onQueue('video-processing');
+                    Log::warning('Re-dispatched ingestion for un-ingested upload (lost webhook?)', ['key' => $key]);
+                }
+
+                continue;
+            }
+
             $ulid = pathinfo($key, PATHINFO_FILENAME);
 
             if (! Str::isUlid($ulid) || $this->uploadWithinGrace($ulid)) {
@@ -142,6 +157,41 @@ class PruneScratchJob implements ShouldQueue
             if ($disk->delete($key)) {
                 Log::info('Pruned orphaned upload', ['key' => $key]);
             }
+        }
+    }
+
+    /**
+     * Abort multipart uploads abandoned mid-flight (browser closed, client crashed): their parts
+     * are invisible to `files()` yet billed forever, and nothing else reclaims them. Best-effort —
+     * not every S3-compatible store supports the listing, so failures only log.
+     */
+    private function pruneStaleMultipartUploads(): void
+    {
+        try {
+            $disk = Storage::disk('s3');
+            $result = $disk->getClient()->listMultipartUploads([
+                'Bucket' => (string) config('filesystems.disks.s3.bucket'),
+                'Prefix' => (string) config('uppy-s3-multipart-upload.s3.bucket.folder'),
+            ]);
+
+            foreach ($result['Uploads'] ?? [] as $upload) {
+                $initiated = $upload['Initiated'] ?? null;
+
+                if (! $initiated instanceof \DateTimeInterface
+                    || $initiated->getTimestamp() > now()->subSeconds(self::UPLOAD_GRACE_SECONDS)->getTimestamp()) {
+                    continue;
+                }
+
+                $disk->getClient()->abortMultipartUpload([
+                    'Bucket' => (string) config('filesystems.disks.s3.bucket'),
+                    'Key' => $upload['Key'],
+                    'UploadId' => $upload['UploadId'],
+                ]);
+
+                Log::info('Aborted stale multipart upload', ['key' => $upload['Key']]);
+            }
+        } catch (\Throwable $e) {
+            Log::info("Stale multipart sweep skipped: {$e->getMessage()}");
         }
     }
 

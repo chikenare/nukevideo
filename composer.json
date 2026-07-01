@@ -86,7 +86,8 @@
     "extra": {
         "laravel": {
             "dont-discover": [
-                "laravel/telescope"
+                "laravel/telescope",
+                "tapp/laravel-uppy-s3-multipart-upload"
             ]
         }
     },

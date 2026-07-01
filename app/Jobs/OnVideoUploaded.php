@@ -20,6 +20,10 @@ class OnVideoUploaded implements ShouldQueue
 
     public array $backoff = [10, 30, 60, 120];
 
+    // Probing a large non-faststart source over HTTP can take minutes (the moov atom lives at
+    // the end); an unset timeout would inherit the supervisor's and kill legitimate probes.
+    public int $timeout = 900;
+
     public function __construct(
         private string $key,
         private int $size,

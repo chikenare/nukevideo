@@ -26,6 +26,7 @@ trait CompletesVideo
     /** Returns true only for the caller that won the lock and flipped the video to terminal. */
     private function completeVideoIfReady(Video $video): bool
     {
+        // Cheap pre-check to avoid lock churn; the authoritative check runs under the lock.
         $allSettled = ! $video->outputs()
             ->whereNotIn('status', [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])
             ->exists();
@@ -38,6 +39,16 @@ trait CompletesVideo
             $locked = Video::whereKey($video->id)->lockForUpdate()->first();
 
             if (! $locked || in_array($locked->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
+                return false;
+            }
+
+            // Re-check under the lock: an output's status may have changed concurrently
+            // between the pre-check above and acquiring the lock.
+            $allSettled = ! $locked->outputs()
+                ->whereNotIn('status', [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])
+                ->exists();
+
+            if (! $allSettled) {
                 return false;
             }
 

@@ -19,6 +19,7 @@ class ChunkProgressReporter
     public function __construct(
         private iterable $outputs,
         private int $chunkIndex,
+        private int $streamId,
         private float $windowDuration,
     ) {}
 
@@ -48,7 +49,7 @@ class ChunkProgressReporter
         $this->lastPercent = $percent;
 
         foreach ($this->outputs as $out) {
-            $out->reportChunkProgress($this->chunkIndex, $percent);
+            $out->reportChunkProgress($this->chunkIndex, $this->streamId, $percent);
         }
     }
 }

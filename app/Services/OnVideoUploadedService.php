@@ -156,6 +156,12 @@ class OnVideoUploadedService
         $duration = $ffprobe->format($url)->get('duration')
             ?? $videoStream->get('duration');
 
+        // A duration-less source would only die much later (the segment planner yields no
+        // windows); reject it here where the error is attributable to the file.
+        if (! is_numeric($duration) || (float) $duration <= 0) {
+            throw new Exception("Could not determine a positive duration for: {$key}");
+        }
+
         return [
             'streamCollection' => $streamCollection,
             'duration' => $duration,

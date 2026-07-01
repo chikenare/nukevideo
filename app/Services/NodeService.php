@@ -63,6 +63,14 @@ class NodeService
     public function getEnvironmentVariables(Node $node): array
     {
         $timeout = 600;
+
+        // Redelivery must outlast the LONGEST job on the video queue, not the per-chunk worker
+        // timeout: SegmentVideoJob / EncodeSidecarTracksJob / PackageVideoJob run with
+        // $timeout = 1800. A lower value re-delivers them mid-run — duplicate encodes, and for
+        // PackageVideoJob (tries=1) an instant MaxAttemptsExceeded that fails the video and
+        // deletes its source while the original run is still packaging.
+        $retryAfter = 1850;
+
         $scheme = app()->isLocal() ? 'http://' : 'https://';
         $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
@@ -75,7 +83,7 @@ class NodeService
             'NODE_ID' => "NODE_ID={$node->id}",
             'NODE_TYPE' => "NODE_TYPE={$node->type->value}",
             'VIDEO_WORKER_TIMEOUT' => "VIDEO_WORKER_TIMEOUT={$timeout}",
-            'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.($timeout + 50),
+            'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.$retryAfter,
             'DOMAIN' => "DOMAIN={$node->hostname}",
             'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),
