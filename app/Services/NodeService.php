@@ -79,6 +79,7 @@ class NodeService
             'DOMAIN' => "DOMAIN={$node->hostname}",
             'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.rtrim((string) config('app.url'), '/').'/api/internal',
+            'INTERNAL_API_SECRET' => 'INTERNAL_API_SECRET='.config('app.internal.secret'),
         ];
 
         if ($node->cdn_mode) {
