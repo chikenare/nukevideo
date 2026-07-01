@@ -16,6 +16,7 @@ return new class extends Migration
             $table->id();
             $table->ulid()->unique();
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('project_id')->constrained()->cascadeOnDelete();
             $table->foreignId('template_id')->constrained()->cascadeOnDelete();
             $table->foreignId('node_id')->nullable()->constrained()->cascadeOnDelete();
 

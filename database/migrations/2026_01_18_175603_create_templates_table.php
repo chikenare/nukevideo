@@ -16,7 +16,11 @@ return new class extends Migration
             $table->ulid()->unique();
             $table->string('name');
             $table->json('query');
+            // Keep the encoded video/audio renditions on primary S3 after packaging, or drop them
+            // and serve only the CMAF package. See PackageVideoJob::pruneProcessedRenditions().
+            $table->boolean('keep_processed_files')->default(true);
             $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->foreignId('project_id')->constrained()->cascadeOnDelete();
             $table->timestamps();
         });
     }
