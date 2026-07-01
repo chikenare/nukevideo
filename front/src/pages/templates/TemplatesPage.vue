@@ -95,12 +95,6 @@ const handleCreate = () => {
   router.push({ name: 'CreateTemplate' })
 }
 
-const copyCommands = (template: Template) => {
-  const text = template.commands.join('\n')
-  navigator.clipboard.writeText(text)
-  toast.success('Commands copied to clipboard')
-}
-
 const handleDeleteSuccess = () => {
   fetchTemplates()
 }
@@ -171,10 +165,6 @@ onMounted(() => {
                   <DropdownMenuItem @click="handleEdit(template)">
                     <Edit :size="16" class="mr-2" />
                     Edit
-                  </DropdownMenuItem>
-                  <DropdownMenuItem @click="copyCommands(template)" :disabled="!template.commands?.length">
-                    <Copy :size="16" class="mr-2" />
-                    Copy Command
                   </DropdownMenuItem>
                   <DeleteTemplateButton :template="template" @deleted="handleDeleteSuccess" />
                 </DropdownMenuContent>
