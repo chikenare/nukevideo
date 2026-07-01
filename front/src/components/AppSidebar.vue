@@ -2,6 +2,7 @@
 import type { SidebarProps } from '@/components/ui/sidebar'
 
 import {
+  House,
   Shield,
   VideoIcon,
 } from "@lucide/vue"
@@ -25,6 +26,11 @@ const props = withDefaults(defineProps<SidebarProps>(), {
 const authStore = useAuthStore()
 
 const navMain = [
+  {
+    title: "Home",
+    url: "/",
+    icon: House,
+  },
   {
     title: "Videos",
     url: "#",

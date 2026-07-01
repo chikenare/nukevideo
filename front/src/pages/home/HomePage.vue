@@ -197,11 +197,12 @@ function formatCardValue(card: AnalyticsCard): string {
               </TableRow>
             </TableHeader>
             <TableBody>
-              <TableRow v-for="video in data.topVideos" :key="video.video">
+              <TableRow v-for="(video, i) in data.topVideos" :key="video.video || i">
                 <TableCell class="font-mono text-xs">
-                  <RouterLink :to="{ name: 'Video', params: { id: video.video } }" class="hover:underline text-primary">
+                  <RouterLink v-if="video.video" :to="{ name: 'Video', params: { id: video.video } }" class="hover:underline text-primary">
                     {{ (video.externalResourceId || video.video).slice(0, 8) }}
                   </RouterLink>
+                  <span v-else class="text-muted-foreground">{{ video.externalResourceId?.slice(0, 8) || '—' }}</span>
                 </TableCell>
                 <TableCell class="text-right text-xs">{{ prettyBytes(video.bytes) }}</TableCell>
                 <TableCell class="text-right text-xs text-muted-foreground">{{ pctOfTotal(video.bytes) }}</TableCell>

@@ -78,7 +78,7 @@ class AnalyticsService
                 uniqExact(session_id) AS sessions,
                 uniqExact(ip) AS uniqueIps
             FROM sessions
-            WHERE date >= {from:Date} AND date <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date} AND video_ulid != ''
             GROUP BY video, externalResourceId
             ORDER BY bytes DESC
             LIMIT {limit:UInt8}
@@ -92,7 +92,7 @@ class AnalyticsService
         $topVideos = $this->client->select(<<<'SQL'
             SELECT video_ulid
             FROM sessions
-            WHERE date >= {from:Date} AND date <= {to:Date}
+            WHERE date >= {from:Date} AND date <= {to:Date} AND video_ulid != ''
             GROUP BY video_ulid
             ORDER BY sum(bytes) DESC
             LIMIT {limit:UInt8}
