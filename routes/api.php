@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\SshKeyController;
 use App\Http\Controllers\Api\UsageController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\BandwidthController;
 use App\Http\Controllers\MeController;
 use App\Http\Controllers\MyCustomUppyController;
 use App\Http\Controllers\ProjectController;
@@ -19,6 +20,7 @@ use App\Http\Controllers\VideoController;
 use App\Http\Controllers\VideoWebhookController;
 use App\Http\Controllers\VodController;
 use App\Http\Middleware\EnsureAdmin;
+use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
 use Tapp\LaravelUppyS3MultipartUpload\Http\Controllers\UppyS3MultipartController;
@@ -95,6 +97,10 @@ Route::get('nodes/{node}/bootstrap', [NodeController::class, 'bootstrapScript'])
 // Webhooks
 Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle'])
     ->middleware(VerifyWebhookSignature::class);
+
+// Bandwidth ingest (Vector -> queue -> ClickHouse)
+Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
+    ->middleware(VerifyInternalSecret::class);
 
 // VOD
 Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])->middleware('auth:sanctum');

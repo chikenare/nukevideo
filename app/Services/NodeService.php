@@ -51,6 +51,7 @@ class NodeService
         'CLICKHOUSE_ENDPOINT',
 
         'WEBHOOK_SECRET',
+        'INTERNAL_API_SECRET',
         'VOD_TOKEN_SECRET',
         'SECURE_TOKEN_EXPIRES_TIME',
         'SECURE_TOKEN_QUERY_EXPIRES_TIME',
@@ -61,22 +62,23 @@ class NodeService
 
     public function getEnvironmentVariables(Node $node): array
     {
-        $timeout  = 600;
-        $scheme   = app()->isLocal() ? 'http://' : 'https://';
+        $timeout = 600;
+        $scheme = app()->isLocal() ? 'http://' : 'https://';
         $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
         $base = [
-            'APP_ENV'                 => 'APP_ENV='.config('app.env'),
-            'APP_DEBUG'               => 'APP_DEBUG='.(config('app.debug') ? 'true' : 'false'),
-            'APP_KEY'                 => 'APP_KEY='.config('app.key'),
-            'APP_URL'                 => 'APP_URL='.config('app.url'),
-            'API_UPSTREAM_HOST'       => 'API_UPSTREAM_HOST='.parse_url(config('app.url'), PHP_URL_HOST),
-            'NODE_ID'                 => "NODE_ID={$node->id}",
-            'NODE_TYPE'               => "NODE_TYPE={$node->type->value}",
-            'VIDEO_WORKER_TIMEOUT'    => "VIDEO_WORKER_TIMEOUT={$timeout}",
+            'APP_ENV' => 'APP_ENV='.config('app.env'),
+            'APP_DEBUG' => 'APP_DEBUG='.(config('app.debug') ? 'true' : 'false'),
+            'APP_KEY' => 'APP_KEY='.config('app.key'),
+            'APP_URL' => 'APP_URL='.config('app.url'),
+            'API_UPSTREAM_HOST' => 'API_UPSTREAM_HOST='.parse_url(config('app.url'), PHP_URL_HOST),
+            'NODE_ID' => "NODE_ID={$node->id}",
+            'NODE_TYPE' => "NODE_TYPE={$node->type->value}",
+            'VIDEO_WORKER_TIMEOUT' => "VIDEO_WORKER_TIMEOUT={$timeout}",
             'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.($timeout + 50),
-            'DOMAIN'                  => "DOMAIN={$node->hostname}",
-            'VOD_BASE_URL'            => "VOD_BASE_URL={$scheme}{$node->hostname}",
+            'DOMAIN' => "DOMAIN={$node->hostname}",
+            'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
+            'INTERNAL_API_URL' => 'INTERNAL_API_URL='.rtrim((string) config('app.url'), '/').'/api/internal',
         ];
 
         if ($node->cdn_mode) {
@@ -94,7 +96,7 @@ class NodeService
             }
         }
 
-        $settings      = $this->parseEnvText(app(NodeSettings::class)->environment);
+        $settings = $this->parseEnvText(app(NodeSettings::class)->environment);
         $nodeOverrides = $this->parseEnvText($node->env ?? '');
 
         return array_values(array_filter(
@@ -153,12 +155,12 @@ class NodeService
 
         $nodeSection = match ($nodeType) {
             'worker' => $this->workerScript($node),
-            'proxy'  => $this->proxyScript($node),
-            default  => throw new \RuntimeException("Unknown node type: {$nodeType}"),
+            'proxy' => $this->proxyScript($node),
+            default => throw new \RuntimeException("Unknown node type: {$nodeType}"),
         };
 
         $vectorRunArgs = $this->buildDockerRunArgs('nukevideo_vector', $vectorImage, [
-            'env'     => $this->getEnvironmentVariables($node),
+            'env' => $this->getEnvironmentVariables($node),
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
                 "{$workdir}/config/vector.yaml:/etc/vector/vector.yaml:ro",
@@ -230,12 +232,12 @@ class NodeService
         $dockerFlags = $this->extractDockerFlags($node);
 
         $runArgs = $this->buildDockerRunArgs($name, $image, [
-            'env'         => $this->getEnvironmentVariables($node),
-            'labels'      => ['vector.enable=true'],
-            'command'     => 'php /var/www/html/artisan horizon',
+            'env' => $this->getEnvironmentVariables($node),
+            'labels' => ['vector.enable=true'],
+            'command' => 'php /var/www/html/artisan horizon',
             'healthcheck' => 'healthcheck-horizon',
-            'cpuset'      => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
-            'memory'      => $dockerFlags['DOCKER_MEMORY'] ?? null,
+            'cpuset' => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
+            'memory' => $dockerFlags['DOCKER_MEMORY'] ?? null,
         ]);
 
         $chunkStore = $node->is_storage_server ? $this->chunkStoreScript($node) : '';
@@ -272,8 +274,8 @@ class NodeService
         }
 
         $runArgs = $this->buildDockerRunArgs($name, $image, [
-            'env'     => $this->getEnvironmentVariables($node),
-            'labels'  => $labels,
+            'env' => $this->getEnvironmentVariables($node),
+            'labels' => $labels,
             'network' => 'nukevideo_default',
         ]);
 
@@ -294,7 +296,7 @@ class NodeService
     private function traefikScript(): string
     {
         $runArgs = $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
-            'ports'   => ['80:80', '443:443', '8080:8080'],
+            'ports' => ['80:80', '443:443', '8080:8080'],
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
                 'traefik_certs:/certs',
@@ -323,14 +325,14 @@ class NodeService
         $mcCmd = escapeshellarg("mc mb --ignore-existing rfs/{$disk['bucket']}");
 
         $runArgs = $this->buildDockerRunArgs($storeName, 'rustfs/rustfs:latest', [
-            'env'     => [
+            'env' => [
                 'RUSTFS_ACCESS_KEY='.$disk['key'],
                 'RUSTFS_SECRET_KEY='.$disk['secret'],
                 'RUSTFS_ADDRESS=:9000',
                 'RUSTFS_CONSOLE_ENABLE=false',
             ],
-            'labels'  => ['vector.enable=true'],
-            'ports'   => ["{$port}:9000"],
+            'labels' => ['vector.enable=true'],
+            'ports' => ["{$port}:9000"],
             'volumes' => ['nukevideo_chunks:/data'],
             'command' => '/data',
         ]);
@@ -443,6 +445,4 @@ class NodeService
 
         return $cmd;
     }
-
-
 }

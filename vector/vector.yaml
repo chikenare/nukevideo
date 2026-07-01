@@ -56,15 +56,19 @@ sinks:
       - aggregate_bandwidth_logs
     encoding:
       codec: json
-  clickhouse_bandwidth_logs:
-    type: clickhouse
+  laravel_bandwidth:
+    type: http
     inputs:
       - aggregate_bandwidth_logs
-    endpoint: "${CLICKHOUSE_ENDPOINT}"
-    table: bandwidth_logs
-    skip_unknown_fields: true
-    database: "${CLICKHOUSE_DATABASE}"
-    auth:
-      strategy: basic
-      user: "${CLICKHOUSE_USER}"
-      password: "${CLICKHOUSE_PASSWORD}"
+    uri: "${INTERNAL_API_URL}/bandwidth"
+    method: post
+    encoding:
+      codec: json
+    request:
+      headers:
+        Authorization: "Bearer ${INTERNAL_API_SECRET}"
+    batch:
+      # Collapse many aggregated events into one POST (and therefore one queue
+      # job) so the per-request/per-job overhead is amortised across the batch.
+      max_events: 1000
+      timeout_secs: 5

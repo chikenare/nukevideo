@@ -2,11 +2,23 @@
 
 namespace App\Services;
 
-use ClickHouseDB\Client;
-use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Cache;
 
 class VodSessionService
 {
+    // Static one-day lifetime — comfortably outlasts any single playback.
+    private const SESSION_TTL = 86400;
+
+    public static function cacheKey(string $sessionId): string
+    {
+        return "vod:session:{$sessionId}";
+    }
+
+    /**
+     * Stash the session's business metadata in Redis so the bandwidth ingest
+     * pipeline can join it back to raw byte counts without any lookup table in
+     * ClickHouse.
+     */
     public static function create(
         string $sessionId,
         int $userId,
@@ -15,18 +27,22 @@ class VodSessionService
         string $externalResourceId,
         string $externalUserId = '',
     ): void {
-        try {
-            app(Client::class)->insert('sessions_active', [[
-                'session_id' => $sessionId,
+        Cache::put(
+            self::cacheKey($sessionId),
+            [
                 'user_id' => $userId,
                 'video_ulid' => $videoUlid,
                 'output_ulid' => $outputUlid,
                 'external_resource_id' => $externalResourceId,
                 'external_user_id' => $externalUserId,
-                'created_at' => now()->format('Y-m-d H:i:s'),
-            ]], ['session_id', 'user_id', 'video_ulid', 'output_ulid', 'external_resource_id', 'external_user_id', 'created_at']);
-        } catch (\Throwable $e) {
-            Log::warning("Failed to create VOD session {$sessionId}: {$e->getMessage()}");
-        }
+            ],
+            self::SESSION_TTL,
+        );
+    }
+
+    /** @return array<string, mixed>|null */
+    public static function resolve(string $sessionId): ?array
+    {
+        return Cache::get(self::cacheKey($sessionId));
     }
 }
