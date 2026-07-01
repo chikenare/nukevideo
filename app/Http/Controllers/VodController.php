@@ -38,6 +38,12 @@ class VodController extends Controller
             abort(503, 'No node available');
         }
 
+        $formats = $output->formats();
+        $requestedFormat = $validated['format'] ?? 'dash';
+        $format = in_array($requestedFormat, $formats, true)
+            ? $requestedFormat
+            : $formats[0];
+
         $session = VodSessionService::create(
             userId: $video->user_id,
             videoUlid: $video->ulid,
@@ -52,6 +58,7 @@ class VodController extends Controller
             sessionId: $session,
             videoUlid: $video->ulid,
             ip: $request->ip(),
+            format: $format
         );
 
         return response()->json(['data' => $link]);
@@ -63,10 +70,9 @@ class VodController extends Controller
         string $sessionId,
         string $videoUlid,
         string $ip,
+        string $format
     ): VodOutputData {
         $schema = app()->isLocal() ? 'http://' : 'https://';
-
-        $format = $output->formats()[0] ?? 'hls';
 
         $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format)}";
         $url = $this->vod->signUrl($url, $ip);
