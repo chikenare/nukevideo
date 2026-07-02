@@ -58,7 +58,8 @@ class VodController extends Controller
             sessionId: $session,
             videoUlid: $video->ulid,
             ip: $request->ip(),
-            format: $format
+            format: $format,
+            cap: $output->resolveCap($validated['resolution'] ?? null),
         );
 
         return response()->json(['data' => $link]);
@@ -70,11 +71,12 @@ class VodController extends Controller
         string $sessionId,
         string $videoUlid,
         string $ip,
-        string $format
+        string $format,
+        ?int $cap = null,
     ): VodOutputData {
         $schema = app()->isLocal() ? 'http://' : 'https://';
 
-        $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format)}";
+        $url = "{$schema}{$node->hostname}/{$sessionId}/{$output->manifestPath($format, $cap)}";
         $url = $this->vod->signUrl($url, $ip);
 
         return VodOutputData::fromOutput($output, $url, $videoUlid);

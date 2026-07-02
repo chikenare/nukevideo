@@ -70,6 +70,34 @@ class Output extends Model
         return "{$this->packagePrefix()}/".$this->manifestFile($format, $cap);
     }
 
+    /** Manifest cap for the max resolution a client can play: tallest packaged height <= $resolution
+     *  (shortest if below all of them). Null (full master) when unset, >= max, or the tallest is max. */
+    public function resolveCap(?int $resolution): ?int
+    {
+        if ($resolution === null) {
+            return null;
+        }
+
+        $heights = $this->streams
+            ->where('type', 'video')
+            ->pluck('height')
+            ->filter()
+            ->map(fn ($height) => (int) $height)
+            ->unique()
+            ->sort()
+            ->values();
+
+        if ($heights->isEmpty() || $resolution >= $heights->last()) {
+            return null;
+        }
+
+        $target = $heights->filter(fn (int $height) => $height <= $resolution)->last()
+            ?? $heights->first();
+
+        // The max height's manifest is the uncapped master (no `.{height}.` file exists for it).
+        return $target === $heights->last() ? null : $target;
+    }
+
     /**
      * Streaming formats this output actually serves. Frozen in `packaged_formats` at package time
      * ({@see recordFormats}) rather than recomputed live: a later stream deletion edits manifests in
