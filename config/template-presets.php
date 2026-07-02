@@ -16,7 +16,7 @@ return [
     */
 
     'hls-h264-multi' => [
-        'name' => 'HLS Streaming (H.264)',
+        'name' => 'HLS (H.264)',
         'description' => 'Multi-bitrate HLS with H.264. Maximum device compatibility.',
         'category' => 'streaming',
         'query' => [
@@ -131,7 +131,7 @@ return [
     ],
 
     'dash-av1-efficient' => [
-        'name' => 'DASH AV1 (Best Compression)',
+        'name' => 'DASH AV1',
         'description' => 'AV1 encoding for maximum compression. Slower to encode but smallest files.',
         'category' => 'streaming',
         'query' => [
