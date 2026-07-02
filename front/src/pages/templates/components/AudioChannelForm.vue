@@ -66,11 +66,11 @@ const channelLabel = (ch: string) => {
 }
 
 watch(localCodec, (newCodec) => {
-  if (newCodec) localAudio.value = { ...localAudio.value, audioCodec: newCodec }
+  if (newCodec) localAudio.value = { ...localAudio.value, audio_codec: newCodec }
 })
 
 const addChannel = () => {
-  localAudio.value.channels.push({ channels: '', audioBitrate: '' })
+  localAudio.value.channels.push({ channels: '', audio_bitrate: '' })
 }
 
 const removeChannel = (index: number) => {
@@ -94,18 +94,18 @@ const updateParameter = (key: string, value: unknown) => {
 
 const openDialog = () => {
   localAudio.value = JSON.parse(JSON.stringify(props.modelValue))
-  localCodec.value = (props.modelValue.audioCodec as string) || ''
+  localCodec.value = (props.modelValue.audio_codec as string) || ''
   dialogOpen.value = true
 }
 
 const saveDialog = () => {
-  emit('update:modelValue', { ...localAudio.value, audioCodec: localCodec.value })
+  emit('update:modelValue', { ...localAudio.value, audio_codec: localCodec.value })
   dialogOpen.value = false
 }
 
 // Summary for compact display
 const currentCodecLabel = computed(() => {
-  const codec = props.modelValue.audioCodec as string
+  const codec = props.modelValue.audio_codec as string
   if (!codec) return null
   return audioCodecs.value.find(c => c.codec === codec)?.label ?? codec
 })
@@ -113,8 +113,8 @@ const currentCodecLabel = computed(() => {
 const channelSummary = computed(() => {
   const chs = props.modelValue.channels ?? []
   return chs
-    .filter(ch => ch.channels && ch.audioBitrate)
-    .map(ch => `${channelLabel(ch.channels as string)} @ ${ch.audioBitrate}`)
+    .filter(ch => ch.channels && ch.audio_bitrate)
+    .map(ch => `${channelLabel(ch.channels as string)} @ ${ch.audio_bitrate}`)
     .join(', ')
 })
 </script>
@@ -212,8 +212,8 @@ const channelSummary = computed(() => {
               <div class="flex-1 space-y-1.5">
                 <Label v-if="index === 0" class="text-xs text-muted-foreground">Bitrate</Label>
                 <Select
-                  :model-value="channel.audioBitrate"
-                  @update:model-value="(val: any) => updateChannelField(index, 'audioBitrate', val)"
+                  :model-value="channel.audio_bitrate"
+                  @update:model-value="(val: any) => updateChannelField(index, 'audio_bitrate', val)"
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select bitrate" />
