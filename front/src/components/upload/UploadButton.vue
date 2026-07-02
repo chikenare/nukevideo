@@ -21,7 +21,7 @@ import { Button } from '@/components/ui/button'
 import UploadFiles from './UploadFiles.vue'
 import { useUploadStore } from '@/stores/upload'
 import { storeToRefs } from 'pinia'
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { Template } from '@/types/Template'
 import TemplateService from '@/services/TemplateService'
 import type { AcceptableValue } from 'reka-ui'
@@ -32,9 +32,14 @@ const { files, selectedTemplate, isUploading } = storeToRefs(uploadStore)
 const templates = ref<Template[]>([])
 const dialogOpen = ref(false)
 
+// Files queued but not yet handed to Uppy — these are what a "Upload" click will start,
+// so both the template picker and the button stay available even mid-upload.
+const pendingCount = computed(() =>
+  files.value.filter(f => f.status === 'pending' && f.progress === 0 && !f.uppyFileId).length
+)
+
 const handleUpload = () => {
   uploadStore.startUpload()
-  dialogOpen.value = false
 }
 
 const handleTemplateChange = (value: AcceptableValue) => {
@@ -65,7 +70,7 @@ onMounted(getTemplates)
       <UploadFiles v-model="files" />
 
       <div class="mt-5">
-        <Select v-if="!isUploading" v-model="selectedTemplate" @update:model-value="handleTemplateChange">
+        <Select v-if="pendingCount > 0" v-model="selectedTemplate" @update:model-value="handleTemplateChange">
           <SelectTrigger>
             <SelectValue placeholder="Select template" />
           </SelectTrigger>
@@ -80,9 +85,9 @@ onMounted(getTemplates)
         </Select>
       </div>
 
-      <DialogFooter v-if="!isUploading" class="mt-4">
+      <DialogFooter v-if="pendingCount > 0" class="mt-4">
         <Button type="button" @click="handleUpload">
-          Upload
+          {{ isUploading ? 'Upload more' : 'Upload' }} ({{ pendingCount }})
         </Button>
       </DialogFooter>
     </DialogContent>
