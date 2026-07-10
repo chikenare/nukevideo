@@ -1,0 +1,110 @@
+worker_processes  auto;
+
+events {
+    worker_connections  4096;
+    multi_accept on;
+}
+http {
+
+    server_tokens off;
+    sendfile on;
+    tcp_nopush on;
+
+    map $uri $video_ulid {
+        "~^/(?<v>[0-9A-Za-z]{26})/"  $v;
+        default                      -;
+    }
+
+    map $uri $is_manifest {
+        "~\.(mpd|m3u8)$"  1;
+        default           0;
+    }
+
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid';
+
+    access_log off;
+    error_log  stderr warn;
+
+    tcp_nodelay     on;
+    keepalive_timeout  65;
+
+    proxy_cache_path /var/cache/nginx/vod
+        levels=1:2
+        keys_zone=vod_cache:20m
+        max_size=${VOD_CACHE_MAX_SIZE}
+        inactive=${VOD_CACHE_INACTIVE}
+        use_temp_path=off;
+
+    aws_auth $aws_token {
+        access_key ${AWS_ACCESS_KEY_ID};
+        secret_key ${AWS_SECRET_ACCESS_KEY};
+        service s3;
+        region ${AWS_DEFAULT_REGION};
+    }
+
+    secure_token_akamai $token {
+        key ${VOD_TOKEN_SECRET};
+        acl "$secure_token_baseuri_comma*";
+        ip_address $remote_addr;
+    }
+
+    server {
+        listen 80;
+
+        include /usr/local/nginx/conf/cloudflare-realip.conf;
+
+        #access_log /dev/stdout main;
+        access_log /dev/stdout bandwidth;
+
+        akamai_token_validate $arg___hdnea__;
+        akamai_token_validate_key ${VOD_TOKEN_SECRET};
+        akamai_token_validate_strip_token __hdnea__;
+
+        location / {
+            secure_token $token;
+            secure_token_types application/dash+xml application/vnd.apple.mpegurl application/x-mpegurl;
+            secure_token_avoid_cookies on;
+            secure_token_expires_time ${SECURE_TOKEN_EXPIRES_TIME};
+            secure_token_query_token_expires_time ${SECURE_TOKEN_QUERY_EXPIRES_TIME};
+
+            proxy_cache vod_cache;
+            proxy_cache_key "$uri|$http_origin";
+            proxy_cache_use_stale error timeout updating;
+            proxy_cache_lock on;
+            proxy_no_cache $is_manifest;
+            proxy_cache_bypass $is_manifest;
+            proxy_ignore_headers Cache-Control Expires Set-Cookie;
+            proxy_cache_valid 200 30d;
+            proxy_cache_valid 404 1m;
+
+            add_header X-Cache-Status $upstream_cache_status always;
+
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+    }
+
+    server {
+        listen 127.0.0.1:8080;
+
+        access_log off;
+
+        location / {
+            rewrite "^.*$" "/${AWS_BUCKET}$uri?" break;
+
+            proxy_pass ${AWS_ENDPOINT};
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_ssl_server_name on;
+            proxy_ssl_name ${AWS_ENDPOINT_HOST};
+            proxy_set_header Host ${AWS_ENDPOINT_HOST};
+            proxy_set_header X-Amz-Date $aws_auth_date;
+            proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
+            proxy_set_header Authorization $aws_token;
+        }
+    }
+}

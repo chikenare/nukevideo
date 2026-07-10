@@ -1,0 +1,24 @@
+import apiClient from './api'
+
+// Only the active provider's block is sent; the backend leaves the other untouched.
+export type CdnSettingsUpdate = {
+  provider: App.Enums.CdnDriver
+  selfHosted?: App.Data.SelfHostedConfigData
+  bunny?: App.Data.BunnyConfigData
+}
+
+class CdnSettingsService {
+  constructor(private api = apiClient) {}
+
+  async get(): Promise<App.Data.CdnSettingsData> {
+    const res = await this.api.get('/cdn-settings')
+    return res.data.data
+  }
+
+  async update(payload: CdnSettingsUpdate): Promise<App.Data.CdnSettingsData> {
+    const res = await this.api.patch('/cdn-settings', payload)
+    return res.data.data
+  }
+}
+
+export default new CdnSettingsService()
