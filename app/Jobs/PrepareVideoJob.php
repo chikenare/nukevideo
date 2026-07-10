@@ -6,6 +6,7 @@ use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Video;
 use App\Services\CreateVideoStreamsService;
+use App\Services\PerTitleCrfService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -125,6 +126,10 @@ class PrepareVideoJob implements ShouldQueue
                 EncodeSidecarTracksJob::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
             }
 
+            // Per-title CRF: measure what each rendition actually needs from THIS source
+            // before chunks fan out. No-op unless the template sets `target_vmaf`.
+            $this->resolvePerTitleCrf($video, $localPath);
+
             $windows = $this->planWindows($video, $localPath);
 
             if (empty($windows)) {
@@ -161,6 +166,18 @@ class PrepareVideoJob implements ShouldQueue
         }
 
         $video->update(['status' => VideoStatus::RUNNING->value]);
+    }
+
+    /** Probe-and-set per-title CRF on each video rendition; a probe failure keeps the template CRF. */
+    private function resolvePerTitleCrf(Video $video, string $localPath): void
+    {
+        foreach ($video->streams()->where('type', 'video')->get() as $stream) {
+            (new PerTitleCrfService($stream))->apply(
+                $localPath,
+                (float) $video->duration,
+                fn () => $this->heartbeat($video),
+            );
+        }
     }
 
     /**

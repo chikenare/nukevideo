@@ -148,6 +148,7 @@ return [
                             'maxrate' => '3000k',
                             'bufsize' => '6000k',
                             'gop_size' => 60,
+                            'target_vmaf' => 94,
                         ],
                         [
                             'width' => 1280,
@@ -158,6 +159,7 @@ return [
                             'maxrate' => '1500k',
                             'bufsize' => '3000k',
                             'gop_size' => 60,
+                            'target_vmaf' => 93,
                         ],
                     ],
                     'audio' => [

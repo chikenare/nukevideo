@@ -88,10 +88,10 @@ trait DetectsStreamCopy
 
     private function parseBitrateValue(string $value): int
     {
-        if (str_ends_with(strtolower($value), 'k')) {
-            return (int) $value * 1000;
-        }
-
-        return (int) $value;
+        return match (true) {
+            str_ends_with(strtolower($value), 'k') => (int) round((float) $value * 1000),
+            str_ends_with(strtolower($value), 'm') => (int) round((float) $value * 1000000),
+            default => (int) $value,
+        };
     }
 }
