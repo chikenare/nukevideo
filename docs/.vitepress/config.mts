@@ -27,6 +27,7 @@ export default defineConfig({
             { text: 'Templates', link: '/guide/templates' },
             { text: 'Nodes', link: '/guide/nodes' },
             { text: 'Streaming & VOD', link: '/guide/streaming' },
+            { text: 'CDN & Delivery', link: '/guide/cdn' },
           ],
         },
         {
