@@ -193,6 +193,20 @@ return [
             'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
+        // `template` is null: consumed by PerTitleCrfService before fan-out, never rendered
+        // into the ffmpeg command.
+        'target_vmaf' => [
+            'type' => 'video',
+            'input_type' => 'integer',
+            'label' => 'Target VMAF',
+            'min' => 70,
+            'max' => 99,
+            'help' => 'Per-title mode: short samples of the source are test-encoded and the CRF is adjusted per video to hit this score. Empty = use the CRF as-is.',
+            'rules' => ['nullable', 'integer', 'min:70', 'max:99'],
+            'template' => null,
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+        ],
+
         // --- ABR alignment (nginx-vod) ---
         // -keyint_min is only honoured by libx264; x265/av1 use their own *-params
         // families, so it's scoped to libx264 to avoid a silent no-op.

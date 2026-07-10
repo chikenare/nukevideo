@@ -56,7 +56,7 @@ class ChunkTranscodeService
             ]);
         }
 
-        $params = $this->stream->input_params ?? [];
+        $params = $this->clampMaxrateToSource($this->stream->input_params ?? []);
 
         $args = [];
 
@@ -85,6 +85,65 @@ class ChunkTranscodeService
         $args[] = '-an'; // video-only: audio is its own rendition/chunk set
 
         return implode(' ', $args);
+    }
+
+    // Below this a source bitrate is bogus probe data, and the clamp would emit '-maxrate 0k'.
+    private const MIN_CLAMP_BPS = 100_000;
+
+    /**
+     * Safety net for already-compressed sources: cap the template VBV at the source's own
+     * bitrate (scaled to the rendition's pixel count) so a re-encode never outweighs its source.
+     * Skipped for ABR templates (clamping under their pinned -b:v would corrupt the VBV triple)
+     * and when the target codec is less efficient than the source's — matching an AV1 source's
+     * bitrate with x264 would starve it.
+     */
+    private function clampMaxrateToSource(array $params): array
+    {
+        if (empty($params['maxrate']) || ! empty($params['constant_bitrate'])) {
+            return $params;
+        }
+
+        $meta = $this->stream->meta ?? [];
+
+        if (self::codecRank($params['video_codec'] ?? null) < self::codecRank($meta['source_codec'] ?? null)) {
+            return $params;
+        }
+
+        $sourceRate = (int) ($meta['source_bit_rate'] ?? 0);
+        $sourcePixels = (int) ($meta['source_width'] ?? 0) * (int) ($meta['source_height'] ?? 0);
+        $targetPixels = (int) $this->stream->width * (int) $this->stream->height;
+
+        if ($sourceRate <= 0 || $sourcePixels <= 0 || $targetPixels <= 0) {
+            return $params;
+        }
+
+        // Bitrate scales sublinearly with resolution (~0.75 power law).
+        $cap = (int) round($sourceRate * min(1.0, ($targetPixels / $sourcePixels) ** 0.75));
+        $maxrate = $this->parseBitrateValue($params['maxrate']);
+
+        if ($cap < self::MIN_CLAMP_BPS || $cap >= $maxrate) {
+            return $params;
+        }
+
+        if (! empty($params['bufsize'])) {
+            // Keep the template's own bufsize:maxrate ratio — a strict 1x VBV stays strict.
+            $ratio = $this->parseBitrateValue($params['bufsize']) / max(1, $maxrate);
+            $params['bufsize'] = intdiv((int) round($cap * $ratio), 1000).'k';
+        }
+
+        $params['maxrate'] = intdiv($cap, 1000).'k';
+
+        return $params;
+    }
+
+    /** Rough compression-efficiency ordering of codec generations. */
+    private static function codecRank(?string $codec): int
+    {
+        return match ($codec) {
+            'libsvtav1', 'av1' => 3,
+            'libx265', 'hevc', 'vp9' => 2,
+            default => 1, // h264 family and anything older/unknown
+        };
     }
 
     /**
