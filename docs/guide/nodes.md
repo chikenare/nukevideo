@@ -4,14 +4,14 @@ Nodes are remote servers that handle video encoding (workers) or content deliver
 
 ## Node Types
 
-| Type | Purpose | Docker Image |
-|------|---------|-------------|
-| `worker` | Video encoding with FFmpeg | `nukevideo/worker` |
-| `proxy` | Video streaming via Nginx VOD | `nukevideo/proxy` |
+| Type | Purpose |
+|------|---------|
+| `worker` | Video encoding with FFmpeg |
+| `proxy` | CMAF delivery from S3 with token validation |
 
 ## Worker Nodes
 
-Worker nodes run FFmpeg-based containers that process video encoding jobs from Redis queues.
+Worker nodes run FFmpeg-based containers that process video encoding jobs from Redis queues. Sources are split into chunks and encoded in parallel across containers (SVT-AV1, x264/x265), then packaged into static CMAF.
 
 ### Job Distribution
 
@@ -19,18 +19,20 @@ The system automatically assigns videos to the **least busy** worker with availa
 
 ## Proxy Nodes
 
-Proxy nodes run a custom Nginx build with Kaltura's VOD modules for on-the-fly video packaging and delivery.
+Proxy nodes run a custom nginx build that delivers the **pre-packaged CMAF** from S3. They do not repackage anything at request time.
 
 They handle:
-- HLS and DASH manifest generation
-- On-the-fly segmentation from S3 sources
-- Token-based access control
-- S3 authentication for fetching media files
-- Local response caching (configurable)
+- Validating Akamai-style stream tokens
+- Reading packaged segments from S3 using AWS authentication
+- Local segment caching (manifests bypass the cache)
+- Cloudflare real-IP resolution
+- Shipping access-log bandwidth to ClickHouse via Vector.dev
+
+> **Alternative:** You don't have to run proxy nodes at all. **Bunny CDN** can deliver the same static CMAF straight from your S3 origin, configured entirely from the admin panel. See [CDN & Delivery](/guide/cdn) to decide which fits your deployment.
 
 ### CDN Mode
 
-When a proxy node sits behind a CDN (e.g., Cloudflare), enable **CDN mode** to disable local Nginx caching. The CDN handles caching at the edge, so local cache becomes redundant.
+When a proxy node sits behind a CDN (e.g., Cloudflare), enable **CDN mode** to disable the local nginx segment cache. The CDN handles caching at the edge, so the local cache becomes redundant.
 
 ```
 POST /api/nodes

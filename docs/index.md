@@ -15,21 +15,21 @@ hero:
 
 features:
   - icon: 🎬
-    title: Multi-Format Encoding
-    details: Transcode videos into HLS, DASH, and MP4 using FFmpeg with customizable encoding templates.
-  - icon: ⚡
-    title: Distributed Processing
-    details: Scale horizontally by adding worker nodes. NukeVideo automatically distributes encoding jobs based on workload.
+    title: Distributed Encoding
+    details: Videos are split into chunks and encoded in parallel across worker nodes with FFmpeg, SVT-AV1, and x264/x265. Audio is transcoded to AAC.
+  - icon: 🎯
+    title: Per-Title VMAF CRF
+    details: The pipeline probes sample windows of each source, measures VMAF, and interpolates the CRF needed to hit a target quality per rendition.
+  - icon: 📦
+    title: Static CMAF Packaging
+    details: shaka-packager builds each output once into shared CMAF segments that serve both HLS and DASH — subtitles included. No on-the-fly repackaging.
   - icon: 📡
-    title: Adaptive Bitrate Streaming
-    details: Deliver video via Nginx VOD module with HLS and DASH support, token-based access control, and S3 storage.
+    title: Flexible Delivery
+    details: Serve through self-hosted proxy nodes with token-validated S3 delivery, or point a Bunny CDN pull-zone at your S3 origin. Chosen per deployment.
   - icon: 🗄️
     title: S3-Compatible Storage
-    details: Store originals and processed files in any S3-compatible service — AWS S3, MinIO, RustFS, and more.
+    details: Store originals and packaged output in any S3-compatible service — AWS S3, MinIO, RustFS, iDrive e2 — with s5cmd for fast transfers.
   - icon: 📊
-    title: Real-Time Monitoring
-    details: Track encoding progress in real-time, monitor node health, and analyze bandwidth with ClickHouse analytics.
-  - icon: 🔌
-    title: RESTful API
-    details: Full-featured API with Sanctum authentication, webhook support, and multipart uploads via Uppy.
+    title: Analytics & API
+    details: MariaDB for application data, ClickHouse for bandwidth and usage analytics, plus a full REST API with Sanctum auth and Uppy multipart uploads.
 ---

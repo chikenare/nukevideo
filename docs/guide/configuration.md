@@ -5,7 +5,7 @@ NukeVideo is configured through environment variables. This page documents all a
 The **Used in** column indicates where each variable is used:
 
 - **API** — The Laravel application
-- **Proxy** — Nginx VOD proxy nodes
+- **Proxy** — Self-hosted CMAF delivery proxy nodes
 - **Worker** — FFmpeg encoding nodes
 - **Vector** — Log collector (runs on both proxy and worker nodes)
 
@@ -50,21 +50,26 @@ The **Used in** column indicates where each variable is used:
 | `AWS_ENDPOINT` | — | API, Proxy | S3 endpoint URL (for MinIO/RustFS) |
 | `AWS_USE_PATH_STYLE_ENDPOINT` | `false` | API | Use path-style URLs (required for MinIO) |
 
-## VOD Proxy
+## Proxy Node Delivery
 
-These variables configure the Nginx VOD module on proxy nodes. They are substituted into the Nginx config via `envsubst` at container startup.
+These values control token validation and local segment caching on self-hosted proxy nodes, which serve the pre-packaged CMAF from S3. They are **not** set in `.env` — they live in the **CDN Settings** panel (the `self_hosted` provider) and are injected into the proxy's nginx container at deploy time under the names below. Leaving one empty falls back to the container's default.
 
 | Variable | Default | Used in | Description |
 |----------|---------|---------|-------------|
-| `VOD_SEGMENT_DURATION` | `10000` | Proxy | HLS/DASH segment duration in ms |
-| `VOD_METADATA_CACHE_SIZE` | `512m` | Proxy | Metadata cache size |
-| `VOD_RESPONSE_CACHE_SIZE` | `128m` | Proxy | Response cache size |
-| `VOD_MAPPING_CACHE_SIZE` | `5m` | Proxy | Mapping cache size |
-| `VOD_TOKEN_SECRET` | — | API, Proxy | Secret for signing and validating VOD streaming tokens |
+| `VOD_TOKEN_SECRET` | — | Proxy | Secret for signing and validating stream tokens |
 | `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | Stream token expiration (e.g., `100d`, `24h`) |
-| `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | Query token expiration |
-| `VOD_CACHE_MAX_SIZE` | `10g` | Proxy | Max size for local proxy cache |
-| `VOD_CACHE_INACTIVE` | `1h` | Proxy | Evict cached items not accessed within this period |
+| `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | Query/segment token expiration |
+| `VOD_CACHE_MAX_SIZE` | `10g` | Proxy | Max size for the local segment cache |
+| `VOD_CACHE_INACTIVE` | `1h` | Proxy | Evict cached segments not accessed within this period |
+
+## CDN
+
+Delivery is chosen per deployment in the admin panel under **CDN Settings**, using the `provider` field:
+
+- `self_hosted` — Deliver through your own proxy nodes (uses the [Proxy Node Delivery](#proxy-node-delivery) settings above).
+- `bunny` — Deliver through a Bunny CDN pull-zone pointed at your S3 origin. Configure the pull-zone **host**, **token key**, and **token window** in the panel.
+
+Bunny is configured entirely from the panel (stored in the database), not through `.env`. See [CDN & Delivery](/guide/cdn) for details on both modes.
 
 ## Video Processing
 
@@ -112,7 +117,7 @@ Variables for proxy and worker nodes are managed through the UI or API at `/api/
 
 ### Proxy Nodes
 
-Proxy containers receive all variables from the [VOD Proxy](#vod-proxy) and [S3 Storage](#s3-storage) sections above.
+Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packaged CMAF from the bucket) plus the token and cache settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel.
 
 ### Worker Nodes
 
