@@ -194,8 +194,11 @@ class PerTitleCrfService
     {
         // Reference downscaled to the rendition's resolution with ffmpeg's default scaler — the
         // same one the sample encode used; a sharper kernel here would bias every score low.
+        // Pair frames by index (settb=AVTB,setpts=N), not by timestamp: the source and the .mp4
+        // sample carry different timebases (1/fps vs 1/1000), so libvmaf's default PTS framesync
+        // mispairs them and every score reads ~35 points low.
         $filter = sprintf(
-            '[%s]scale=%d:%d,setpts=PTS-STARTPTS[ref];[1:v:0]setpts=PTS-STARTPTS[dist];[dist][ref]libvmaf=n_threads=2',
+            '[%s]scale=%d:%d,settb=AVTB,setpts=N[ref];[1:v:0]settb=AVTB,setpts=N[dist];[dist][ref]libvmaf=n_threads=2',
             (new ChunkTranscodeService($this->stream))->mapTarget(),
             (int) $this->stream->width,
             (int) $this->stream->height,
