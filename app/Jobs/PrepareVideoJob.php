@@ -40,7 +40,28 @@ class PrepareVideoJob implements ShouldQueue
     // to workers) or the job is re-delivered mid-run and two attempts race on the local scratch.
     public $timeout = 1800;
 
-    private const CHUNK_SECONDS = 300; // 5 minutes
+    // Chunk-window sizing. A single ProcessChunkJob pass must finish well inside the per-chunk
+    // timeout, and its wall-time scales ~linearly with pixels/frame × fps — for BOTH ends: it
+    // decodes a window of the source and encodes one rendition out of it. So we hold that workload
+    // near the reference (a 1080p source encoded to a 1080p rendition, 30fps, REF_WINDOW seconds)
+    // and shrink the window as either end's resolution/fps climb — a 4K/8K master gets proportionally
+    // shorter windows instead of blowing the timeout even when its top rendition is only 1080p.
+    // Floored/capped so fan-out and parallelism stay sane.
+    private const REF_PIXELS = 1920 * 1080;
+
+    private const REF_FPS = 30.0;
+
+    private const REF_WINDOW = 120.0;
+
+    private const MIN_WINDOW = 8;
+
+    private const MAX_WINDOW = 300;
+
+    // Decoding a pixel is far cheaper than encoding one; weight the source side accordingly.
+    private const DECODE_WEIGHT = 0.25;
+
+    // Above this, `avg_frame_rate` is a VFR container lying (1000/1 and friends), not a real rate.
+    private const MAX_FPS = 120.0;
 
     private const QUEUE = 'video-processing';
 
@@ -182,7 +203,7 @@ class PrepareVideoJob implements ShouldQueue
 
     /**
      * Read keyframe timestamps from the local source file and group them into keyframe-aligned
-     * blocks of at least CHUNK_SECONDS.
+     * blocks of at least the video's adaptive chunk-window length.
      *
      * @return list<array{0:float,1:float}> ordered [start, end] windows in seconds
      */
@@ -214,17 +235,62 @@ class PrepareVideoJob implements ShouldQueue
 
         sort($keyTimes);
 
-        return $this->groupKeyframes($keyTimes, (float) $video->duration);
+        return $this->groupKeyframes($keyTimes, (float) $video->duration, $this->chunkSeconds($video));
     }
 
     /**
-     * Close each block at the first keyframe >= CHUNK_SECONDS past its start, so every
+     * Window length (seconds) for THIS video. Every rendition must share the chunk boundaries, so
+     * size a window for each one — off its own pixels and the `source_*` probe meta its chunks
+     * decode ({@see CreateVideoStreamsService}) — and keep the tightest: the heaviest rendition's
+     * jobs are the ones that have to stay inside the per-chunk timeout.
+     */
+    private function chunkSeconds(Video $video): int
+    {
+        return $video->streams()->where('type', 'video')->get()
+            ->map(fn ($stream) => self::chunkWindowSeconds(
+                (int) $stream->width * (int) $stream->height,
+                (int) ($stream->meta['source_width'] ?? 0) * (int) ($stream->meta['source_height'] ?? 0),
+                (float) ($stream->meta['source_fps'] ?? 0.0),
+            ))
+            ->min() ?? (int) self::REF_WINDOW;
+    }
+
+    /**
+     * Pure window-size calc (seconds of source per chunk) for ONE rendition: scale the reference
+     * window inversely with the per-frame workload of its chunk jobs — its own pixels plus the
+     * source pixels each of them decodes — times fps, then clamp. Static so it's covered without
+     * a DB round-trip.
+     *
+     * A source probed before `source_fps` existed reports no rate; fall back to the reference one
+     * rather than stretching the window on a video whose framerate we can't see.
+     */
+    public static function chunkWindowSeconds(int $renditionPixels, int $sourcePixels, float $fps): int
+    {
+        if ($renditionPixels <= 0 && $sourcePixels <= 0) {
+            return (int) self::REF_WINDOW;
+        }
+
+        $sourcePixels = $sourcePixels > 0 ? $sourcePixels : $renditionPixels;
+        $fps = $fps > 0 && $fps <= self::MAX_FPS ? $fps : self::REF_FPS;
+
+        $pixels = $renditionPixels + $sourcePixels * self::DECODE_WEIGHT;
+        $refPixels = self::REF_PIXELS * (1 + self::DECODE_WEIGHT);
+
+        $window = self::REF_WINDOW
+            * ($refPixels / $pixels)
+            * (self::REF_FPS / $fps);
+
+        return (int) max(self::MIN_WINDOW, min(self::MAX_WINDOW, round($window)));
+    }
+
+    /**
+     * Close each block at the first keyframe >= $chunkSeconds past its start, so every
      * boundary lands on a source keyframe and the worker's `-ss` seek decodes no partial GOP.
      *
      * @param  list<float>  $keyTimes
      * @return list<array{0:float,1:float}>
      */
-    private function groupKeyframes(array $keyTimes, float $duration): array
+    private function groupKeyframes(array $keyTimes, float $duration, int $chunkSeconds): array
     {
         if ($duration <= 0) {
             return [];
@@ -234,7 +300,7 @@ class PrepareVideoJob implements ShouldQueue
         $start = 0.0;
 
         foreach ($keyTimes as $t) {
-            if ($t - $start >= self::CHUNK_SECONDS && $t < $duration) {
+            if ($t - $start >= $chunkSeconds && $t < $duration) {
                 $windows[] = [$start, $t];
                 $start = $t;
             }

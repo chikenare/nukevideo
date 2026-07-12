@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Stream;
 use Closure;
+use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
@@ -31,6 +32,10 @@ class PerTitleCrfService
 
     // Per probe process; a 20s sample encode/score never legitimately needs more.
     private const PROCESS_TIMEOUT = 300;
+
+    // The probe runs inside ONE worker slot, so it may not spend the whole node. Keep it to a
+    // couple of samples at a time; the chunk encoders own the rest of the CPU.
+    private const MAX_CONCURRENCY = 2;
 
     public function __construct(
         private Stream $stream,
@@ -147,22 +152,36 @@ class PerTitleCrfService
         }
 
         try {
-            $this->runPool(array_map(
+            $encodes = $this->runPool(array_map(
                 fn (array $job) => $this->encodeSampleCommand($job['crf'], $crfKey, $job['start'], $sourcePath, $job['sample']),
                 $jobs,
             ), $tick);
 
+            // Only score what actually encoded; a lost sample costs its window, not the probe.
+            $encoded = array_keys(array_filter($encodes, fn (?string $output) => $output !== null));
+
             $outputs = $this->runPool(array_map(
-                fn (array $job) => $this->vmafCommand($job['start'], $sourcePath, $job['sample']),
-                $jobs,
+                fn (int $index) => $this->vmafCommand($jobs[$index]['start'], $sourcePath, $jobs[$index]['sample']),
+                $encoded,
             ), $tick);
         } finally {
             array_map(fn (array $job) => @unlink($job['sample']), $jobs);
         }
 
         $scores = [];
-        foreach ($outputs as $index => $output) {
-            $scores[$jobs[$index]['crf']][] = self::parseVmafScore($output);
+        foreach ($outputs as $position => $output) {
+            $score = $output === null ? null : self::parseVmafScore($output);
+
+            if ($score !== null) {
+                $scores[$jobs[$encoded[$position]]['crf']][] = $score;
+            }
+        }
+
+        // Interpolating between anchors needs both of them; one that lost every window is no anchor.
+        foreach ($anchorCrfs as $crf) {
+            if (empty($scores[$crf])) {
+                throw new RuntimeException("No sample window scored for CRF {$crf}");
+            }
         }
 
         return array_map(
@@ -214,34 +233,46 @@ class PerTitleCrfService
         );
     }
 
-    private static function parseVmafScore(string $output): float
+    private static function parseVmafScore(string $output): ?float
     {
-        if (! preg_match('/VMAF score: ([\d.]+)/', $output, $matches)) {
-            throw new RuntimeException('libvmaf produced no score');
-        }
-
-        return (float) $matches[1];
+        return preg_match('/VMAF score: ([\d.]+)/', $output, $matches) ? (float) $matches[1] : null;
     }
 
     /**
+     * Run the probe commands a few at a time. The pool used to launch every (anchor × window) at
+     * once — 6-8 ffmpeg on top of the node's chunk encoders, which is what OOM-killed staging — and
+     * it threw on the first failure, discarding every other measurement with it.
+     *
      * @param  list<string>  $commands
-     * @return list<string> combined stdout+stderr per command, in input order
+     * @return list<?string> combined stdout+stderr per command, in input order; null when it failed
      */
     private function runPool(array $commands, Closure $tick): array
     {
-        $results = Process::pool(function (Pool $pool) use ($commands) {
-            foreach ($commands as $command) {
-                $pool->timeout(self::PROCESS_TIMEOUT)->command($command);
-            }
-        })->start(fn () => $tick())->wait();
+        $outputs = [];
 
-        return $results->collect()->map(function ($result) {
-            if (! $result->successful()) {
-                throw new RuntimeException($result->errorOutput());
-            }
+        foreach (array_chunk($commands, self::MAX_CONCURRENCY) as $batch) {
+            try {
+                $results = Process::pool(function (Pool $pool) use ($batch) {
+                    foreach ($batch as $command) {
+                        $pool->timeout(self::PROCESS_TIMEOUT)->command($command);
+                    }
+                })->start(fn () => $tick())->wait();
 
-            return $result->output().$result->errorOutput();
-        })->values()->all();
+                foreach ($results->collect() as $result) {
+                    $outputs[] = $result->successful() ? $result->output().$result->errorOutput() : null;
+                }
+            } catch (ProcessTimedOutException) {
+                // The pool surfaces a timeout as a throw, so the batch's other results go with it.
+                // Small batches keep that cheap: a stuck sample costs its window, nothing else.
+                Log::warning('Per-title sample timed out; dropping its window', [
+                    'stream' => $this->stream->id,
+                ]);
+
+                $outputs = array_pad($outputs, count($outputs) + count($batch), null);
+            }
+        }
+
+        return $outputs;
     }
 
     private function shouldProbe(?string $crfKey, float $duration): bool

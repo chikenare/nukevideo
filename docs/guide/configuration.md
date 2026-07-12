@@ -77,10 +77,11 @@ Variables that control FFmpeg concurrency on worker nodes.
 
 | Variable | Default | Used in | Description |
 |----------|---------|---------|-------------|
-| `VIDEO_FFMPEG_THREADS` | `4` | Worker | CPU threads per video encoder. Each rendition in a chunk gets this many threads. |
-| `VIDEO_RENDITION_ESTIMATE` | `1` | Worker | Expected number of video renditions per chunk. Used to size worker concurrency: `floor(nproc / (VIDEO_FFMPEG_THREADS × VIDEO_RENDITION_ESTIMATE))`. Set to your typical rendition count (e.g. `4`) so the worker doesn't oversubscribe the CPU when one ffmpeg process fans out across several encoders simultaneously. |
-| `VIDEO_WORKER_PROCESSES` | auto | Worker | Parallel FFmpeg processes per node. Defaults to `floor(nproc / (VIDEO_FFMPEG_THREADS × VIDEO_RENDITION_ESTIMATE))`. Explicit value wins. |
+| `VIDEO_WORKER_PROCESSES` | auto | Worker | Concurrent FFmpeg processes per node. Auto-sized from the hardware the node sees: the smaller of `floor(cores / 4)` and `floor(usable RAM / 3 GB)`, where usable RAM is total minus 20% (min 2 GB) left to the OS, the chunk store and packaging. Never below 1. Explicit value wins. |
+| `VIDEO_FFMPEG_THREADS` | auto | Worker | Threads per encoder. Defaults to the node's fair share, `floor(cores / VIDEO_WORKER_PROCESSES)`, capped at 8 — so processes × threads fills the CPU without oversubscribing it. Explicit value wins. |
 | `VIDEO_WORKER_TIMEOUT` | `600` | Worker | Per-chunk wall-clock ceiling in seconds. FFmpeg gets this minus 120 s. Raise it for slow codecs (x265/AV1) at low thread counts. In production NodeService injects this per worker container. |
+
+On a node that shares its box with other services, set `DOCKER_MEMORY` (and optionally `DOCKER_CPUSET_CPUS`) in the node's env from the panel: the worker container gets that limit, the auto-sizing above budgets against it instead of the whole host, and an encode that overruns takes the worker down — not whatever else the host is running.
 
 ## ClickHouse (Analytics)
 
