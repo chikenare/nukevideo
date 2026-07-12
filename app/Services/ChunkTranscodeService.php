@@ -179,19 +179,14 @@ class ChunkTranscodeService
             ->implode(':');
     }
 
+    /**
+     * The node's fair share of threads, so processes × threads fills the CPU and no more. Derived
+     * from the same sizing as the worker pool ({@see Cpu}) — a private cap here would silently
+     * contradict it and leave cores idle while every chunk crawls toward the timeout.
+     */
     private function perEncoderThreads(): int
     {
-        $fairShare = max(1, intdiv(Cpu::cores(), Cpu::videoWorkerProcesses()));
-
-        $codec = data_get($this->stream->input_params, 'video_codec');
-
-        return match (strtolower($codec)) {
-            'av1', 'libsvtav1' => min(2, $fairShare),
-
-            'h264', 'hevc', 'h265' => min(4, $fairShare),
-
-            default => min(2, $fairShare),
-        };
+        return Cpu::videoEncoderThreads();
     }
 
     public function buildAudioArguments(): string

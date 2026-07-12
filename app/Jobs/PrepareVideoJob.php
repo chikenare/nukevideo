@@ -40,7 +40,7 @@ class PrepareVideoJob implements ShouldQueue
     // to workers) or the job is re-delivered mid-run and two attempts race on the local scratch.
     public $timeout = 1800;
 
-    // Chunk-window sizing. A single ChunkProcessJob pass must finish well inside the per-chunk
+    // Chunk-window sizing. A single ProcessChunkJob pass must finish well inside the per-chunk
     // timeout, and its wall-time scales ~linearly with pixels/frame × fps — for BOTH ends: it
     // decodes a window of the source and encodes one rendition out of it. So we hold that workload
     // near the reference (a 1080p source encoded to a 1080p rendition, 30fps, REF_WINDOW seconds)
