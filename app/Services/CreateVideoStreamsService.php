@@ -385,6 +385,14 @@ class CreateVideoStreamsService
         return 0;
     }
 
+    /** Source frame rate, from the `avg_frame_rate` fraction ("24000/1001"). Zero when unknown. */
+    private function sourceFrameRate(FFStream $stream): float
+    {
+        [$num, $den] = array_pad(explode('/', (string) $stream->get('avg_frame_rate')), 2, '1');
+
+        return (float) $den > 0 ? round((float) $num / (float) $den, 3) : 0.0;
+    }
+
     /**
      * A source subtitle track with no cues yields an empty (header-only) VTT that the packager
      * rejects with PARSER_FAILURE, so drop it at ingestion. Detected from the cue count ffprobe
@@ -466,6 +474,7 @@ class CreateVideoStreamsService
                     'source_width' => $stream->get('width'),
                     'source_codec' => $stream->get('codec_name'),
                     'source_bit_rate' => $this->sourceBitRate($stream),
+                    'source_fps' => $this->sourceFrameRate($stream),
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
                 // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}). The rest of the audio probe
