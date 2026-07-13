@@ -302,6 +302,8 @@ isAdmin?: boolean,
 namespace Video {
 export type UpdateVideoData = {
 name: string,
+externalUserId?: string | null,
+externalResourceId?: string | null,
 };
 }
 }

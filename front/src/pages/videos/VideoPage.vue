@@ -40,6 +40,8 @@ const { config: codecConfig, fetchConfig: fetchCodecConfig } = useCodecConfig()
 const video = ref<Video>()
 const isEditDialogOpen = ref(false)
 const editName = ref('')
+const editExternalUserId = ref('')
+const editExternalResourceId = ref('')
 const playerOutput = ref<Output | null>(null)
 
 const codecLabel = (codec?: string | null): string | null => {
@@ -91,15 +93,21 @@ function onStreamDeleted(stream: Stream) {
 
 const handleEdit = () => {
   editName.value = video.value?.name ?? ''
+  editExternalUserId.value = video.value?.externalUserId ?? ''
+  editExternalResourceId.value = video.value?.externalResourceId ?? ''
   isEditDialogOpen.value = true
 }
 
 const handleUpdate = async () => {
   if (!video.value) return
   try {
-    const res = await VideoService.update(video.value.ulid, { name: editName.value })
+    const res = await VideoService.update(video.value.ulid, {
+      name: editName.value,
+      externalUserId: editExternalUserId.value.trim() || null,
+      externalResourceId: editExternalResourceId.value.trim() || null,
+    })
     toast.success(res.data.message)
-    video.value.name = editName.value
+    video.value = res.data.data
     isEditDialogOpen.value = false
   } catch (e) {
     if (e instanceof ApiException) toast.error(e.message)
@@ -376,16 +384,36 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Edit Video Name Dialog -->
+    <!-- Edit Video Dialog -->
     <Dialog v-model:open="isEditDialogOpen">
       <DialogContent class="sm:max-w-106.25">
         <DialogHeader>
-          <DialogTitle>Edit Video Name</DialogTitle>
+          <DialogTitle>Edit Video</DialogTitle>
         </DialogHeader>
         <div class="grid gap-4 py-4">
           <div class="grid grid-cols-4 items-center gap-4">
             <Label for="name" class="text-right">Name</Label>
             <Input id="name" v-model="editName" class="col-span-3" @keyup.enter="handleUpdate" />
+          </div>
+          <div class="grid grid-cols-4 items-center gap-4">
+            <Label for="external-user-id" class="text-right">External User ID</Label>
+            <Input
+              id="external-user-id"
+              v-model="editExternalUserId"
+              class="col-span-3"
+              placeholder="Optional"
+              @keyup.enter="handleUpdate"
+            />
+          </div>
+          <div class="grid grid-cols-4 items-center gap-4">
+            <Label for="external-resource-id" class="text-right">External Resource ID</Label>
+            <Input
+              id="external-resource-id"
+              v-model="editExternalResourceId"
+              class="col-span-3"
+              placeholder="Optional"
+              @keyup.enter="handleUpdate"
+            />
           </div>
         </div>
         <DialogFooter>
