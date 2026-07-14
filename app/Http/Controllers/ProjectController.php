@@ -11,7 +11,7 @@ class ProjectController extends Controller
 {
     public function index(Request $request)
     {
-        $projects = $request->user()->projects()->latest()->get();
+        $projects = $request->user()->projects()->with('tokens')->latest()->get();
 
         return response()->json(['data' => $projects->map(fn ($p) => ProjectData::fromModel($p))->all()]);
     }

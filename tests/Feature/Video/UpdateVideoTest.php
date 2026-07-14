@@ -33,6 +33,9 @@ beforeEach(function () {
     ]);
 
     Sanctum::actingAs($this->user);
+
+    // Like the panel does on every request.
+    $this->withHeader('X-Project-Ulid', $this->project->ulid);
 });
 
 it('updates the external ids', function () {

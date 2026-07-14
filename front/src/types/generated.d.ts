@@ -60,6 +60,7 @@ export type ProjectData = {
 ulid: string,
 name: string,
 settings: App.Data.ProjectSettingsData | null,
+apiKey: App.Data.ApiTokenData | null,
 createdAt: string,
 updatedAt: string | null,
 };

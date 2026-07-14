@@ -19,7 +19,7 @@ class VodController extends Controller
     {
         $output = Output::with('video', 'streams')
             ->whereHas('video', function ($query) use ($request) {
-                $query->where('user_id', $request->user()->id)
+                $query->where('project_id', $request->project()->id)
                     ->where('status', VideoStatus::COMPLETED->value);
             })
             ->where('ulid', $ulid)

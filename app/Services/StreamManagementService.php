@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Enums\VideoStatus;
+use App\Models\Project;
 use App\Models\Stream;
-use App\Models\User;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
@@ -12,9 +12,9 @@ class StreamManagementService
 {
     public function __construct(private ManifestEditor $manifests) {}
 
-    public function destroy(string $ulid, User $user): void
+    public function destroy(string $ulid, Project $project): void
     {
-        $stream = $this->findOrFail($ulid, $user);
+        $stream = $this->findOrFail($ulid, $project);
         $video = $stream->video;
 
         if (! in_array($video->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
@@ -38,10 +38,10 @@ class StreamManagementService
         $stream->delete();
     }
 
-    private function findOrFail(string $ulid, User $user): Stream
+    private function findOrFail(string $ulid, Project $project): Stream
     {
         return Stream::with('video')
-            ->whereHas('video', fn ($q) => $q->where('user_id', $user->id))
+            ->whereHas('video', fn ($q) => $q->where('project_id', $project->id))
             ->where('ulid', $ulid)
             ->firstOrFail();
     }

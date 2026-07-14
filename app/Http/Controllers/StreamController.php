@@ -11,7 +11,7 @@ class StreamController extends Controller
 
     public function destroy(Request $request, string $ulid)
     {
-        $this->streamService->destroy($ulid, $request->user());
+        $this->streamService->destroy($ulid, $request->project());
 
         return response()->json([
             'message' => 'Stream deleted successfully',

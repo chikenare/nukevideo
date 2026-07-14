@@ -33,7 +33,7 @@ class MyCustomUppyController extends UppyS3MultipartController
 
         $this->uppyService->storeUploadMeta(
             $key,
-            $this->uppyService->buildUploadMeta($request->user(), $project, $request->all()),
+            $this->uppyService->buildUploadMeta($project->user, $project, $request->all()),
         );
 
         return response()
@@ -53,7 +53,7 @@ class MyCustomUppyController extends UppyS3MultipartController
 
         $this->uppyService->storeUploadMeta(
             $key,
-            $this->uppyService->buildUploadMeta($request->user(), $project, $request->all()),
+            $this->uppyService->buildUploadMeta($project->user, $project, $request->all()),
         );
 
         try {
@@ -117,24 +117,41 @@ class MyCustomUppyController extends UppyS3MultipartController
         return parent::signPartUpload($request);
     }
 
+    /** Runs once per signed part, so it stays a string compare against the cached meta — no queries. */
     private function authorizeUploadKey(Request $request): void
     {
         $request->validate(['key' => 'required|string']);
 
         $meta = $this->uppyService->getUploadMeta($request->input('key'));
+        $actor = $request->user();
 
-        abort_unless($meta && $meta->user === $request->user()->ulid, 403, 'This upload does not belong to you.');
+        $owns = $meta && ($actor instanceof Project
+            ? $meta->project === $actor->ulid
+            : $meta->user === $actor->ulid);
+
+        abort_unless($owns, 403, 'This upload does not belong to you.');
     }
 
+    /**
+     * Uppy carries the project in the metadata (its requests skip our axios interceptor, so there is
+     * no header). A project API key can only ever mean its own project; a user must own the one named.
+     */
     private function resolveProject(Request $request): Project
     {
         $request->validate([
             'metadata.project' => 'required|ulid',
         ]);
 
-        return $request->user()->projects()
-            ->where('ulid', $request->input('metadata.project'))
-            ->firstOrFail();
+        $ulid = $request->input('metadata.project');
+        $actor = $request->user();
+
+        if ($actor instanceof Project) {
+            abort_unless($actor->ulid === $ulid, 403, 'This API key belongs to another project.');
+
+            return $actor;
+        }
+
+        return $actor->projects()->where('ulid', $ulid)->firstOrFail();
     }
 
     private function validateMetadata(Request $request, Project $project): void

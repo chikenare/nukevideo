@@ -24,6 +24,12 @@ class ProjectService {
     return this.api.put(`${this.BASE_PATH}/${ulid}`, data)
   }
 
+  /** Revokes the current key and returns the project with the new plain-text key in `apiKey.token`. */
+  async regenerateApiKey(ulid: string): Promise<App.Data.ProjectData> {
+    const res = await this.api.post(`${this.BASE_PATH}/${ulid}/api-key`)
+    return res.data.data
+  }
+
   async destroy(ulid: string) {
     return this.api.delete(`${this.BASE_PATH}/${ulid}`)
   }

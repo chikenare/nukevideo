@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Data\ActivityLogData;
 use App\Http\Controllers\Controller;
+use App\Models\Video;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Spatie\Activitylog\Models\Activity;
@@ -12,8 +13,13 @@ class ActivityLogController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $activities = Activity::where('causer_type', \App\Models\User::class)
-            ->where('causer_id', $request->user()->id)
+        $project = $request->project();
+
+        $activities = Activity::whereHasMorph(
+            'subject',
+            [Video::class],
+            fn ($query) => $query->where('project_id', $project->id),
+        )
             ->latest()
             ->paginate(20);
 

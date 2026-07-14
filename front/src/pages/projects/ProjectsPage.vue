@@ -24,6 +24,7 @@ type Project = App.Data.ProjectData
 import { toast } from 'vue-sonner'
 import ProjectFormDialog from './components/ProjectFormDialog.vue'
 import DeleteProjectButton from './components/DeleteProjectButton.vue'
+import ProjectApiKeyButton from './components/ProjectApiKeyButton.vue'
 
 const projectsStore = useProjectsStore()
 const route = useRoute()
@@ -55,6 +56,9 @@ const handleSetActive = (project: Project) => {
   projectsStore.setCurrent(project.ulid)
   window.location.reload()
 }
+
+/** Sanctum keys are `{id}|{secret}`; only the id survives, the secret is hashed. */
+const maskedKey = (key: App.Data.ApiTokenData) => `${key.id}|${'•'.repeat(12)}`
 
 const copyId = async (project: Project) => {
   await navigator.clipboard.writeText(project.ulid)
@@ -97,19 +101,20 @@ onMounted(async () => {
         <TableHeader class="bg-muted sticky top-0 z-10">
           <TableRow>
             <TableHead>Name</TableHead>
+            <TableHead>API key</TableHead>
             <TableHead>Created</TableHead>
             <TableHead class="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow v-if="loading">
-            <TableCell colspan="3" class="text-center">
+            <TableCell colspan="4" class="text-center">
               <Spinner />
               Loading projects...
             </TableCell>
           </TableRow>
           <TableRow v-else-if="projects.length === 0">
-            <TableCell colspan="3" class="text-center text-muted-foreground py-8">
+            <TableCell colspan="4" class="text-center text-muted-foreground py-8">
               <div class="flex flex-col items-center gap-2">
                 <p>No projects found</p>
                 <Button variant="outline" size="sm" @click="openCreate">
@@ -131,6 +136,16 @@ onMounted(async () => {
                   Active
                 </Badge>
               </div>
+              <span class="text-xs text-muted-foreground font-mono">{{ project.ulid }}</span>
+            </TableCell>
+            <TableCell>
+              <div v-if="project.apiKey" class="flex flex-col">
+                <code class="text-xs font-mono">{{ maskedKey(project.apiKey) }}</code>
+                <span class="text-xs text-muted-foreground">
+                  {{ project.apiKey.lastUsedAt ? `Last used ${formatDate(project.apiKey.lastUsedAt)}` : 'Never used' }}
+                </span>
+              </div>
+              <span v-else class="text-xs text-muted-foreground">Not generated</span>
             </TableCell>
             <TableCell>{{ formatDate(project.createdAt) }}</TableCell>
             <TableCell class="text-right">
@@ -156,6 +171,7 @@ onMounted(async () => {
                     <Copy :size="16" class="mr-2" />
                     Copy ID
                   </DropdownMenuItem>
+                  <ProjectApiKeyButton :project="project" />
                   <DeleteProjectButton v-if="projects.length > 1" :project="project" />
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -14,6 +14,7 @@ use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\BandwidthController;
 use App\Http\Controllers\MeController;
 use App\Http\Controllers\MyCustomUppyController;
+use App\Http\Controllers\ProjectApiKeyController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\StreamController;
 use App\Http\Controllers\TemplateController;
@@ -25,32 +26,38 @@ use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware('auth:sanctum')->group(function () {
-    // Me & Profile
-    Route::get('me', MeController::class);
-    Route::put('profile', [ProfileController::class, 'update']);
-    Route::put('profile/password', [ProfileController::class, 'updatePassword']);
+Route::middleware(['auth:sanctum', 'resolve.project'])->group(function () {
+    // Account-wide: these span every project (or the whole instance), so a project API key has no
+    // business here — usage and analytics are keyed by user in ClickHouse, not by project.
+    Route::middleware('no-project-key')->group(function () {
+        Route::get('me', MeController::class);
+        Route::put('profile', [ProfileController::class, 'update']);
+        Route::put('profile/password', [ProfileController::class, 'updatePassword']);
 
-    // Projects
-    Route::apiResource('projects', ProjectController::class);
+        Route::post('projects/{project}/api-key', ProjectApiKeyController::class);
+        Route::apiResource('projects', ProjectController::class);
 
-    // API Tokens
-    Route::get('tokens', [ApiTokenController::class, 'index']);
-    Route::post('tokens', [ApiTokenController::class, 'store']);
-    Route::delete('tokens/{id}', [ApiTokenController::class, 'destroy']);
+        Route::get('tokens', [ApiTokenController::class, 'index']);
+        Route::post('tokens', [ApiTokenController::class, 'store']);
+        Route::delete('tokens/{id}', [ApiTokenController::class, 'destroy']);
+
+        Route::get('usage', [UsageController::class, 'index']);
+        Route::get('analytics', [AnalyticsController::class, 'index']);
+        Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
+    });
 
     // Templates
     Route::get('templates-config', [TemplateController::class, 'getConfig']);
     Route::get('template-presets', [TemplateController::class, 'presets']);
-    Route::post('template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset'])->middleware('resolve.project');
-    Route::get('templates', [TemplateController::class, 'index'])->middleware('resolve.project');
-    Route::post('templates', [TemplateController::class, 'store'])->middleware('resolve.project');
+    Route::post('template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset']);
+    Route::get('templates', [TemplateController::class, 'index']);
+    Route::post('templates', [TemplateController::class, 'store']);
     Route::get('templates/{template}', [TemplateController::class, 'show']);
     Route::match(['put', 'patch'], 'templates/{template}', [TemplateController::class, 'update']);
     Route::delete('templates/{template}', [TemplateController::class, 'destroy']);
 
     // Videos
-    Route::get('videos', [VideoController::class, 'index'])->middleware('resolve.project');
+    Route::get('videos', [VideoController::class, 'index']);
     Route::get('videos/{video}', [VideoController::class, 'show']);
     Route::match(['put', 'patch'], 'videos/{video}', [VideoController::class, 'update']);
     Route::delete('videos/{video}', [VideoController::class, 'destroy']);
@@ -58,11 +65,8 @@ Route::middleware('auth:sanctum')->group(function () {
     // Streams
     Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
 
-    // Usage / Analytics / Activity Log
-    Route::get('usage', [UsageController::class, 'index'])->middleware('resolve.project');
-    Route::get('analytics', [AnalyticsController::class, 'index'])->middleware('resolve.project');
-    Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
-    Route::get('activity-log', [ActivityLogController::class, 'index'])->middleware('resolve.project');
+    // Activity log (scoped to the project's videos)
+    Route::get('activity-log', [ActivityLogController::class, 'index']);
 
     // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
     Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
@@ -73,7 +77,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('s3/multipart/{uploadId}/{partNumber}', [MyCustomUppyController::class, 'signPartUpload']);
 
     // Admin
-    Route::middleware(EnsureAdmin::class)->group(function () {
+    Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
         Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
 
         Route::apiResource('nodes', NodeController::class);
@@ -105,8 +109,9 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
 Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
     ->middleware(VerifyInternalSecret::class);
 
-// VOD
-Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])->middleware('auth:sanctum');
+// VOD — playback link, scoped to the caller's project like every other resource route.
+Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])
+    ->middleware(['auth:sanctum', 'resolve.project']);
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg')
