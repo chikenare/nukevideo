@@ -20,15 +20,17 @@ class TemplateController extends Controller
 
     public function show(Request $request, string $ulid)
     {
-        $template = $request->user()->templates()->where('ulid', $ulid)->firstOrFail();
+        $template = $request->project()->templates()->where('ulid', $ulid)->firstOrFail();
 
         return response()->json(['data' => TemplateData::fromModel($template)]);
     }
 
     public function store(Request $request, StoreTemplateData $data)
     {
-        $template = $request->project()->templates()->create(
-            $data->toDatabase() + ['user_id' => $request->user()->id]
+        $project = $request->project();
+
+        $template = $project->templates()->create(
+            $data->toDatabase() + ['user_id' => $project->user_id]
         );
 
         return response()->json(['data' => TemplateData::fromModel($template)]);
@@ -36,7 +38,7 @@ class TemplateController extends Controller
 
     public function update(Request $request, UpdateTemplateData $data, string $ulid)
     {
-        $template = $request->user()->templates()->findOrFailByUlid($ulid);
+        $template = $request->project()->templates()->findOrFailByUlid($ulid);
 
         $template->update($data->toDatabase());
 
@@ -48,7 +50,7 @@ class TemplateController extends Controller
 
     public function destroy(Request $request, string $ulid)
     {
-        $template = $request->user()->templates()->where('ulid', $ulid)->firstOrFail();
+        $template = $request->project()->templates()->where('ulid', $ulid)->firstOrFail();
 
         $template->delete();
 
@@ -80,10 +82,12 @@ class TemplateController extends Controller
 
         $preset = $presets[$slug];
 
-        $template = $request->project()->templates()->create([
+        $project = $request->project();
+
+        $template = $project->templates()->create([
             'name' => $preset['name'],
             'query' => $preset['query'],
-            'user_id' => $request->user()->id,
+            'user_id' => $project->user_id,
         ]);
 
         return response()->json(['data' => TemplateData::fromModel($template)]);

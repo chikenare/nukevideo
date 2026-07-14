@@ -43,7 +43,7 @@ class VideoController extends Controller
 
     public function show(Request $request, string $ulid)
     {
-        $video = $request->user()->videos()
+        $video = $request->project()->videos()
             ->with(['outputs.streams', 'streams'])
             ->where('ulid', $ulid)->firstOrFail();
 
@@ -52,7 +52,7 @@ class VideoController extends Controller
 
     public function update(Request $request, UpdateVideoData $data, string $ulid)
     {
-        $video = $this->videoService->update($ulid, $data->toDatabase(), $request->user());
+        $video = $this->videoService->update($ulid, $data->toDatabase(), $request->project());
 
         return response()->json([
             'message' => 'Video updated successfully',
@@ -62,7 +62,7 @@ class VideoController extends Controller
 
     public function destroy(Request $request, string $ulid)
     {
-        $this->videoService->destroy($ulid, $request->user());
+        $this->videoService->destroy($ulid, $request->project());
 
         return response()->json([
             'message' => 'Video deleted successfully',

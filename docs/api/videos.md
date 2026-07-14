@@ -98,9 +98,16 @@ PUT /api/videos/{ulid}
 ```json
 {
   "name": "Updated Video Name",
-  "template_id": 2
+  "externalUserId": "user-123",
+  "externalResourceId": "post-456"
 }
 ```
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | string | Required. |
+| `externalUserId` | string\|null | Optional. Send `null` to clear it. |
+| `externalResourceId` | string\|null | Optional. Send `null` to clear it. |
 
 ## Delete Video
 

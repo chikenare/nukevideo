@@ -11,6 +11,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (! Schema::hasColumn('nodes', 'cdn_mode')) {
+            return;
+        }
+
         Schema::table('nodes', function (Blueprint $table) {
             $table->dropColumn('cdn_mode');
         });

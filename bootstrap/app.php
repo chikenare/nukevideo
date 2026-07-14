@@ -18,6 +18,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(at: '*');
         $middleware->alias([
             'resolve.project' => \App\Http\Middleware\ResolveProject::class,
+            'no-project-key' => \App\Http\Middleware\DenyProjectKey::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
