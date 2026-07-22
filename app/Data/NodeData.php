@@ -11,6 +11,7 @@ class NodeData extends Data
 {
     public function __construct(
         public int $id,
+        public string $uuid,
         public string $name,
         public ?string $user,
         public string $ipAddress,
@@ -32,6 +33,7 @@ class NodeData extends Data
     {
         return new self(
             id: $node->id,
+            uuid: $node->uuid,
             name: $node->name,
             user: $node->user,
             ipAddress: $node->ip_address,

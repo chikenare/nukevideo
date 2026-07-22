@@ -164,7 +164,7 @@ class NodeService
 
     public static function workdir(Node $node): string
     {
-        return "/home/{$node->user}/nukevideo/node-{$node->id}";
+        return "/home/{$node->user}/nukevideo/node-{$node->uuid}";
     }
 
     public function runFullDeploy(Node $node, \Closure $onOutput): void
