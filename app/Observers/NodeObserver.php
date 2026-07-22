@@ -12,6 +12,7 @@ class NodeObserver
     {
         $node->uuid = Str::uuid()->toString();
     }
+
     public function updated(Node $node): void
     {
         if ($node->wasChanged('is_active') && ! $node->is_active) {
