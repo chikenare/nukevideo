@@ -64,7 +64,13 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 FROM php-base AS api-dev
 
 # media-types: /etc/mime.types drives s5cmd Content-Type guessing — VOD edge secure_token needs exact manifest types
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client media-types mkvtoolnix && rm -rf /var/lib/apt/lists/*
+# Intel QSV runtime for GPU nodes (harmless elsewhere): libvpl dispatcher -> libmfx-gen -> iHD
+# VA-API driver; the iHD encode entrypoints only ship in the non-free build.
+RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/*.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      openssh-client media-types mkvtoolnix \
+      intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2 && \
+    rm -rf /var/lib/apt/lists/*
 RUN install-php-extensions redis intl
 
 USER www-data
@@ -124,7 +130,13 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
     docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
 
 # media-types: /etc/mime.types drives s5cmd Content-Type guessing — VOD edge secure_token needs exact manifest types
-RUN apt-get update && apt-get install -y --no-install-recommends openssh-client media-types mkvtoolnix && rm -rf /var/lib/apt/lists/*
+# Intel QSV runtime for GPU nodes (harmless elsewhere): libvpl dispatcher -> libmfx-gen -> iHD
+# VA-API driver; the iHD encode entrypoints only ship in the non-free build.
+RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/*.sources && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      openssh-client media-types mkvtoolnix \
+      intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2 && \
+    rm -rf /var/lib/apt/lists/*
 RUN install-php-extensions redis intl
 
 WORKDIR /var/www/html

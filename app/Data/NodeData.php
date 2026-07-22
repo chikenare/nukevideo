@@ -2,6 +2,7 @@
 
 namespace App\Data;
 
+use App\Enums\NodeAccel;
 use App\Enums\NodeType;
 use App\Models\Node;
 use Spatie\LaravelData\Data;
@@ -14,6 +15,7 @@ class NodeData extends Data
         public ?string $user,
         public string $ipAddress,
         public NodeType $type,
+        public ?NodeAccel $accel,
         public ?string $hostname,
         public bool $isActive,
         public bool $isStorageServer,
@@ -34,6 +36,7 @@ class NodeData extends Data
             user: $node->user,
             ipAddress: $node->ip_address,
             type: $node->type,
+            accel: $node->accel,
             hostname: $node->hostname,
             isActive: $node->is_active,
             isStorageServer: (bool) $node->is_storage_server,

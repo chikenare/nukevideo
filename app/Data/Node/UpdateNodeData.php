@@ -24,6 +24,7 @@ class UpdateNodeData extends RequestData
         public bool|Optional $isStorageServer,
         #[MapInputName(CamelCaseMapper::class)]
         public string|Optional|null $storageEndpoint,
+        public string|Optional|null $accel,
         public string|Optional|null $env,
     ) {}
 
@@ -48,6 +49,7 @@ class UpdateNodeData extends RequestData
                 },
             ],
             'storageEndpoint' => 'nullable|url',
+            'accel' => 'nullable|string|in:intel,nvidia',
             'env' => 'nullable|string|max:10000',
         ];
     }

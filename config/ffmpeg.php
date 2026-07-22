@@ -30,6 +30,64 @@ return [
             'protocols' => ['hls', 'dash'],
         ],
 
+        // ========== GPU VIDEO CODECS ==========
+        // `accel` routes the rendition's chunk jobs to nodes with that hardware
+        // (absent/null = CPU, any worker). See ChunkTranscodeService::accelForCodec().
+        [
+            'codec' => 'h264_qsv',
+            'type' => 'video',
+            'label' => 'H.264 (Intel QSV)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'intel',
+        ],
+        [
+            'codec' => 'hevc_qsv',
+            'type' => 'video',
+            'label' => 'H.265 (Intel QSV)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'intel',
+        ],
+        [
+            'codec' => 'av1_qsv',
+            'type' => 'video',
+            'label' => 'AV1 (Intel QSV)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'intel',
+        ],
+        [
+            'codec' => 'h264_nvenc',
+            'type' => 'video',
+            'label' => 'H.264 (NVIDIA NVENC)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'nvidia',
+        ],
+        [
+            'codec' => 'hevc_nvenc',
+            'type' => 'video',
+            'label' => 'H.265 (NVIDIA NVENC)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'nvidia',
+        ],
+        [
+            'codec' => 'av1_nvenc',
+            'type' => 'video',
+            'label' => 'AV1 (NVIDIA NVENC)',
+
+            'format' => 'mp4',
+            'protocols' => ['hls', 'dash'],
+            'accel' => 'nvidia',
+        ],
+
         // ========== AUDIO CODECS ==========
         [
             'codec' => 'aac',
@@ -39,7 +97,7 @@ return [
             'format' => 'mp4',
             // nginx-vod-module: AAC is packaged for both HLS and DASH.
             'protocols' => ['hls', 'dash'],
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         [
             'codec' => 'libfdk_aac',
@@ -49,7 +107,7 @@ return [
             'format' => 'mp4',
             // nginx-vod-module: AAC is packaged for both HLS and DASH.
             'protocols' => ['hls', 'dash'],
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         [
             'codec' => 'libopus',
@@ -62,7 +120,7 @@ return [
             'format' => 'mp4',
             // nginx-vod-module only supports Opus in DASH, not HLS.
             'protocols' => ['dash'],
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
     ],
 
@@ -79,7 +137,7 @@ return [
             'max' => 3840,
             'rules' => ['required', 'integer', 'min:128', 'max:3840'],
             'template' => null,
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
 
         'height' => [
@@ -90,7 +148,7 @@ return [
             'max' => 2160,
             'rules' => ['required', 'integer', 'min:128', 'max:2160'],
             'template' => null,
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
 
         // --- H.264 specific ---
@@ -151,7 +209,7 @@ return [
             'help' => 'Useful for streaming (VBV). Prevents data spikes that cause buffering.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-maxrate %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'bufsize' => [
             'type' => 'video',
@@ -161,7 +219,7 @@ return [
             'help' => 'Used together with Maxrate to control the bitrate.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-bufsize %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'pixel_format' => [
             'type' => 'video',
@@ -171,6 +229,7 @@ return [
             'help' => 'yuv420p is compatible with all browsers and devices. 10le for HDR/10-bit.',
             'rules' => ['in:yuv420p,yuv420p10le,yuv422p,yuv444p'],
             'template' => '-pix_fmt %s',
+            // CPU only: GPU encoders take nv12/p010 and ffmpeg auto-inserts the conversion.
             'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
         'constant_bitrate' => [
@@ -181,7 +240,7 @@ return [
             'help' => 'Target bitrate. Use 0 for CRF-only mode (VP9/VP8).',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-b:v %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'gop_size' => [
             'type' => 'video',
@@ -190,7 +249,7 @@ return [
             'help' => 'Distance between keyframes. For streaming use 2x framerate (e.g. 60 for 30fps).',
             'rules' => ['nullable', 'integer', 'min:1'],
             'template' => '-g %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
 
         // `template` is null: consumed by PerTitleCrfService before fan-out, never rendered
@@ -204,6 +263,7 @@ return [
             'help' => 'Per-title mode: short samples of the source are test-encoded and the CRF is adjusted per video to hit this score. Empty = use the CRF as-is.',
             'rules' => ['nullable', 'integer', 'min:70', 'max:99'],
             'template' => null,
+            // CPU only: CRF interpolation has no equivalent on the ICQ/CQ scales of the GPU encoders.
             'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
@@ -313,6 +373,54 @@ return [
             'template' => null,
             'svtav1_param' => 'enable-variance-boost',
             'available_for' => ['libsvtav1'],
+        ],
+
+        // --- Intel QSV specific ---
+        // Quality knob: ICQ mode when no Target Bitrate is set (QVBR when Maxrate is also set).
+        'qsv_global_quality' => [
+            'type' => 'video',
+            'input_type' => 'integer',
+            'label' => 'Quality (ICQ)',
+            'min' => 1,
+            'max' => 51,
+            'help' => 'Lower is better quality. 20-28 is a good range. Leave Target Bitrate empty to use quality mode.',
+            'rules' => ['integer', 'min:1', 'max:51'],
+            'template' => '-global_quality %s',
+            'available_for' => ['h264_qsv', 'hevc_qsv', 'av1_qsv'],
+        ],
+        'qsv_preset' => [
+            'type' => 'video',
+            'input_type' => 'select',
+            'label' => 'Preset',
+            'options' => ['veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'],
+            'rules' => ['in:veryfast,faster,fast,medium,slow,slower,veryslow'],
+            'template' => '-preset %s',
+            'available_for' => ['h264_qsv', 'hevc_qsv', 'av1_qsv'],
+        ],
+
+        // --- NVIDIA NVENC specific ---
+        // Quality knob: constant-quality VBR. ChunkTranscodeService forces `-b:v 0` alongside it
+        // (unless the template pins a Target Bitrate) so NVENC's default 2M bitrate never caps it.
+        'nvenc_cq' => [
+            'type' => 'video',
+            'input_type' => 'integer',
+            'label' => 'Constant Quality (CQ)',
+            'min' => 1,
+            'max' => 51,
+            'help' => 'Lower is better quality. 19-28 is a good range. Leave Target Bitrate empty to use quality mode.',
+            'rules' => ['integer', 'min:1', 'max:51'],
+            'template' => '-cq %s',
+            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+        ],
+        'nvenc_preset' => [
+            'type' => 'video',
+            'input_type' => 'select',
+            'label' => 'Preset',
+            'options' => ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7'],
+            'help' => 'p1 = fastest, p7 = slowest/best quality.',
+            'rules' => ['in:p1,p2,p3,p4,p5,p6,p7'],
+            'template' => '-preset %s',
+            'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
 
         // ==========================================

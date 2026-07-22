@@ -40,6 +40,7 @@ const newNode = ref({
   ipAddress: '',
   hostname: '',
   type: 'worker' as 'worker' | 'proxy',
+  accel: 'none' as 'none' | 'intel' | 'nvidia',
   sshKeyId: undefined as number | undefined,
   isStorageServer: false,
   storageEndpoint: '',
@@ -59,12 +60,13 @@ const handleCreate = async () => {
       user: newNode.value.user,
       ipAddress: newNode.value.ipAddress,
       type: newNode.value.type,
+      accel: newNode.value.type === 'worker' && newNode.value.accel !== 'none' ? newNode.value.accel : null,
       hostname: newNode.value.type === 'proxy' && newNode.value.hostname ? newNode.value.hostname : null,
       sshKeyId: newNode.value.sshKeyId ?? null,
       storageEndpoint: newNode.value.type === 'worker' && newNode.value.isStorageServer && newNode.value.storageEndpoint ? newNode.value.storageEndpoint : null,
       ...(newNode.value.type === 'worker' && newNode.value.isStorageServer ? { isStorageServer: true } : {}),
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', sshKeyId: undefined, isStorageServer: false, storageEndpoint: '' }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none', sshKeyId: undefined, isStorageServer: false, storageEndpoint: '' }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -112,6 +114,21 @@ const handleCreate = async () => {
               <SelectItem value="proxy">Proxy</SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div v-if="newNode.type === 'worker'" class="grid gap-2">
+          <Label for="node_accel">GPU Acceleration</Label>
+          <Select v-model="newNode.accel">
+            <SelectTrigger>
+              <SelectValue placeholder="None (CPU only)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None (CPU only)</SelectItem>
+              <SelectItem value="intel">Intel (Quick Sync)</SelectItem>
+              <SelectItem value="nvidia">NVIDIA (NVENC)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">Renditions using a GPU codec are routed to nodes with matching hardware.</p>
+          <p v-if="errors.accel" class="text-sm text-destructive">{{ errors.accel[0] }}</p>
         </div>
         <div class="grid gap-2">
           <Label for="node_ssh_key">SSH Key</Label>

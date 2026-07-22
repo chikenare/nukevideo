@@ -8,9 +8,9 @@ trait DetectsStreamCopy
      * ffprobe codec_name → ffmpeg encoder names
      */
     private const CODEC_ENCODER_MAP = [
-        'h264' => ['libx264'],
-        'hevc' => ['libx265'],
-        'av1' => ['libsvtav1'],
+        'h264' => ['libx264', 'h264_qsv', 'h264_nvenc'],
+        'hevc' => ['libx265', 'hevc_qsv', 'hevc_nvenc'],
+        'av1' => ['libsvtav1', 'av1_qsv', 'av1_nvenc'],
         'aac' => ['aac', 'libfdk_aac'],
         'opus' => ['libopus'],
     ];

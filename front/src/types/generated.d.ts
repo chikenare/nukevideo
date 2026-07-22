@@ -38,6 +38,7 @@ name: string,
 user: string | null,
 ipAddress: string,
 type: App.Enums.NodeType,
+accel: App.Enums.NodeAccel | null,
 hostname: string | null,
 isActive: boolean,
 isStorageServer: boolean,
@@ -227,6 +228,7 @@ export type StoreNodeData = {
 name: string,
 ipAddress: string,
 type: string,
+accel: string | null,
 user?: string,
 isStorageServer?: boolean,
 hostname: string | null,
@@ -242,6 +244,7 @@ isActive?: boolean,
 sshKeyId?: number | null,
 isStorageServer?: boolean,
 storageEndpoint?: string | null,
+accel?: string | null,
 env?: string | null,
 };
 }
@@ -310,6 +313,7 @@ externalResourceId?: string | null,
 }
 namespace Enums {
 export type CdnDriver = "self_hosted" | "bunny";
+export type NodeAccel = "intel" | "nvidia";
 export type NodeType = "worker" | "proxy";
 export type VideoStatus = "pending" | "failed" | "running" | "completed" | "uploading" | "downloading";
 }

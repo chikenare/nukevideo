@@ -10,6 +10,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
@@ -22,11 +29,12 @@ const dialogOpen = ref(false)
 const loading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
-const node = ref<Node & { user: string; storageEndpoint: string }>({} as Node & { user: string; storageEndpoint: string })
+type EditableNode = Omit<Node, 'accel'> & { user: string; storageEndpoint: string; accel: string }
+const node = ref<EditableNode>({} as EditableNode)
 
 const show = (initialNode: Node) => {
   const raw: Node = JSON.parse(JSON.stringify(initialNode))
-  node.value = { ...raw, user: raw.user ?? '', storageEndpoint: raw.storageEndpoint ?? '' }
+  node.value = { ...raw, user: raw.user ?? '', storageEndpoint: raw.storageEndpoint ?? '', accel: raw.accel ?? 'none' }
   errors.value = {}
   dialogOpen.value = true
 }
@@ -36,7 +44,10 @@ const handleUpdate = async () => {
   loading.value = true
 
   try {
-    const updated = await NodeService.updateNode(node.value.id, node.value)
+    const updated = await NodeService.updateNode(node.value.id, {
+      ...node.value,
+      accel: node.value.accel === 'none' ? null : node.value.accel,
+    })
     dialogOpen.value = false
     emit('updated', updated)
   } catch (error) {
@@ -77,6 +88,21 @@ defineExpose({ show })
         <div class="flex items-center justify-between">
           <Label for="edit_node_active">Active</Label>
           <Switch id="edit_node_active" v-model="node.isActive" @update:checked="node.isActive = $event" />
+        </div>
+        <div v-if="node.type === 'worker'" class="grid gap-2">
+          <Label for="edit_node_accel">GPU Acceleration</Label>
+          <Select v-model="node.accel">
+            <SelectTrigger>
+              <SelectValue placeholder="None (CPU only)" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None (CPU only)</SelectItem>
+              <SelectItem value="intel">Intel (Quick Sync)</SelectItem>
+              <SelectItem value="nvidia">NVIDIA (NVENC)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">Renditions using a GPU codec are routed to nodes with matching hardware. Redeploy after changing.</p>
+          <p v-if="errors.accel" class="text-sm text-destructive">{{ errors.accel[0] }}</p>
         </div>
         <div v-if="node.type === 'worker'" class="flex items-center justify-between">
           <div>

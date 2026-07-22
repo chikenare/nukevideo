@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\ChunkTranscodeService;
 use App\Services\Concerns\BuildsArguments;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -52,6 +53,20 @@ class Template extends Model
     public function scopeFindOrFailByUlid(Builder $query, $ulid)
     {
         return $query->where('ulid', $ulid)->firstOrFail();
+    }
+
+    /** First GPU family this template needs that no active worker node provides, or null. */
+    public function missingAccel(): ?string
+    {
+        foreach ($this->query['outputs'] ?? [] as $output) {
+            $accel = ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null);
+
+            if ($accel && ! Node::worker()->active()->where('accel', $accel)->exists()) {
+                return $accel;
+            }
+        }
+
+        return null;
     }
 
     /** Preview ffmpeg commands for each output variant of this template. */

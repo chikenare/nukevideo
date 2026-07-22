@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Observers\StreamObserver;
+use App\Services\ChunkTranscodeService;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -53,6 +54,14 @@ class Stream extends Model
     public function video(): BelongsTo
     {
         return $this->belongsTo(Video::class);
+    }
+
+    /** The queue this stream's chunk jobs encode on: CPU by default, per-hardware for GPU codecs. */
+    public function encodeQueue(): string
+    {
+        $accel = ChunkTranscodeService::accelForCodec(data_get($this->input_params, 'video_codec'));
+
+        return $accel ? "video-processing-{$accel}" : 'video-processing';
     }
 
     /** This stream's `path` with the leading `{videoUlid}/` segment stripped, e.g. `video/{ulid}.mp4`.
