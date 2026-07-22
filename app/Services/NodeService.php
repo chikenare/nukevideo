@@ -325,6 +325,14 @@ class NodeService
 
     private function proxyScript(Node $node): string
     {
+        // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
+        // container crashloops on an emerg. Fail here with a message that names the fix instead.
+        $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
+
+        if ($cdn->tokenSecret === '') {
+            throw new \RuntimeException('CDN token secret is empty. Set it in CDN Settings before deploying a proxy node.');
+        }
+
         $image = $this->resolveImage('proxy');
         $name = "nukevideo_proxy_{$node->id}";
 
