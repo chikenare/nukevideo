@@ -15,7 +15,8 @@ class DispatchPendingVideosCommand extends Command
 
     protected $description = 'Dispatch pending videos into the chunk-based encoding pipeline, up to the number of available worker slots';
 
-    private const QUEUE = 'video-processing';
+    // Light orchestration queue every worker drains, so prep runs even on a GPU-only fleet.
+    private const QUEUE = 'orchestration';
 
     /** Statuses that mean a video is occupying a worker slot. */
     private const IN_FLIGHT = [

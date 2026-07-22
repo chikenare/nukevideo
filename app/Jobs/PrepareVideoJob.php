@@ -63,7 +63,9 @@ class PrepareVideoJob implements ShouldQueue
     // Above this, `avg_frame_rate` is a VFR container lying (1000/1 and friends), not a real rate.
     private const MAX_FPS = 120.0;
 
-    private const QUEUE = 'video-processing';
+    // Light orchestration queue every worker drains (thumbnail/storyboard/sidecar); the heavy
+    // chunk transcode fans out per-hardware via Stream::encodeQueue(), not this queue.
+    private const QUEUE = 'orchestration';
 
     public function __construct(
         public int $videoId,
