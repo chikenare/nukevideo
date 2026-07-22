@@ -63,13 +63,18 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 # --- API dev ---
 FROM php-base AS api-dev
 
+ARG TARGETARCH
+
 # media-types: /etc/mime.types drives s5cmd Content-Type guessing — VOD edge secure_token needs exact manifest types
-# Intel QSV runtime for GPU nodes (harmless elsewhere): libvpl dispatcher -> libmfx-gen -> iHD
-# VA-API driver; the iHD encode entrypoints only ship in the non-free build.
+# Intel QSV runtime for GPU nodes (amd64 only — no arm64 builds of the Intel stack): libvpl
+# dispatcher -> libmfx-gen -> iHD VA-API driver; the iHD encode entrypoints only ship in the non-free build.
 RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/*.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-      openssh-client media-types mkvtoolnix \
-      intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2 && \
+      openssh-client media-types mkvtoolnix && \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get install -y --no-install-recommends \
+        intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2; \
+    fi && \
     rm -rf /var/lib/apt/lists/*
 RUN install-php-extensions redis intl
 
@@ -129,13 +134,18 @@ ARG GROUP_ID=1000
 RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
     docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
 
+ARG TARGETARCH
+
 # media-types: /etc/mime.types drives s5cmd Content-Type guessing — VOD edge secure_token needs exact manifest types
-# Intel QSV runtime for GPU nodes (harmless elsewhere): libvpl dispatcher -> libmfx-gen -> iHD
-# VA-API driver; the iHD encode entrypoints only ship in the non-free build.
+# Intel QSV runtime for GPU nodes (amd64 only — no arm64 builds of the Intel stack): libvpl
+# dispatcher -> libmfx-gen -> iHD VA-API driver; the iHD encode entrypoints only ship in the non-free build.
 RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/*.sources && \
     apt-get update && apt-get install -y --no-install-recommends \
-      openssh-client media-types mkvtoolnix \
-      intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2 && \
+      openssh-client media-types mkvtoolnix && \
+    if [ "$TARGETARCH" = "amd64" ]; then \
+      apt-get install -y --no-install-recommends \
+        intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2; \
+    fi && \
     rm -rf /var/lib/apt/lists/*
 RUN install-php-extensions redis intl
 
