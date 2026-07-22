@@ -26,9 +26,10 @@ use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
 
-Route::middleware(['auth:sanctum', 'resolve.project'])->group(function () {
+Route::middleware('auth:sanctum')->group(function () {
     // Account-wide: these span every project (or the whole instance), so a project API key has no
     // business here — usage and analytics are keyed by user in ClickHouse, not by project.
+    // No resolve.project either: a stale X-Project-Ulid header must not 404 account endpoints.
     Route::middleware('no-project-key')->group(function () {
         Route::get('me', MeController::class);
         Route::put('profile', [ProfileController::class, 'update']);
@@ -46,35 +47,38 @@ Route::middleware(['auth:sanctum', 'resolve.project'])->group(function () {
         Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
     });
 
-    // Templates
-    Route::get('templates-config', [TemplateController::class, 'getConfig']);
-    Route::get('template-presets', [TemplateController::class, 'presets']);
-    Route::post('template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset']);
-    Route::get('templates', [TemplateController::class, 'index']);
-    Route::post('templates', [TemplateController::class, 'store']);
-    Route::get('templates/{template}', [TemplateController::class, 'show']);
-    Route::match(['put', 'patch'], 'templates/{template}', [TemplateController::class, 'update']);
-    Route::delete('templates/{template}', [TemplateController::class, 'destroy']);
+    // Project-scoped: everything below works on the project named by the header/API key.
+    Route::middleware('resolve.project')->group(function () {
+        // Templates
+        Route::get('templates-config', [TemplateController::class, 'getConfig']);
+        Route::get('template-presets', [TemplateController::class, 'presets']);
+        Route::post('template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset']);
+        Route::get('templates', [TemplateController::class, 'index']);
+        Route::post('templates', [TemplateController::class, 'store']);
+        Route::get('templates/{template}', [TemplateController::class, 'show']);
+        Route::match(['put', 'patch'], 'templates/{template}', [TemplateController::class, 'update']);
+        Route::delete('templates/{template}', [TemplateController::class, 'destroy']);
 
-    // Videos
-    Route::get('videos', [VideoController::class, 'index']);
-    Route::get('videos/{video}', [VideoController::class, 'show']);
-    Route::match(['put', 'patch'], 'videos/{video}', [VideoController::class, 'update']);
-    Route::delete('videos/{video}', [VideoController::class, 'destroy']);
+        // Videos
+        Route::get('videos', [VideoController::class, 'index']);
+        Route::get('videos/{video}', [VideoController::class, 'show']);
+        Route::match(['put', 'patch'], 'videos/{video}', [VideoController::class, 'update']);
+        Route::delete('videos/{video}', [VideoController::class, 'destroy']);
 
-    // Streams
-    Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
+        // Streams
+        Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
 
-    // Activity log (scoped to the project's videos)
-    Route::get('activity-log', [ActivityLogController::class, 'index']);
+        // Activity log (scoped to the project's videos)
+        Route::get('activity-log', [ActivityLogController::class, 'index']);
 
-    // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
-    Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
-    Route::post('s3/multipart', [MyCustomUppyController::class, 'createMultipartUpload']);
-    Route::get('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'getUploadedParts']);
-    Route::post('s3/multipart/{uploadId}/complete', [MyCustomUppyController::class, 'completeMultipartUpload']);
-    Route::delete('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'abortMultipartUpload']);
-    Route::get('s3/multipart/{uploadId}/{partNumber}', [MyCustomUppyController::class, 'signPartUpload']);
+        // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
+        Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
+        Route::post('s3/multipart', [MyCustomUppyController::class, 'createMultipartUpload']);
+        Route::get('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'getUploadedParts']);
+        Route::post('s3/multipart/{uploadId}/complete', [MyCustomUppyController::class, 'completeMultipartUpload']);
+        Route::delete('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'abortMultipartUpload']);
+        Route::get('s3/multipart/{uploadId}/{partNumber}', [MyCustomUppyController::class, 'signPartUpload']);
+    });
 
     // Admin
     Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
