@@ -4,12 +4,17 @@
 // array_replace_recursive, so a supervisor listed in `defaults` is provisioned even
 // when it's absent from `environments`. To truly keep a role's supervisor off a node
 // it must be excluded from BOTH. So the whole set (defaults + environments) is picked
-// by NODE_TYPE: worker nodes run the video/packaging supervisors; the main server runs
-// only the default-queue supervisor and must never pull `video-processing` (it isn't a worker
-// — no ffmpeg, no local scratch, and not wired to the chunk store).
-// Packaging gets its own supervisor so the light finalization step never starves behind the
-// CPU-bound transcode backlog. Opt-out per node with DISABLE_PACKAGING (default: every worker
-// packages) — the safe failure mode is "packages on too many nodes", not "packages on none".
+// by NODE_TYPE: worker nodes run the video/orchestration/packaging supervisors; the main
+// server runs only the default-queue supervisor and must never pull `video-processing` (it
+// isn't a worker — no ffmpeg, no local scratch, and not wired to the chunk store).
+// One hardware transcode supervisor per node: CPU nodes pull `video-processing`, GPU nodes
+// (NODE_ACCEL set) pull ONLY their `video-processing-{accel}` queue — never CPU transcode.
+// Orchestration (the light per-video prep/thumbnail/storyboard/sidecar/cleanup jobs) gets its
+// own queue that EVERY worker drains regardless of hardware, so it's never stranded when the
+// fleet has no CPU node. Packaging likewise gets its own supervisor so the light finalization
+// step never starves behind the CPU-bound transcode backlog. Opt-out per node with
+// DISABLE_PACKAGING (default: every worker packages) — the safe failure mode is "packages on
+// too many nodes", not "packages on none".
 $isWorker = env('NODE_TYPE') === 'worker';
 $runsPackaging = $isWorker && ! filter_var(env('DISABLE_PACKAGING', false), FILTER_VALIDATE_BOOL);
 
@@ -23,6 +28,22 @@ $videoWorker = [
     'memory' => 1024,
     'tries' => 2,
     'timeout' => (int) env('VIDEO_WORKER_TIMEOUT', 600),
+    'nice' => 0,
+];
+
+// Dedicated orchestration supervisor: the light per-video jobs that aren't chunk transcode
+// (source download/probe/segment, thumbnail, storyboard, sidecar, cleanup). Runs on every
+// worker so it always has a consumer, independent of which hardware queues exist in the fleet.
+$orchestrationWorker = [
+    'connection' => 'redis',
+    'queue' => ['orchestration'],
+    'balance' => 'none',
+    'maxProcesses' => 3,
+    'maxTime' => 0,
+    'maxJobs' => 0,
+    'memory' => 1024,
+    'tries' => 1, // jobs define their own $tries (PrepareVideoJob = 5)
+    'timeout' => 1800, // covers PrepareVideoJob::$timeout; must stay <= REDIS_QUEUE_RETRY_AFTER (1850)
     'nice' => 0,
 ];
 
@@ -73,15 +94,24 @@ $gpuWorker = [
     'nice' => 0,
 ];
 
-$workerDefaults = ['video-worker' => $videoWorker];
-$workerEnv = ['video-worker' => []];
+$isGpu = $isWorker && in_array($accel, ['intel', 'nvidia'], true);
+
+// Exactly one hardware transcode supervisor per node: GPU nodes pull only their accel queue,
+// CPU nodes pull `video-processing`. GPU nodes must NOT also run `video-worker` or they'd steal
+// CPU transcode chunks.
+$workerDefaults = $isGpu
+    ? ['gpu-worker' => $gpuWorker]
+    : ['video-worker' => $videoWorker];
+$workerEnv = $isGpu
+    ? ['gpu-worker' => []]
+    : ['video-worker' => []];
+
+$workerDefaults['orchestration-worker'] = $orchestrationWorker;
+$workerEnv['orchestration-worker'] = [];
+
 if ($runsPackaging) {
     $workerDefaults['packaging-worker'] = $packagingWorker;
     $workerEnv['packaging-worker'] = [];
-}
-if ($isWorker && in_array($accel, ['intel', 'nvidia'], true)) {
-    $workerDefaults['gpu-worker'] = $gpuWorker;
-    $workerEnv['gpu-worker'] = [];
 }
 
 $defaults = $isWorker

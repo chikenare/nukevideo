@@ -81,7 +81,7 @@ trait CompletesVideo
             $fresh = $video->fresh();
             $event = $fresh->status === VideoStatus::COMPLETED->value ? 'video.completed' : 'video.error';
             WebhookDispatcher::forVideo($event, $fresh);
-            CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('video-processing');
+            CleanupVideoResourcesJob::dispatch($video->ulid)->onQueue('orchestration');
         }
     }
 }
