@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\SshKeyController;
 use App\Http\Controllers\Api\UsageController;
 use App\Http\Controllers\Api\UserController;
+use App\Http\Controllers\AuthController;
 use App\Http\Controllers\BandwidthController;
 use App\Http\Controllers\MeController;
 use App\Http\Controllers\MyCustomUppyController;
@@ -25,6 +26,9 @@ use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
+
+Route::post('login', [AuthController::class, 'login']);
+Route::post('logout', [AuthController::class, 'logout']);
 
 Route::middleware('auth:sanctum')->group(function () {
     // Account-wide: these span every project (or the whole instance), so a project API key has no
