@@ -24,7 +24,13 @@ class EncodeCommandBuilder
             ? sprintf('-ss %.4f -to %.4f ', $start, $end)
             : '';
 
-        $parts = [sprintf('ffmpeg -hide_banner -y %s-i "%s"', $seek, $source)];
+        // Decode-side flags (hwaccel / thread cap) only apply to single-rendition video jobs;
+        // sidecar passes mix audio+subtitle streams and always decode in software.
+        $input = $streams->count() === 1 && $streams->first()->type === 'video'
+            ? (new ChunkTranscodeService($streams->first()))->inputArguments($windowed)
+            : '';
+
+        $parts = [sprintf('ffmpeg -hide_banner -y %s-i "%s"', $input.$seek, $source)];
 
         foreach ($streams as $stream) {
             $svc = new ChunkTranscodeService($stream);

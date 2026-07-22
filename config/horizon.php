@@ -55,11 +55,33 @@ $supervisor1 = [
     'nice' => 0,
 ];
 
+// GPU nodes (NODE_ACCEL=intel|nvidia) run one extra supervisor for their hardware queue, on top
+// of the CPU supervisors — the cores are still there. Concurrency is GPU encode sessions, not
+// cores ({@see \App\Support\Gpu}); override per node with GPU_WORKER_PROCESSES.
+$accel = env('NODE_ACCEL');
+
+$gpuWorker = [
+    'connection' => 'redis',
+    'queue' => ["video-processing-{$accel}"],
+    'balance' => 'none',
+    'maxProcesses' => \App\Support\Gpu::videoWorkerProcesses(),
+    'maxTime' => 0,
+    'maxJobs' => 0,
+    'memory' => 1024,
+    'tries' => 2,
+    'timeout' => (int) env('VIDEO_WORKER_TIMEOUT', 600),
+    'nice' => 0,
+];
+
 $workerDefaults = ['video-worker' => $videoWorker];
 $workerEnv = ['video-worker' => []];
 if ($runsPackaging) {
     $workerDefaults['packaging-worker'] = $packagingWorker;
     $workerEnv['packaging-worker'] = [];
+}
+if ($isWorker && in_array($accel, ['intel', 'nvidia'], true)) {
+    $workerDefaults['gpu-worker'] = $gpuWorker;
+    $workerEnv['gpu-worker'] = [];
 }
 
 $defaults = $isWorker

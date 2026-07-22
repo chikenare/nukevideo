@@ -473,6 +473,8 @@ class CreateVideoStreamsService
                     // DetectsStreamCopy needs both dimensions for the copy fast-path.
                     'source_width' => $stream->get('width'),
                     'source_codec' => $stream->get('codec_name'),
+                    // GPU jobs hardware-decode only when codec AND pixel format are supported.
+                    'source_pix_fmt' => $stream->get('pix_fmt'),
                     'source_bit_rate' => $this->sourceBitRate($stream),
                     'source_fps' => $this->sourceFrameRate($stream),
                 ] : []),

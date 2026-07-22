@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Data\NodeData;
 use App\Data\SelfHostedConfigData;
+use App\Enums\NodeAccel;
 use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
@@ -95,6 +96,10 @@ class NodeService
             $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT={$endpoint}";
         }
 
+        if ($node->accel) {
+            $base['NODE_ACCEL'] = "NODE_ACCEL={$node->accel->value}";
+        }
+
         foreach (self::PROPAGATED_FROM_HOST as $key) {
             $value = env($key);
             if ($value !== null && $value !== false) {
@@ -159,7 +164,7 @@ class NodeService
 
     public static function workdir(Node $node): string
     {
-        return "/home/{$node->user}/nukevideo/node-{$node->id}";
+        return "/home/{$node->user}/nukevideo/node-{$node->uuid}";
     }
 
     public function runFullDeploy(Node $node, \Closure $onOutput): void
@@ -262,11 +267,18 @@ class NodeService
             'healthcheck' => 'healthcheck-horizon',
             'cpuset' => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
             'memory' => $dockerFlags['DOCKER_MEMORY'] ?? null,
+            // $RENDER_GID is resolved by the deploy script below, on the node itself.
+            'devices' => $node->accel === NodeAccel::INTEL ? ['/dev/dri:/dev/dri'] : [],
+            'group_add' => $node->accel === NodeAccel::INTEL ? '"${RENDER_GID:-44}"' : null,
+            'gpus' => $node->accel === NodeAccel::NVIDIA,
         ]);
 
         $chunkStore = $node->is_storage_server ? $this->chunkStoreScript($node) : '';
+        $gpuSetup = $this->gpuSetupScript($node);
 
         return <<<BASH
+        {$gpuSetup}
+
         echo "=== Pulling worker image ==="
         pull_image {$image}
 
@@ -278,8 +290,49 @@ class NodeService
         BASH;
     }
 
+    /**
+     * Host-side GPU prep, ran before the worker container starts. Intel only needs the render
+     * group's GID (the container user joins it to open /dev/dri). NVIDIA needs the container
+     * toolkit so `--gpus all` works; the kernel driver itself must already be on the host.
+     */
+    private function gpuSetupScript(Node $node): string
+    {
+        return match ($node->accel) {
+            NodeAccel::INTEL => <<<'BASH'
+            echo "=== Intel GPU ==="
+            [ -e /dev/dri/renderD128 ] || { echo "No /dev/dri render node found — is the GPU driver loaded?"; exit 1; }
+            RENDER_GID=$(getent group render | cut -d: -f3)
+            echo "Render node present, render GID: ${RENDER_GID:-44 (fallback)}"
+            BASH,
+            NodeAccel::NVIDIA => <<<'BASH'
+            echo "=== NVIDIA GPU ==="
+            command -v nvidia-smi &>/dev/null || { echo "nvidia-smi not found — install the NVIDIA driver first"; exit 1; }
+            nvidia-smi --query-gpu=name --format=csv,noheader
+            if ! command -v nvidia-ctk &>/dev/null; then
+                echo "Installing NVIDIA container toolkit"
+                curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+                curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+                    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+                    | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
+                $SUDO apt-get update -qq && $SUDO apt-get install -y -qq nvidia-container-toolkit
+                $SUDO nvidia-ctk runtime configure --runtime=docker
+                $SUDO systemctl restart docker
+            fi
+            BASH,
+            default => '',
+        };
+    }
+
     private function proxyScript(Node $node): string
     {
+        // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
+        // container crashloops on an emerg. Fail here with a message that names the fix instead.
+        $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
+
+        if ($cdn->tokenSecret === '') {
+            throw new \RuntimeException('CDN token secret is empty. Set it in CDN Settings before deploying a proxy node.');
+        }
+
         $image = $this->resolveImage('proxy');
         $name = "nukevideo_proxy_{$node->id}";
 
@@ -384,6 +437,10 @@ class NodeService
             ['key' => 'disk', 'label' => 'Disk Space'],
         ];
 
+        if ($node->accel) {
+            $checks[] = ['key' => 'gpu', 'label' => 'GPU Encode'];
+        }
+
         $results = [];
 
         foreach ($checks as $check) {
@@ -393,6 +450,7 @@ class NodeService
                     'network' => $this->ssh($node, 'docker network inspect nukevideo_default --format "{{.Name}} ({{.Driver}})"', 15),
                     'containers' => $this->ssh($node, 'docker ps --filter name=nukevideo_ --format "{{.Names}}\t{{.Status}}"', 15),
                     'disk' => $this->ssh($node, 'df -h / | tail -1', 15),
+                    'gpu' => $this->ssh($node, $this->gpuProbeCommand($node), 120),
                 };
 
                 $results[] = [
@@ -412,6 +470,27 @@ class NodeService
         }
 
         return $results;
+    }
+
+    /**
+     * A real hardware encode of a synthetic second inside the worker image — proof the GPU,
+     * its driver and the container flags all line up, not just that a device file exists.
+     */
+    private function gpuProbeCommand(Node $node): string
+    {
+        $image = $this->resolveImage('api');
+        // --entrypoint ffmpeg: the probe has no DB/Redis env, so the image's entrypoint
+        // (migrations/optimize) must not run — only the encoder matters here.
+        $run = 'docker run --rm --entrypoint ffmpeg';
+        $probe = '-hide_banner -v error -f lavfi -i testsrc2=duration=1:size=640x360:rate=30';
+
+        return match ($node->accel) {
+            NodeAccel::INTEL => "{$run} --device /dev/dri --group-add \"\$(getent group render | cut -d: -f3)\" "
+                ."{$image} {$probe} -c:v h264_qsv -f null - && echo 'QSV hardware encode OK'",
+            NodeAccel::NVIDIA => "{$run} --gpus all {$image} {$probe} -c:v h264_nvenc -f null -"
+                ." && echo 'NVENC hardware encode OK'",
+            default => throw new \RuntimeException('Node has no GPU to probe.'),
+        };
     }
 
     private function resolveImage(string $type): string
@@ -452,6 +531,17 @@ class NodeService
         }
         foreach ($options['sysctls'] ?? [] as $sysctl) {
             $cmd .= ' --sysctl '.escapeshellarg($sysctl);
+        }
+
+        foreach ($options['devices'] ?? [] as $device) {
+            $cmd .= ' --device '.escapeshellarg($device);
+        }
+        if (! empty($options['gpus'])) {
+            $cmd .= ' --gpus all';
+        }
+        if (! empty($options['group_add'])) {
+            // Raw on purpose: the value may be a shell expansion resolved on the node.
+            $cmd .= " --group-add {$options['group_add']}";
         }
 
         if (! empty($options['cpuset'])) {

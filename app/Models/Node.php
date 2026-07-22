@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\NodeAccel;
 use App\Enums\NodeType;
 use App\Observers\NodeObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -17,6 +18,7 @@ class Node extends Model
         'user',
         'ip_address',
         'type',
+        'accel',
         'hostname',
         'is_active',
         'is_storage_server',
@@ -30,6 +32,7 @@ class Node extends Model
     {
         return [
             'type' => NodeType::class,
+            'accel' => NodeAccel::class,
             'is_active' => 'boolean',
             'is_storage_server' => 'boolean',
         ];

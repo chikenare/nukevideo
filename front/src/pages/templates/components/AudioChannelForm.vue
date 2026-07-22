@@ -47,7 +47,7 @@ const audioParameters = computed(() => {
       param.type === 'audio' &&
       param.availableFor.includes(localCodec.value) &&
       key !== 'channels' &&
-      key !== 'audioBitrate'
+      key !== 'audio_bitrate'
     ) {
       filtered[key] = param
     }
@@ -55,7 +55,7 @@ const audioParameters = computed(() => {
   return filtered
 })
 
-const bitrateOptions = computed(() => props.config.parameters['audioBitrate']?.options ?? [])
+const bitrateOptions = computed(() => props.config.parameters['audio_bitrate']?.options ?? [])
 const channelOptions = computed(() => props.config.parameters['channels']?.options ?? [])
 
 const channelLabel = (ch: string) => {

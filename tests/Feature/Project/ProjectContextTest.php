@@ -38,3 +38,10 @@ it('still serves account routes, which need no project', function () {
     $this->getJson('/api/me')->assertOk();
     $this->getJson('/api/projects')->assertOk();
 });
+
+it('serves account routes even with a stale project header', function () {
+    $this->withHeader('X-Project-Ulid', '01JZZZZZZZZZZZZZZZZZZZZZZZ');
+
+    $this->getJson('/api/me')->assertOk();
+    $this->getJson('/api/projects')->assertOk();
+});

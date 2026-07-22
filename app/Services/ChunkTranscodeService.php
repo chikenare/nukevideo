@@ -41,6 +41,75 @@ class ChunkTranscodeService
         return collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec)['format'] ?? 'mp4';
     }
 
+    /** Hardware a codec encodes on (config/ffmpeg.php `accel`): 'intel', 'nvidia', or null for CPU. */
+    public static function accelForCodec(?string $codec): ?string
+    {
+        return collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec)['accel'] ?? null;
+    }
+
+    /** Source codecs every supported GPU generation decodes in hardware. */
+    private const HW_DECODABLE_CODECS = ['h264', 'hevc', 'av1', 'vp9'];
+
+    /** 4:2:0 8/10-bit — what the media engines actually accept; anything else decodes in software. */
+    private const HW_DECODABLE_FORMATS = ['yuv420p', 'yuvj420p', 'nv12', 'yuv420p10le', 'p010le'];
+
+    /**
+     * Pre-`-i` flags for this stream's decode. GPU renditions hardware-decode when the source
+     * qualifies, so frames stay in VRAM end to end; when it doesn't, the software fallback caps
+     * decoder threads — N concurrent GPU jobs with unbounded decoders oversubscribe the node
+     * (the encode itself costs no CPU, so the CPU pool sizing doesn't account for them).
+     */
+    public function inputArguments(bool $windowed = false): string
+    {
+        if ($this->stream->type !== 'video') {
+            return '';
+        }
+
+        $accel = self::accelForCodec(data_get($this->stream->input_params, 'video_codec'));
+
+        if (! $accel || (! $windowed && $this->shouldCopyVideo())) {
+            return '';
+        }
+
+        if (! $this->hardwareDecodes()) {
+            $threads = $this->perEncoderThreads();
+
+            return $threads > 0 ? "-threads {$threads} " : '';
+        }
+
+        return match ($accel) {
+            'intel' => '-hwaccel qsv -hwaccel_output_format qsv ',
+            'nvidia' => '-hwaccel cuda -hwaccel_output_format cuda ',
+        };
+    }
+
+    private function hardwareDecodes(): bool
+    {
+        $meta = $this->stream->meta ?? [];
+
+        return in_array($meta['source_codec'] ?? '', self::HW_DECODABLE_CODECS, true)
+            && in_array($meta['source_pix_fmt'] ?? '', self::HW_DECODABLE_FORMATS, true);
+    }
+
+    /**
+     * Scale on the GPU so hardware-decoded frames never round-trip to system memory.
+     * 10-bit sources decode to p010; H.264 encodes 8-bit only, the other codecs keep the depth.
+     */
+    private function gpuScaleFilter(string $accel, int $width, int $height, string $codec): ?string
+    {
+        if ($width <= 0 || $height <= 0) {
+            return null;
+        }
+
+        $tenBit = in_array($this->stream->meta['source_pix_fmt'] ?? '', ['yuv420p10le', 'p010le'], true);
+        $format = $tenBit && ! str_starts_with($codec, 'h264') ? 'p010le' : 'nv12';
+
+        return match ($accel) {
+            'intel' => "-vf vpp_qsv=w={$width}:h={$height}:format={$format}",
+            'nvidia' => "-vf scale_cuda={$width}:{$height}:format={$format}",
+        };
+    }
+
     public function buildVideoArguments(bool $windowed = false): string
     {
         // Copy fast-path: remux when the source already matches the target codec/size at or under
@@ -64,7 +133,12 @@ class ChunkTranscodeService
             $args[] = '-c:v '.$this->assertSafeArgValue($params['video_codec']);
         }
 
-        $scale = $this->buildScaleFilter((int) $this->stream->width, (int) $this->stream->height);
+        $accel = self::accelForCodec($params['video_codec'] ?? null);
+
+        $scale = $accel && $this->hardwareDecodes()
+            ? $this->gpuScaleFilter($accel, (int) $this->stream->width, (int) $this->stream->height, $params['video_codec'])
+            : $this->buildScaleFilter((int) $this->stream->width, (int) $this->stream->height);
+
         if ($scale) {
             $args[] = $scale;
         }
@@ -79,6 +153,11 @@ class ChunkTranscodeService
         $args[] = match ($params['video_codec'] ?? null) {
             'libx265' => '-x265-params scenecut=0:open-gop=0'.($threads > 0 ? ":pools={$threads}" : ''),
             'libsvtav1' => $this->svtAv1Params($params, $threads),
+            // GPU encoders: no thread flags (the hardware owns its own scheduling), just pin
+            // I-frames to the -g grid. They take system-memory frames directly, so the software
+            // decode + scale path stays identical to the CPU codecs.
+            'h264_qsv', 'hevc_qsv', 'av1_qsv' => '-adaptive_i 0 -adaptive_b 0',
+            'h264_nvenc', 'hevc_nvenc', 'av1_nvenc' => '-no-scenecut 1 -forced-idr 1'.$this->nvencBitrateReset($params),
             default => '-sc_threshold 0 -x264-params open-gop=0'.($threads > 0 ? " -threads {$threads}" : ''), // libx264
         };
         $args[] = '-map '.$this->mapTarget();
@@ -140,10 +219,16 @@ class ChunkTranscodeService
     private static function codecRank(?string $codec): int
     {
         return match ($codec) {
-            'libsvtav1', 'av1' => 3,
-            'libx265', 'hevc', 'vp9' => 2,
+            'libsvtav1', 'av1', 'av1_qsv', 'av1_nvenc' => 3,
+            'libx265', 'hevc', 'vp9', 'hevc_qsv', 'hevc_nvenc' => 2,
             default => 1, // h264 family and anything older/unknown
         };
+    }
+
+    /** NVENC's CQ mode only bites with `-b:v 0` — its default 2M bitrate target caps it otherwise. */
+    private function nvencBitrateReset(array $params): string
+    {
+        return ! empty($params['nvenc_cq']) && empty($params['constant_bitrate']) ? ' -b:v 0' : '';
     }
 
     /**

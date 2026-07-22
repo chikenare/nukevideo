@@ -15,6 +15,7 @@ class StoreNodeData extends RequestData
         #[MapInputName(CamelCaseMapper::class)]
         public string $ipAddress,
         public string $type,
+        public ?string $accel,
         public string|Optional $user,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isStorageServer,
@@ -33,6 +34,7 @@ class StoreNodeData extends RequestData
             'user' => 'string|max:32',
             'ipAddress' => 'required|ip',
             'type' => 'required|string|in:worker,proxy',
+            'accel' => 'nullable|string|in:intel,nvidia',
             'sshKeyId' => 'nullable|exists:ssh_keys,id',
             'isStorageServer' => [
                 'sometimes', 'boolean',

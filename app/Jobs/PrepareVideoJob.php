@@ -88,9 +88,10 @@ class PrepareVideoJob implements ShouldQueue
             return;
         }
 
-        // Redelivery guard: if the encode batch already exists, fan-out ran. Best-effort —
+        // Redelivery guard: if an encode batch already exists, fan-out ran. Best-effort —
         // a double fan-out is idempotent (re-encode/uploads/concats all skip), just wasteful.
-        if (DB::table('job_batches')->where('name', "encode video {$video->id}")->exists()) {
+        // Names are "encode video {id} {queue}"; the trailing space keeps id 12 from matching 123.
+        if (DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->exists()) {
             Log::info('Segments already planned; skipping redelivery', ['video' => $this->videoId]);
 
             return;
@@ -122,6 +123,8 @@ class PrepareVideoJob implements ShouldQueue
         $localPath = Storage::disk('local')->path($mirrorPath);
 
         try {
+            $this->assertAccelCapacity($video);
+
             $this->ensureLocalSource($video, $mirrorPath, $localPath);
 
             $sourceUrl = self::sourceUrl($mirrorPath);
@@ -312,9 +315,22 @@ class PrepareVideoJob implements ShouldQueue
     }
 
     /**
-     * One flat batch with one {@see ProcessChunkJob} per (window × rendition); each job encodes
-     * AND uploads its own chunk, so no job depends on another job's local disk and any worker
-     * node can pick up any job. The batch's then() fires packaging once every chunk is staged.
+     * Second line of defense (ingest already refused templates without GPU capacity): a node
+     * deactivated since then would leave the chunks on a queue nobody consumes and the video
+     * hanging in RUNNING until the reaper — fail before fan-out with a message naming the gap.
+     */
+    private function assertAccelCapacity(Video $video): void
+    {
+        if ($accel = $video->template->missingAccel()) {
+            throw new RuntimeException("Template needs a {$accel} GPU worker node, but none is active.");
+        }
+    }
+
+    /**
+     * One flat batch per hardware queue with one {@see ProcessChunkJob} per (window × rendition);
+     * each job encodes AND uploads its own chunk, so no job depends on another job's local disk
+     * and any node on that queue can pick up any of its jobs. The last batch to finish flips the
+     * video to UPLOADING and fires packaging once every chunk is staged.
      *
      * @param  list<array{0:float,1:float}>  $windows
      */
@@ -326,7 +342,6 @@ class PrepareVideoJob implements ShouldQueue
             throw new RuntimeException("No video rendition streams found for video {$this->videoId}");
         }
 
-        $queue = self::QUEUE;
         $chunkCount = count($windows);
 
         // Authoritative window count: the packager asserts each rendition concatenated exactly this
@@ -342,33 +357,47 @@ class PrepareVideoJob implements ShouldQueue
             $output->seedChunkProgress($chunkCount, $videoStreamIds);
         }
 
-        $jobs = [];
+        // One batch per hardware queue: the framework bulk-pushes batched jobs onto the BATCH's
+        // queue (a job's own queue is ignored), so a mixed CPU+GPU template needs parallel batches.
+        $jobsByQueue = [];
 
         foreach ($windows as $index => [$start, $end]) {
             foreach ($streams as $stream) {
-                $jobs[] = new ProcessChunkJob($stream->id, $mirrorPath, $index, $start, $end);
+                $jobsByQueue[$stream->encodeQueue()][] = new ProcessChunkJob($stream->id, $mirrorPath, $index, $start, $end);
             }
         }
 
         // Only primitives in the closure — Eloquent models are not serializable there.
         $videoId = $video->id;
 
-        Bus::batch($jobs)
-            ->onQueue($queue)
-            ->name("encode video {$video->id}")
-            ->then(function () use ($videoId) {
-                // All chunk windows encoded: mark the encode done and let the readiness check fire
-                // packaging once the sidecar tracks are staged too.
-                $video = Video::find($videoId);
+        foreach ($jobsByQueue as $queue => $jobs) {
+            Bus::batch($jobs)
+                ->onQueue($queue)
+                ->name("encode video {$video->id} {$queue}")
+                ->then(function () use ($videoId) {
+                    // Every batch fires this, but only the last finisher passes the gate: the
+                    // framework marks a batch finished BEFORE running then(), so whoever sees
+                    // no unfinished sibling knows every chunk window is encoded.
+                    $stillEncoding = DB::table('job_batches')
+                        ->where('name', 'like', "encode video {$videoId} %")
+                        ->whereNull('finished_at')
+                        ->exists();
 
-                if (! $video || ! in_array($video->status, Video::ACTIVE_STATUSES, true)) {
-                    return;
-                }
+                    if ($stillEncoding) {
+                        return;
+                    }
 
-                $video->update(['status' => VideoStatus::UPLOADING->value]);
-                PackageVideoJob::dispatchIfReady($video);
-            })
-            ->dispatch();
+                    $video = Video::find($videoId);
+
+                    if (! $video || ! in_array($video->status, Video::ACTIVE_STATUSES, true)) {
+                        return;
+                    }
+
+                    $video->update(['status' => VideoStatus::UPLOADING->value]);
+                    PackageVideoJob::dispatchIfReady($video);
+                })
+                ->dispatch();
+        }
     }
 
     public function failed(Throwable $e): void
