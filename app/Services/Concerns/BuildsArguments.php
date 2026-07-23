@@ -48,13 +48,20 @@ trait BuildsArguments
 
     private function buildParamsArguments(array $params, string $type): array
     {
-        $parametersConfig = config('ffmpeg.parameters', []);
-        $available = collect($parametersConfig)
-            ->filter(fn ($config) => isset($config['type']) && $config['type'] === $type)
+        $codecKey = $type === 'video' ? 'video_codec' : 'audio_codec';
+        $codec = $params[$codecKey] ?? null;
+
+        // Filtered by codec, not just by type: a template can carry params belonging to another
+        // codec (the API accepts them — validation only checks the keys it knows about), and
+        // rendering those emits foreign or duplicate flags: `-crf` twice on QSV, nvenc's `-cq`,
+        // `-preset` from qsv_preset silently overriding libx264's. Anything the target codec
+        // doesn't declare in `available_for` is dropped here.
+        $available = collect(config('ffmpeg.parameters', []))
+            ->filter(fn ($config) => ($config['type'] ?? null) === $type
+                && in_array($codec, $config['available_for'] ?? [], true))
             ->toArray();
 
         $args = [];
-        $codecKey = $type === 'video' ? 'video_codec' : 'audio_codec';
         $skip = $type === 'video' ? [$codecKey, 'width', 'height'] : [$codecKey];
 
         foreach ($params as $key => $value) {

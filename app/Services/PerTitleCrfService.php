@@ -286,6 +286,12 @@ class PerTitleCrfService
             return false;
         }
 
+        // Codec gate, not just a panel gate: templates saved before a codec was dropped from
+        // `target_vmaf` still carry the field, and validation never strips it.
+        if (! in_array($params['video_codec'] ?? null, config('ffmpeg.parameters.target_vmaf.available_for', []), true)) {
+            return false;
+        }
+
         // ABR mode picks bitrate explicitly; per-title only steers CRF. No copy-detection guard:
         // video chunks are always window-cut, so the copy fast-path never applies to them.
         if (! empty($params['constant_bitrate'])) {
