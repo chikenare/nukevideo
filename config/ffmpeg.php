@@ -209,8 +209,9 @@ return [
             'help' => 'Useful for streaming (VBV). Prevents data spikes that cause buffering.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-maxrate %s',
-            // No av1_qsv: the AV1 QSV runtime has no capped-quality mode (see qsv_global_quality).
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            // av1_qsv accepts a cap in ABR mode only — it has no capped-quality mode, so
+            // ChunkTranscodeService::steerQsvRateControl() drops it from quality-mode templates.
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'bufsize' => [
             'type' => 'video',
@@ -220,8 +221,8 @@ return [
             'help' => 'Used together with Maxrate to control the bitrate.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-bufsize %s',
-            // No av1_qsv: see maxrate.
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            // See maxrate: kept for av1_qsv ABR, dropped from quality mode by the same steering.
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'pixel_format' => [
             'type' => 'video',
@@ -265,10 +266,12 @@ return [
             'help' => 'Per-title mode: short samples of the source are test-encoded and the CRF is adjusted per video to hit this score. Empty = use the CRF as-is.',
             'rules' => ['nullable', 'integer', 'min:70', 'max:99'],
             'template' => null,
-            // av1_qsv: ICQ is CRF-like, the same probe/interpolation applies (probe encodes need
-            // the GPU, so prep must run on an accel node). Not h264/hevc_qsv (QVBR steering
-            // interplay unverified) nor nvenc (no hardware to verify).
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'av1_qsv'],
+            // Software encoders only. VMAF is blind to the low-pass smearing hardware AV1 produces,
+            // so it scored av1_qsv samples at target while they looked visibly bad — measured on
+            // staging: the probe raised ICQ 22 to its +12 ceiling and the 1080p rendition landed at
+            // ~1.5 Mbps. Read by PerTitleCrfService::shouldProbe(), so legacy templates that still
+            // carry the field are skipped at runtime too.
+            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
         // --- ABR alignment (nginx-vod) ---

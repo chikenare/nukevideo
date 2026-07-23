@@ -175,7 +175,7 @@ return [
 
     'dash-av1-qsv' => [
         'name' => 'DASH AV1 (Intel QSV)',
-        'description' => 'Hardware AV1 on Intel Arc for VOD: ICQ quality mode with per-title VMAF steering on the top rungs.',
+        'description' => 'Hardware AV1 on Intel Arc for VOD: ICQ quality mode, fixed quality per rung.',
         'category' => 'streaming',
         'query' => [
             'outputs' => [
@@ -191,7 +191,6 @@ return [
                             'qsv_global_quality' => 22,
                             'qsv_preset' => 'veryslow',
                             'gop_size' => 60,
-                            'target_vmaf' => 94,
                         ],
                         [
                             'width' => 1280,
@@ -199,7 +198,6 @@ return [
                             'qsv_global_quality' => 24,
                             'qsv_preset' => 'veryslow',
                             'gop_size' => 60,
-                            'target_vmaf' => 93,
                         ],
                         [
                             'width' => 854,
