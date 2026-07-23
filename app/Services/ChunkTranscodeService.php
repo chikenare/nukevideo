@@ -91,23 +91,38 @@ class ChunkTranscodeService
             && in_array($meta['source_pix_fmt'] ?? '', self::HW_DECODABLE_FORMATS, true);
     }
 
-    /**
-     * Scale on the GPU so hardware-decoded frames never round-trip to system memory.
-     * 10-bit sources decode to p010; H.264 encodes 8-bit only, the other codecs keep the depth.
-     */
+    /** Scale on the GPU so hardware-decoded frames never round-trip to system memory. */
     private function gpuScaleFilter(string $accel, int $width, int $height, string $codec): ?string
     {
         if ($width <= 0 || $height <= 0) {
             return null;
         }
 
-        $tenBit = in_array($this->stream->meta['source_pix_fmt'] ?? '', ['yuv420p10le', 'p010le'], true);
-        $format = $tenBit && ! str_starts_with($codec, 'h264') ? 'p010le' : 'nv12';
+        $format = $this->gpuEncodeFormat($codec);
 
         return match ($accel) {
             'intel' => "-vf vpp_qsv=w={$width}:h={$height}:format={$format}",
             'nvidia' => "-vf scale_cuda={$width}:{$height}:format={$format}",
         };
+    }
+
+    /** 10-bit 4:2:0 source formats, as ffprobe reports them. */
+    private const TEN_BIT_FORMATS = ['yuv420p10le', 'p010le'];
+
+    /**
+     * AV1 always encodes 10-bit, even from 8-bit sources: same speed and weight on the media
+     * engine, and the extra precision kills dark-gradient banding — the encoder has no
+     * per-block AQ to fight it otherwise. H.264 is 8-bit only; HEVC follows the source.
+     */
+    private function gpuEncodeFormat(string $codec): string
+    {
+        if (str_starts_with($codec, 'h264')) {
+            return 'nv12';
+        }
+
+        $tenBitSource = in_array($this->stream->meta['source_pix_fmt'] ?? '', self::TEN_BIT_FORMATS, true);
+
+        return str_starts_with($codec, 'av1') || $tenBitSource ? 'p010le' : 'nv12';
     }
 
     public function buildVideoArguments(bool $windowed = false): string
@@ -127,17 +142,28 @@ class ChunkTranscodeService
 
         $params = $this->clampMaxrateToSource($this->stream->input_params ?? []);
 
+        $accel = self::accelForCodec($params['video_codec'] ?? null);
+
+        if ($accel === 'intel') {
+            $params = $this->steerQsvRateControl($params);
+        }
+
         $args = [];
 
         if (isset($params['video_codec'])) {
             $args[] = '-c:v '.$this->assertSafeArgValue($params['video_codec']);
         }
 
-        $accel = self::accelForCodec($params['video_codec'] ?? null);
+        if ($accel && $this->hardwareDecodes()) {
+            $scale = $this->gpuScaleFilter($accel, (int) $this->stream->width, (int) $this->stream->height, $params['video_codec']);
+        } else {
+            $scale = $this->buildScaleFilter((int) $this->stream->width, (int) $this->stream->height);
 
-        $scale = $accel && $this->hardwareDecodes()
-            ? $this->gpuScaleFilter($accel, (int) $this->stream->width, (int) $this->stream->height, $params['video_codec'])
-            : $this->buildScaleFilter((int) $this->stream->width, (int) $this->stream->height);
+            // Software fallback/probe path of a GPU encoder: match the hardware path's depth.
+            if ($accel && $this->gpuEncodeFormat($params['video_codec']) === 'p010le') {
+                $scale = $scale ? "{$scale},format=p010le" : '-vf format=p010le';
+            }
+        }
 
         if ($scale) {
             $args[] = $scale;
@@ -153,10 +179,11 @@ class ChunkTranscodeService
         $args[] = match ($params['video_codec'] ?? null) {
             'libx265' => '-x265-params scenecut=0:open-gop=0'.($threads > 0 ? ":pools={$threads}" : ''),
             'libsvtav1' => $this->svtAv1Params($params, $threads),
-            // GPU encoders: no thread flags (the hardware owns its own scheduling), just pin
-            // I-frames to the -g grid. They take system-memory frames directly, so the software
-            // decode + scale path stays identical to the CPU codecs.
-            'h264_qsv', 'hevc_qsv', 'av1_qsv' => '-adaptive_i 0 -adaptive_b 0',
+            // QSV: pin I-frames to the -g grid; -mbbrc = adaptive per-block quant (h264/hevc; AV1
+            // has no such option). AV1's BRC lever is -extbrc + lookahead instead — but only in
+            // quality mode; under VBR (pinned -b:v) the AV1 runtime rejects extension flags.
+            'h264_qsv', 'hevc_qsv' => '-adaptive_i 0 -mbbrc 1',
+            'av1_qsv' => '-adaptive_i 0'.(empty($params['constant_bitrate']) ? ' -extbrc 1 -look_ahead_depth 16' : ''),
             'h264_nvenc', 'hevc_nvenc', 'av1_nvenc' => '-no-scenecut 1 -forced-idr 1'.$this->nvencBitrateReset($params),
             default => '-sc_threshold 0 -x264-params open-gop=0'.($threads > 0 ? " -threads {$threads}" : ''), // libx264
         };
@@ -223,6 +250,38 @@ class ChunkTranscodeService
             'libx265', 'hevc', 'vp9', 'hevc_qsv', 'hevc_nvenc' => 2,
             default => 1, // h264 family and anything older/unknown
         };
+    }
+
+    // QVBR's average target as a fraction of the template's peak cap.
+    private const QSV_QVBR_TARGET_RATIO = 0.75;
+
+    /**
+     * Steer QSV into a real quality mode (verified on Arc B580/iHD): global_quality+maxrate
+     * alone selects CQP and silently drops the cap. QVBR needs a -b:v below maxrate — and the
+     * AV1 runtime has no QVBR at all, so its cap is dropped to land in ICQ.
+     */
+    private function steerQsvRateControl(array $params): array
+    {
+        if (! empty($params['constant_bitrate'])) {
+            return $params;
+        }
+
+        // AV1 has no QVBR: without a pinned -b:v any cap lands it in CQP (or an unsupported
+        // mode alongside the extension flags), so the cap is always dropped in favour of ICQ.
+        if (str_starts_with($params['video_codec'], 'av1')) {
+            unset($params['maxrate'], $params['bufsize']);
+
+            return $params;
+        }
+
+        if (empty($params['qsv_global_quality']) || empty($params['maxrate'])) {
+            return $params;
+        }
+
+        $target = (int) round($this->parseBitrateValue($params['maxrate']) * self::QSV_QVBR_TARGET_RATIO / 1000);
+        $params['constant_bitrate'] = "{$target}k";
+
+        return $params;
     }
 
     /** NVENC's CQ mode only bites with `-b:v 0` — its default 2M bitrate target caps it otherwise. */

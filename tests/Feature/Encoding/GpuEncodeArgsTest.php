@@ -27,11 +27,73 @@ it('builds qsv arguments with the ABR grid pinned and no CPU thread flags', func
         ->toContain('-global_quality 24')
         ->toContain('-preset medium')
         ->toContain('-g 48')
-        ->toContain('-adaptive_i 0 -adaptive_b 0')
+        ->toContain($codec === 'av1_qsv' ? '-adaptive_i 0 -extbrc 1 -look_ahead_depth 16' : '-adaptive_i 0 -mbbrc 1')
+        ->not->toContain('-adaptive_b')
         ->not->toContain('-threads')
         ->not->toContain('-sc_threshold')
         ->not->toContain('x264-params');
 })->with(['h264_qsv', 'hevc_qsv', 'av1_qsv']);
+
+it('injects a QVBR target below the maxrate cap for h264/hevc qsv quality templates', function (string $codec) {
+    $args = (new ChunkTranscodeService(gpuStream([
+        'video_codec' => $codec,
+        'qsv_global_quality' => 24,
+        'maxrate' => '4000k',
+        'bufsize' => '8000k',
+    ])))->buildVideoArguments(windowed: true);
+
+    // gq+maxrate alone selects CQP and drops the cap; -b:v at 75% of maxrate lands in QVBR.
+    expect($args)
+        ->toContain('-b:v 3000k')
+        ->toContain('-maxrate 4000k')
+        ->toContain('-mbbrc 1');
+})->with(['h264_qsv', 'hevc_qsv']);
+
+it('drops the maxrate cap for av1 qsv quality templates so ICQ is selected', function () {
+    $args = (new ChunkTranscodeService(gpuStream([
+        'video_codec' => 'av1_qsv',
+        'qsv_global_quality' => 22,
+        'maxrate' => '5500k',
+        'bufsize' => '11000k',
+    ])))->buildVideoArguments(windowed: true);
+
+    // The AV1 QSV runtime has no QVBR: keeping maxrate would select CQP (fixed QP, cap ignored).
+    expect($args)
+        ->toContain('-global_quality 22')
+        ->toContain('-extbrc 1 -look_ahead_depth 16')
+        ->not->toContain('-maxrate')
+        ->not->toContain('-bufsize')
+        ->not->toContain('-b:v');
+});
+
+it('drops an av1 qsv maxrate even without a quality value', function () {
+    // gq is not a required template field; a stray cap without it must not leak through
+    // (extension flags outside ICQ/CQP/VBR error on the AV1 runtime).
+    $args = (new ChunkTranscodeService(gpuStream([
+        'video_codec' => 'av1_qsv',
+        'qsv_preset' => 'slow',
+        'maxrate' => '5000k',
+    ])))->buildVideoArguments(windowed: true);
+
+    expect($args)->not->toContain('-maxrate')->not->toContain('-b:v');
+});
+
+it('keeps av1 qsv ABR templates on plain VBR without extension flags', function () {
+    $args = (new ChunkTranscodeService(gpuStream([
+        'video_codec' => 'av1_qsv',
+        'constant_bitrate' => '3000k',
+        'maxrate' => '5500k',
+        'bufsize' => '11000k',
+    ])))->buildVideoArguments(windowed: true);
+
+    // The AV1 runtime rejects extbrc/look-ahead outside quality mode (NOT_IMPLEMENTED).
+    expect($args)
+        ->toContain('-b:v 3000k')
+        ->toContain('-maxrate 5500k')
+        ->toContain('-adaptive_i 0')
+        ->not->toContain('-extbrc')
+        ->not->toContain('-look_ahead_depth');
+});
 
 it('builds nvenc arguments and frees CQ from the default bitrate cap', function (string $codec) {
     $args = (new ChunkTranscodeService(gpuStream([
@@ -71,12 +133,24 @@ it('remuxes instead of re-encoding when the source already matches a GPU target'
 const HW_SOURCE = ['source_codec' => 'h264', 'source_pix_fmt' => 'yuv420p', 'source_width' => 1920, 'source_height' => 1080];
 
 it('hardware-decodes and scales on the GPU when the source qualifies', function () {
-    $svc = new ChunkTranscodeService(gpuStream(['video_codec' => 'av1_qsv', 'qsv_global_quality' => 28], HW_SOURCE));
+    $svc = new ChunkTranscodeService(gpuStream(['video_codec' => 'h264_qsv', 'qsv_global_quality' => 24], HW_SOURCE));
 
     expect($svc->inputArguments(windowed: true))->toContain('-hwaccel qsv -hwaccel_output_format qsv')
         ->and($svc->buildVideoArguments(windowed: true))
         ->toContain('-vf vpp_qsv=w=1920:h=1080:format=nv12')
         ->not->toContain('-vf scale=');
+});
+
+it('encodes av1 at 10-bit even from an 8-bit source, on both decode paths', function () {
+    $hw = (new ChunkTranscodeService(gpuStream(['video_codec' => 'av1_qsv', 'qsv_global_quality' => 22], HW_SOURCE)))
+        ->buildVideoArguments(windowed: true);
+    $sw = (new ChunkTranscodeService(gpuStream(
+        ['video_codec' => 'av1_qsv', 'qsv_global_quality' => 22],
+        ['source_codec' => 'mpeg4', 'source_pix_fmt' => 'yuv420p'],
+    )))->buildVideoArguments(windowed: true);
+
+    expect($hw)->toContain('-vf vpp_qsv=w=1920:h=1080:format=p010le')
+        ->and($sw)->toContain('-vf scale=1920:1080,format=p010le');
 });
 
 it('uses the cuda pipeline for nvenc targets', function () {

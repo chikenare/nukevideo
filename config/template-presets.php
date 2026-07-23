@@ -173,6 +173,61 @@ return [
         ],
     ],
 
+    'dash-av1-qsv' => [
+        'name' => 'DASH AV1 (Intel QSV)',
+        'description' => 'Hardware AV1 on Intel Arc for VOD: ICQ quality mode with per-title VMAF steering on the top rungs.',
+        'category' => 'streaming',
+        'query' => [
+            'outputs' => [
+                [
+                    'video_codec' => 'av1_qsv',
+                    // ICQ quality mode (the AV1 QSV runtime has no capped-quality mode, so no
+                    // maxrate here). The GPU encodes at the same speed on any preset, so veryslow
+                    // is free. -extbrc/-look_ahead are forced in ChunkTranscodeService.
+                    'variants' => [
+                        [
+                            'width' => 1920,
+                            'height' => 1080,
+                            'qsv_global_quality' => 22,
+                            'qsv_preset' => 'veryslow',
+                            'gop_size' => 60,
+                            'target_vmaf' => 94,
+                        ],
+                        [
+                            'width' => 1280,
+                            'height' => 720,
+                            'qsv_global_quality' => 24,
+                            'qsv_preset' => 'veryslow',
+                            'gop_size' => 60,
+                            'target_vmaf' => 93,
+                        ],
+                        [
+                            'width' => 854,
+                            'height' => 480,
+                            'qsv_global_quality' => 26,
+                            'qsv_preset' => 'veryslow',
+                            'gop_size' => 60,
+                        ],
+                        [
+                            'width' => 640,
+                            'height' => 360,
+                            'qsv_global_quality' => 28,
+                            'qsv_preset' => 'veryslow',
+                            'gop_size' => 60,
+                        ],
+                    ],
+                    'audio' => [
+                        'audio_codec' => 'libopus',
+                        'opus_application' => 'audio',
+                        'channels' => [
+                            ['channels' => '2', 'audio_bitrate' => '128k'],
+                        ],
+                    ],
+                ],
+            ],
+        ],
+    ],
+
     'hls-h264-mobile' => [
         'name' => 'HLS Mobile-First (H.264)',
         'description' => 'Optimized for mobile devices with lower resolutions and bandwidth.',

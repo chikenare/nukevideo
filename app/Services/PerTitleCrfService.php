@@ -193,9 +193,12 @@ class PerTitleCrfService
     private function encodeSampleCommand(int $crf, string $crfKey, float $start, string $sourcePath, string $samplePath): string
     {
         // Replicated stream so the anchor CRF renders through the exact same argument builder
-        // (scale, GOP, *-params, maxrate clamp) the real chunk encode will use.
+        // (scale, GOP, *-params, maxrate clamp) the real chunk encode will use. Except the GPU
+        // scale filter: vpp_qsv needs a hw device this command never sets up, so blinding the
+        // replica's pix_fmt meta drops it to the software decode+scale fallback path.
         $probe = $this->stream->replicate();
         $probe->input_params = [$crfKey => $crf] + ($probe->input_params ?? []);
+        $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);
         $service = new ChunkTranscodeService($probe);
 
         return sprintf(
@@ -297,10 +300,13 @@ class PerTitleCrfService
         return ! isset($this->stream->meta['per_title']);
     }
 
+    /** Quality knobs the probe can steer: CRF (CPU codecs) and QSV ICQ, both CRF-like scales. */
+    private const QUALITY_TEMPLATES = ['-crf %s', '-global_quality %s'];
+
     /**
-     * The CRF field and its ceiling for this stream's codec, from config/ffmpeg.php — the same
-     * source of truth the panel and command builder use, so a new codec added there is picked
-     * up here without a parallel hardcoded map.
+     * The quality field and its ceiling for this stream's codec, from config/ffmpeg.php — the
+     * same source of truth the panel and command builder use, so a new codec added there is
+     * picked up here without a parallel hardcoded map.
      *
      * @return array{0: ?string, 1: int} [param key, max crf]
      */
@@ -309,7 +315,7 @@ class PerTitleCrfService
         $codec = data_get($this->stream->input_params, 'video_codec');
 
         foreach (config('ffmpeg.parameters') as $key => $config) {
-            if (($config['template'] ?? null) === '-crf %s' && in_array($codec, $config['available_for'] ?? [], true)) {
+            if (in_array($config['template'] ?? null, self::QUALITY_TEMPLATES, true) && in_array($codec, $config['available_for'] ?? [], true)) {
                 return [$key, (int) ($config['max'] ?? 51)];
             }
         }

@@ -114,6 +114,20 @@ describe('apply guards', function () {
             || str_contains($process->command, '-fps_mode passthrough'));
     });
 
+    it('probes av1_qsv on the ICQ scale through the software scale path', function () {
+        Process::fake();
+
+        (new PerTitleCrfService(perTitleStream(
+            ['video_codec' => 'av1_qsv', 'qsv_global_quality' => 22, 'target_vmaf' => 94],
+            ['source_codec' => 'h264', 'source_pix_fmt' => 'yuv420p', 'source_width' => 1920, 'source_height' => 800],
+        )))->apply('/tmp/src.mkv', 6800.0);
+
+        // Samples must not use vpp_qsv: the probe command sets up no hw device for filters.
+        Process::assertRan(fn ($process) => str_contains($process->command, '-global_quality 30')
+            && str_contains($process->command, '-vf scale=')
+            && ! str_contains($process->command, 'vpp_qsv'));
+    });
+
     it('does nothing when the base crf sits at the codec ceiling', function () {
         Process::fake();
 

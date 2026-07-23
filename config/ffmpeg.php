@@ -209,7 +209,8 @@ return [
             'help' => 'Useful for streaming (VBV). Prevents data spikes that cause buffering.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-maxrate %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            // No av1_qsv: the AV1 QSV runtime has no capped-quality mode (see qsv_global_quality).
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'bufsize' => [
             'type' => 'video',
@@ -219,7 +220,8 @@ return [
             'help' => 'Used together with Maxrate to control the bitrate.',
             'rules' => ['regex:/^\d+[kKmM]?$/'],
             'template' => '-bufsize %s',
-            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
+            // No av1_qsv: see maxrate.
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
         'pixel_format' => [
             'type' => 'video',
@@ -263,8 +265,10 @@ return [
             'help' => 'Per-title mode: short samples of the source are test-encoded and the CRF is adjusted per video to hit this score. Empty = use the CRF as-is.',
             'rules' => ['nullable', 'integer', 'min:70', 'max:99'],
             'template' => null,
-            // CPU only: CRF interpolation has no equivalent on the ICQ/CQ scales of the GPU encoders.
-            'available_for' => ['libx264', 'libx265', 'libsvtav1'],
+            // av1_qsv: ICQ is CRF-like, the same probe/interpolation applies (probe encodes need
+            // the GPU, so prep must run on an accel node). Not h264/hevc_qsv (QVBR steering
+            // interplay unverified) nor nvenc (no hardware to verify).
+            'available_for' => ['libx264', 'libx265', 'libsvtav1', 'av1_qsv'],
         ],
 
         // --- ABR alignment (nginx-vod) ---
@@ -376,15 +380,19 @@ return [
         ],
 
         // --- Intel QSV specific ---
-        // Quality knob: ICQ mode when no Target Bitrate is set (QVBR when Maxrate is also set).
+        // Quality knob. ChunkTranscodeService steers the BRC mode: quality-only → ICQ; with
+        // Maxrate it injects a lower -b:v to reach QVBR (h264/hevc — gq+maxrate alone would
+        // select CQP and silently drop the cap). The AV1 runtime has no QVBR, so maxrate is
+        // not offered for av1_qsv and it always runs ICQ.
         'qsv_global_quality' => [
             'type' => 'video',
             'input_type' => 'integer',
             'label' => 'Quality (ICQ)',
             'min' => 1,
             'max' => 51,
-            'help' => 'Lower is better quality. 20-28 is a good range. Leave Target Bitrate empty to use quality mode.',
-            'rules' => ['integer', 'min:1', 'max:51'],
+            'help' => 'Lower is better quality. 20-24 is a good range. Leave Target Bitrate empty to use quality mode.',
+            // A QSV variant with neither knob would fall into CQP at the encoder's default QP.
+            'rules' => ['required_without:constant_bitrate', 'integer', 'min:1', 'max:51'],
             'template' => '-global_quality %s',
             'available_for' => ['h264_qsv', 'hevc_qsv', 'av1_qsv'],
         ],
@@ -408,7 +416,8 @@ return [
             'min' => 1,
             'max' => 51,
             'help' => 'Lower is better quality. 19-28 is a good range. Leave Target Bitrate empty to use quality mode.',
-            'rules' => ['integer', 'min:1', 'max:51'],
+            // Without either knob NVENC falls back to its default 2M bitrate target.
+            'rules' => ['required_without:constant_bitrate', 'integer', 'min:1', 'max:51'],
             'template' => '-cq %s',
             'available_for' => ['h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
