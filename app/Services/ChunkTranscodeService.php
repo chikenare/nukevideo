@@ -47,6 +47,19 @@ class ChunkTranscodeService
         return collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec)['accel'] ?? null;
     }
 
+    /**
+     * Whether this stream's encoder can run on the node executing right now. Chunk jobs are routed
+     * to matching hardware by {@see \App\Models\Stream::encodeQueue}, but the orchestration jobs
+     * that encode a sample themselves (the bitrate probe, the preflight) run wherever they land —
+     * and `av1_qsv` on a node with no QSV device fails for want of hardware, not of parameters.
+     */
+    public function runsOnThisNode(): bool
+    {
+        $accel = self::accelForCodec(data_get($this->stream->input_params, 'video_codec'));
+
+        return $accel === null || $accel === config('ffmpeg.node_accel');
+    }
+
     /** Source codecs every supported GPU generation decodes in hardware. */
     private const HW_DECODABLE_CODECS = ['h264', 'hevc', 'av1', 'vp9'];
 
@@ -140,13 +153,9 @@ class ChunkTranscodeService
             ]);
         }
 
-        $params = $this->clampMaxrateToSource($this->stream->input_params ?? []);
+        $params = $this->resolveRateControl($this->stream->input_params ?? []);
 
         $accel = self::accelForCodec($params['video_codec'] ?? null);
-
-        if ($accel === 'intel') {
-            $params = $this->steerQsvRateControl($params);
-        }
 
         $args = [];
 
@@ -197,22 +206,16 @@ class ChunkTranscodeService
     private const MIN_CLAMP_BPS = 100_000;
 
     /**
-     * Safety net for already-compressed sources: cap the template VBV at the source's own
-     * bitrate (scaled to the rendition's pixel count) so a re-encode never outweighs its source.
-     * Skipped for ABR templates (clamping under their pinned -b:v would corrupt the VBV triple)
-     * and when the target codec is less efficient than the source's — matching an AV1 source's
-     * bitrate with x264 would starve it.
+     * The rendition's share of the source's own bitrate: the ceiling a re-encode must not outweigh.
+     * Null when the probe data can't support one, or when the target codec is less efficient than
+     * the source's — matching an AV1 source's bitrate with x264 would starve it.
      */
-    private function clampMaxrateToSource(array $params): array
+    public function sourceBitrateCap(): ?int
     {
-        if (empty($params['maxrate']) || ! empty($params['constant_bitrate'])) {
-            return $params;
-        }
-
         $meta = $this->stream->meta ?? [];
 
-        if (self::codecRank($params['video_codec'] ?? null) < self::codecRank($meta['source_codec'] ?? null)) {
-            return $params;
+        if (self::codecRank(data_get($this->stream->input_params, 'video_codec')) < self::codecRank($meta['source_codec'] ?? null)) {
+            return null;
         }
 
         $sourceRate = (int) ($meta['source_bit_rate'] ?? 0);
@@ -220,24 +223,149 @@ class ChunkTranscodeService
         $targetPixels = (int) $this->stream->width * (int) $this->stream->height;
 
         if ($sourceRate <= 0 || $sourcePixels <= 0 || $targetPixels <= 0) {
-            return $params;
+            return null;
         }
 
         // Bitrate scales sublinearly with resolution (~0.75 power law).
         $cap = (int) round($sourceRate * min(1.0, ($targetPixels / $sourcePixels) ** 0.75));
+
+        return $cap >= self::MIN_CLAMP_BPS ? $cap : null;
+    }
+
+    /** Encoders whose quality mode honours no VBV, so their ceiling can't be left to the encoder. */
+    private const VBV_BLIND_CODECS = ['av1_qsv'];
+
+    /**
+     * Whether this rendition's ceiling has to be measured before the encode instead of enforced
+     * during it — the one case {@see capBlindQualityMode} needs a number for.
+     */
+    public function needsQualityBitrateProbe(): bool
+    {
+        $params = $this->stream->input_params ?? [];
+
+        return in_array($params['video_codec'] ?? null, self::VBV_BLIND_CODECS, true)
+            && empty($params['constant_bitrate'])
+            && $this->sourceBitrateCap() !== null;
+    }
+
+    /**
+     * Sample windows sit in the busier middle of a runtime, so a small overshoot isn't the whole
+     * film — only a real one is worth giving up the quality mode for.
+     */
+    private const OVERSHOOT_TOLERANCE = 1.2;
+
+    /**
+     * The one place a rendition's rate control is decided: the mode the encoder runs in and the
+     * ceiling it may not cross. Every branch answers the same question — never spend more than the
+     * source did ({@see sourceBitrateCap}) — and differs only in the lever that encoder honours.
+     */
+    private function resolveRateControl(array $params): array
+    {
+        // ABR: the template pinned an average, so it carries its own ceiling.
+        if (! empty($params['constant_bitrate'])) {
+            return self::normalizeAbr($params);
+        }
+
+        $cap = $this->sourceBitrateCap();
+
+        if (in_array($params['video_codec'] ?? null, self::VBV_BLIND_CODECS, true)) {
+            return $this->capBlindQualityMode($params, $cap);
+        }
+
+        if ($cap !== null) {
+            $params = $this->clampMaxrateToSource($params, $cap);
+        }
+
+        return self::accelForCodec($params['video_codec'] ?? null) === 'intel'
+            ? $this->steerQsvRateControl($params)
+            : $params;
+    }
+
+    /**
+     * AV1 on QSV honours no VBV: `-maxrate` silently selects CQP at the driver's default QP and
+     * `-global_quality` stops being read with it, and the runtime has no QVBR either (measured on
+     * Arc B580 / iHD 1.22). Its ceiling can only be chosen before the encode, from what the quality
+     * mode was measured to cost on this source ({@see QualityBitrateProbe}): an overshoot is
+     * re-issued as capped VBR, anything else stays in ICQ with no VBV attached at all.
+     */
+    private function capBlindQualityMode(array $params, ?int $cap): array
+    {
+        $measured = (int) data_get($this->stream->meta, 'quality_bitrate', 0);
+
+        if ($cap === null || $measured <= $cap * self::OVERSHOOT_TOLERANCE) {
+            unset($params['maxrate'], $params['bufsize']);
+
+            return $params;
+        }
+
+        return [
+            ...self::withoutQualityKnob($params),
+            'constant_bitrate' => self::kbps($cap * self::AVERAGE_TARGET_RATIO),
+            'maxrate' => self::kbps($cap),
+            'bufsize' => self::kbps($cap * 2),
+        ];
+    }
+
+    /** Encoders that abort when a quality target is pinned next to an average bitrate. */
+    private const ABR_WITHOUT_QUALITY_KNOB = ['libsvtav1', 'av1_qsv'];
+
+    /** Encoders that abort when a VBV is attached to an average bitrate. */
+    private const ABR_WITHOUT_VBV = ['libsvtav1'];
+
+    /**
+     * A pinned average is its own ceiling, but not every encoder takes the rest of the template
+     * next to it: SVT-AV1 refuses a quality target ("Target Bitrate only supported when --rc is
+     * 1/2 (VBR/CBR)") and a VBV ("Max Bitrate only supported with CRF mode"), and AV1 on QSV
+     * refuses the quality target ("Invalid argument"). Each aborts the encode having written
+     * nothing, so the conflicting knobs are dropped here — before the chunks fan out — instead of
+     * failing a video at the first chunk. QSV's h264/hevc pair quality with a bitrate on purpose
+     * (that combination is QVBR) and nvenc reads it as a VBR quality target, so both keep theirs.
+     */
+    private static function normalizeAbr(array $params): array
+    {
+        $codec = $params['video_codec'] ?? null;
+
+        if (in_array($codec, self::ABR_WITHOUT_QUALITY_KNOB, true)) {
+            $params = self::withoutQualityKnob($params);
+        }
+
+        if (in_array($codec, self::ABR_WITHOUT_VBV, true)) {
+            unset($params['maxrate'], $params['bufsize']);
+        }
+
+        return $params;
+    }
+
+    private static function withoutQualityKnob(array $params): array
+    {
+        unset($params['qsv_global_quality'], $params['nvenc_cq'], $params['crf'], $params['svtav1_crf']);
+
+        return $params;
+    }
+
+    /**
+     * Safety net for already-compressed sources: tighten the template's own VBV to the cap so a
+     * re-encode never outweighs its source. Only ever tightens — a template asking for less than
+     * the source already respects the ceiling.
+     */
+    private function clampMaxrateToSource(array $params, int $cap): array
+    {
+        if (empty($params['maxrate'])) {
+            return $params;
+        }
+
         $maxrate = $this->parseBitrateValue($params['maxrate']);
 
-        if ($cap < self::MIN_CLAMP_BPS || $cap >= $maxrate) {
+        if ($cap >= $maxrate) {
             return $params;
         }
 
         if (! empty($params['bufsize'])) {
             // Keep the template's own bufsize:maxrate ratio — a strict 1x VBV stays strict.
-            $ratio = $this->parseBitrateValue($params['bufsize']) / max(1, $maxrate);
-            $params['bufsize'] = intdiv((int) round($cap * $ratio), 1000).'k';
+            $params['bufsize'] = self::kbps($cap * $this->parseBitrateValue($params['bufsize']) / max(1, $maxrate));
         }
 
-        $params['maxrate'] = intdiv($cap, 1000).'k';
+        $params['maxrate'] = self::kbps($cap);
 
         return $params;
     }
@@ -252,36 +380,28 @@ class ChunkTranscodeService
         };
     }
 
-    // QVBR's average target as a fraction of the template's peak cap.
-    private const QSV_QVBR_TARGET_RATIO = 0.75;
+    /** A pinned average as a fraction of the peak cap, shared by QVBR steering and the VBR fallback. */
+    private const AVERAGE_TARGET_RATIO = 0.75;
 
     /**
-     * Steer QSV into a real quality mode (verified on Arc B580/iHD): global_quality+maxrate
-     * alone selects CQP and silently drops the cap. QVBR needs a -b:v below maxrate — and the
-     * AV1 runtime has no QVBR at all, so its cap is dropped to land in ICQ.
+     * Steer capped QSV quality modes into QVBR (verified on Arc B580/iHD): global_quality+maxrate
+     * alone selects CQP and silently drops both, and QVBR only engages with a -b:v below the cap.
+     * AV1 never reaches this — it has no QVBR ({@see capBlindQualityMode}).
      */
     private function steerQsvRateControl(array $params): array
     {
-        if (! empty($params['constant_bitrate'])) {
-            return $params;
-        }
-
-        // AV1 has no QVBR: without a pinned -b:v any cap lands it in CQP (or an unsupported
-        // mode alongside the extension flags), so the cap is always dropped in favour of ICQ.
-        if (str_starts_with($params['video_codec'], 'av1')) {
-            unset($params['maxrate'], $params['bufsize']);
-
-            return $params;
-        }
-
         if (empty($params['qsv_global_quality']) || empty($params['maxrate'])) {
             return $params;
         }
 
-        $target = (int) round($this->parseBitrateValue($params['maxrate']) * self::QSV_QVBR_TARGET_RATIO / 1000);
-        $params['constant_bitrate'] = "{$target}k";
+        $params['constant_bitrate'] = self::kbps($this->parseBitrateValue($params['maxrate']) * self::AVERAGE_TARGET_RATIO);
 
         return $params;
+    }
+
+    private static function kbps(float $bps): string
+    {
+        return max(1, (int) round($bps / 1000)).'k';
     }
 
     /** NVENC's CQ mode only bites with `-b:v 0` — its default 2M bitrate target caps it otherwise. */

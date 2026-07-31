@@ -5,19 +5,24 @@ namespace App\Jobs;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Video;
+use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
+use App\Services\EncodeCommandBuilder;
 use App\Services\PerTitleCrfService;
+use App\Services\QualityBitrateProbe;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -67,10 +72,49 @@ class PrepareVideoJob implements ShouldQueue
     // chunk transcode fans out per-hardware via Stream::encodeQueue(), not this queue.
     private const QUEUE = 'orchestration';
 
+    // Hops allowed while looking for a node with the template's hardware, before going ahead
+    // without a measurement. Kept out of $tries, which exists for dead workers, not for scheduling.
+    private const MAX_NODE_HOPS = 3;
+
+    private const NODE_HOP_DELAY = 5;
+
     public function __construct(
         public int $videoId,
         public string $originalPath,
+        public int $nodeHops = 0,
     ) {}
+
+    /**
+     * This job runs on `orchestration`, which every worker drains — GPU or not — but it encodes
+     * sample windows itself to size up each rendition ({@see steerRenditionRates}), and a hardware
+     * encoder needs its hardware. So hand the video to a node that has it: the fleet is known to
+     * have one ({@see assertAccelCapacity}) and GPU nodes drain this queue too. Bounded, because
+     * running unmeasured (no ceiling, the template's own settings) beats failing a video over
+     * scheduling — and it costs nothing yet, the source is not downloaded until after this.
+     */
+    private function handedToCapableNode(Video $video): bool
+    {
+        $accels = $video->template->accels();
+
+        if ($accels === [] || in_array(config('ffmpeg.node_accel'), $accels, true)) {
+            return false;
+        }
+
+        if ($this->nodeHops >= self::MAX_NODE_HOPS) {
+            Log::warning('Preparing on a node without the template hardware; renditions go unmeasured', [
+                'video' => $this->videoId,
+                'needs' => $accels,
+            ]);
+
+            return false;
+        }
+
+        self::dispatch($this->videoId, $this->originalPath, $this->nodeHops + 1)
+            ->onQueue(self::QUEUE)
+            ->delay(now()->addSeconds(self::NODE_HOP_DELAY));
+
+        return true;
+    }
 
     /**
      * Presigned URL of the mirrored source on the internal store (LAN, no egress). The downstream
@@ -101,6 +145,11 @@ class PrepareVideoJob implements ShouldQueue
 
         if (! Storage::disk('s3')->exists($this->originalPath)) {
             throw new RuntimeException("Original {$this->originalPath} missing in S3");
+        }
+
+        // Before anything is claimed or downloaded, so a hop costs nothing.
+        if ($this->handedToCapableNode($video)) {
+            return;
         }
 
         // Guarded transition: never revive a video the reaper (or a failure path) already moved to
@@ -152,9 +201,10 @@ class PrepareVideoJob implements ShouldQueue
                 EncodeSidecarTracksJob::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
             }
 
-            // Per-title CRF: measure what each rendition actually needs from THIS source
-            // before chunks fan out. No-op unless the template sets `target_vmaf`.
-            $this->resolvePerTitleCrf($video, $localPath);
+            // Measure what each rendition actually needs from THIS source before chunks fan out,
+            // then prove the settings that came out of it actually encode.
+            $this->steerRenditionRates($video, $localPath);
+            $this->assertRenditionsEncode($video, $localPath);
 
             $windows = $this->planWindows($video, $localPath);
 
@@ -194,14 +244,76 @@ class PrepareVideoJob implements ShouldQueue
         $video->update(['status' => VideoStatus::RUNNING->value]);
     }
 
-    /** Probe-and-set per-title CRF on each video rendition; a probe failure keeps the template CRF. */
-    private function resolvePerTitleCrf(Video $video, string $localPath): void
+    /**
+     * Measure each rendition against THIS source before chunks fan out: per-title CRF first (no-op
+     * unless the template sets `target_vmaf`), then what the resulting quality mode costs, which is
+     * the number the ceiling needs where the encoder honours no VBV. Either probe failing leaves the
+     * template as it stands.
+     */
+    private function steerRenditionRates(Video $video, string $localPath): void
+    {
+        $duration = (float) $video->duration;
+        $tick = fn () => $this->heartbeat($video);
+
+        foreach ($video->streams()->where('type', 'video')->get() as $stream) {
+            (new PerTitleCrfService($stream))->apply($localPath, $duration, $tick);
+            (new QualityBitrateProbe($stream))->measure($localPath, $duration, $tick);
+        }
+    }
+
+    // One second is enough for an encoder to accept or refuse a parameter set.
+    private const PREFLIGHT_SECONDS = 1.0;
+
+    private const PREFLIGHT_TIMEOUT = 120;
+
+    /**
+     * Run each rendition's real chunk command over one second of the source before fanning out.
+     * Parameter sets an encoder refuses — a quality target pinned next to a bitrate, a VBV a codec
+     * only takes in another mode — abort having written nothing, so without this they surface as
+     * every chunk of the video failing after the whole fan-out. Here the video fails at once, with
+     * the encoder's own words in its error log.
+     */
+    private function assertRenditionsEncode(Video $video, string $localPath): void
     {
         foreach ($video->streams()->where('type', 'video')->get() as $stream) {
-            (new PerTitleCrfService($stream))->apply(
+            $service = new ChunkTranscodeService($stream);
+
+            // A rendition whose hardware this node lacks can't be told apart from a rendition whose
+            // parameters are wrong — both just fail here. Its own node finds out at the first chunk.
+            if (! $service->runsOnThisNode()) {
+                continue;
+            }
+
+            $output = dirname($localPath)."/preflight_{$stream->id}.".$service->outputFormat();
+
+            $command = EncodeCommandBuilder::build(
+                new Collection([$stream]),
                 $localPath,
-                (float) $video->duration,
-                fn () => $this->heartbeat($video),
+                [$stream->id => $output],
+                0.0,
+                self::PREFLIGHT_SECONDS,
+            );
+
+            try {
+                $result = Process::timeout(self::PREFLIGHT_TIMEOUT)->run($command, fn () => $this->heartbeat($video));
+                $written = @filesize($output) ?: 0;
+            } finally {
+                @unlink($output);
+            }
+
+            if ($result->successful() && $written > 0) {
+                continue;
+            }
+
+            Log::error('Rendition preflight failed', [
+                'video' => $this->videoId,
+                'stream' => $stream->id,
+                'command' => $command,
+            ]);
+
+            throw new RuntimeException(
+                "Rendition {$stream->name} cannot be encoded with these parameters: "
+                .Str::limit(trim($result->errorOutput() ?: $result->output()), 400)
             );
         }
     }

@@ -8,6 +8,7 @@ use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 
 uses(RefreshDatabase::class);
 
@@ -95,4 +96,47 @@ it('names the missing hardware straight from the template', function () {
     Node::create(['name' => 'gpu-nv', 'ip_address' => '10.0.0.17', 'type' => 'worker', 'accel' => 'nvidia']);
 
     expect($video->template->fresh()->missingAccel())->toBeNull();
+});
+
+describe('handing the video to a node that has the hardware', function () {
+    function handedOff(Video $video): bool
+    {
+        $job = new PrepareVideoJob($video->id, 'original.mp4');
+
+        return (fn () => $this->handedToCapableNode($video))->call($job);
+    }
+
+    it('hops to another orchestration worker when this node lacks the template hardware', function (?string $nodeAccel) {
+        Queue::fake();
+        config(['ffmpeg.node_accel' => $nodeAccel]);
+
+        expect(handedOff(videoWithRendition('av1_qsv')))->toBeTrue();
+
+        Queue::assertPushed(PrepareVideoJob::class, fn (PrepareVideoJob $job) => $job->nodeHops === 1);
+    })->with(['CPU-only node' => null, 'the other GPU family' => 'nvidia']);
+
+    it('stays put when this node has the hardware, or when none is needed', function (string $codec, ?string $nodeAccel) {
+        Queue::fake();
+        config(['ffmpeg.node_accel' => $nodeAccel]);
+
+        expect(handedOff(videoWithRendition($codec)))->toBeFalse();
+
+        Queue::assertNothingPushed();
+    })->with([
+        'matching GPU node' => ['av1_qsv', 'intel'],
+        'CPU template on a CPU node' => ['libsvtav1', null],
+        'CPU template on a GPU node' => ['libsvtav1', 'intel'],
+    ]);
+
+    it('gives up hopping rather than leaving a video unprepared', function () {
+        Queue::fake();
+        config(['ffmpeg.node_accel' => null]);
+
+        $video = videoWithRendition('av1_qsv');
+        $job = new PrepareVideoJob($video->id, 'original.mp4', nodeHops: 3);
+
+        expect((fn () => $this->handedToCapableNode($video))->call($job))->toBeFalse();
+
+        Queue::assertNothingPushed();
+    });
 });
