@@ -5,24 +5,21 @@ namespace App\Jobs;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Video;
-use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
-use App\Services\EncodeCommandBuilder;
 use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
+use App\Services\RenditionPreflight;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -86,11 +83,10 @@ class PrepareVideoJob implements ShouldQueue
 
     /**
      * This job runs on `orchestration`, which every worker drains — GPU or not — but it encodes
-     * sample windows itself to size up each rendition ({@see steerRenditionRates}), and a hardware
-     * encoder needs its hardware. So hand the video to a node that has it: the fleet is known to
-     * have one ({@see assertAccelCapacity}) and GPU nodes drain this queue too. Bounded, because
-     * running unmeasured (no ceiling, the template's own settings) beats failing a video over
-     * scheduling — and it costs nothing yet, the source is not downloaded until after this.
+     * sample windows itself ({@see resolveRenditions}), and a hardware encoder needs its hardware.
+     * So hand the video to a node that has it; the fleet is known to have one
+     * ({@see assertAccelCapacity}) and GPU nodes drain this queue too. Bounded, because running
+     * unmeasured beats failing a video over scheduling.
      */
     private function handedToCapableNode(Video $video): bool
     {
@@ -178,8 +174,6 @@ class PrepareVideoJob implements ShouldQueue
 
             $this->ensureLocalSource($video, $mirrorPath, $localPath);
 
-            $sourceUrl = self::sourceUrl($mirrorPath);
-
             // Probe + rendition/audio/subtitle streams run on the LOCAL file: mkvmerge needs it for
             // BCP-47 language tags, and ffprobe is faster off local disk than the HTTP mirror.
             // Non-original streams present means a redelivery already ran it. Duration/aspect ratio
@@ -201,10 +195,7 @@ class PrepareVideoJob implements ShouldQueue
                 EncodeSidecarTracksJob::dispatch($video->id, $mirrorPath)->onQueue(self::QUEUE);
             }
 
-            // Measure what each rendition actually needs from THIS source before chunks fan out,
-            // then prove the settings that came out of it actually encode.
-            $this->steerRenditionRates($video, $localPath);
-            $this->assertRenditionsEncode($video, $localPath);
+            $this->resolveRenditions($video, $localPath);
 
             $windows = $this->planWindows($video, $localPath);
 
@@ -245,12 +236,13 @@ class PrepareVideoJob implements ShouldQueue
     }
 
     /**
-     * Measure each rendition against THIS source before chunks fan out: per-title CRF first (no-op
-     * unless the template sets `target_vmaf`), then what the resulting quality mode costs, which is
-     * the number the ceiling needs where the encoder honours no VBV. Either probe failing leaves the
-     * template as it stands.
+     * Settle every rendition against THIS source before chunks fan out. Per rendition, in order:
+     * steer the CRF to the template's target VMAF, measure what the resulting quality mode costs
+     * (the number the ceiling needs where the encoder honours no VBV), then prove the parameters
+     * that came out of it actually encode. Either probe failing leaves the template as it stands;
+     * the preflight is the only one that can fail the video, and it does so before the fan-out.
      */
-    private function steerRenditionRates(Video $video, string $localPath): void
+    private function resolveRenditions(Video $video, string $localPath): void
     {
         $duration = (float) $video->duration;
         $tick = fn () => $this->heartbeat($video);
@@ -258,63 +250,7 @@ class PrepareVideoJob implements ShouldQueue
         foreach ($video->streams()->where('type', 'video')->get() as $stream) {
             (new PerTitleCrfService($stream))->apply($localPath, $duration, $tick);
             (new QualityBitrateProbe($stream))->measure($localPath, $duration, $tick);
-        }
-    }
-
-    // One second is enough for an encoder to accept or refuse a parameter set.
-    private const PREFLIGHT_SECONDS = 1.0;
-
-    private const PREFLIGHT_TIMEOUT = 120;
-
-    /**
-     * Run each rendition's real chunk command over one second of the source before fanning out.
-     * Parameter sets an encoder refuses — a quality target pinned next to a bitrate, a VBV a codec
-     * only takes in another mode — abort having written nothing, so without this they surface as
-     * every chunk of the video failing after the whole fan-out. Here the video fails at once, with
-     * the encoder's own words in its error log.
-     */
-    private function assertRenditionsEncode(Video $video, string $localPath): void
-    {
-        foreach ($video->streams()->where('type', 'video')->get() as $stream) {
-            $service = new ChunkTranscodeService($stream);
-
-            // A rendition whose hardware this node lacks can't be told apart from a rendition whose
-            // parameters are wrong — both just fail here. Its own node finds out at the first chunk.
-            if (! $service->runsOnThisNode()) {
-                continue;
-            }
-
-            $output = dirname($localPath)."/preflight_{$stream->id}.".$service->outputFormat();
-
-            $command = EncodeCommandBuilder::build(
-                new Collection([$stream]),
-                $localPath,
-                [$stream->id => $output],
-                0.0,
-                self::PREFLIGHT_SECONDS,
-            );
-
-            try {
-                $result = Process::timeout(self::PREFLIGHT_TIMEOUT)->run($command, fn () => $this->heartbeat($video));
-                $written = @filesize($output) ?: 0;
-            } finally {
-                @unlink($output);
-            }
-
-            if ($result->successful() && $written > 0) {
-                continue;
-            }
-
-            Log::error('Rendition preflight failed', [
-                'video' => $this->videoId,
-                'stream' => $stream->id,
-                'command' => $command,
-            ]);
-
-            throw new RuntimeException(
-                "Rendition {$stream->name} cannot be encoded with these parameters: "
-                .Str::limit(trim($result->errorOutput() ?: $result->output()), 400)
-            );
+            (new RenditionPreflight($stream))->assert($localPath, $tick);
         }
     }
 

@@ -3,8 +3,8 @@
 return [
 
     // The GPU family THIS worker node has, exported per node by NodeService. Null on CPU-only nodes
-    // and on the API container. Read via ChunkTranscodeService::nodeAccel(): jobs that have to run
-    // an encoder themselves (probe, preflight) can only do it where the hardware is.
+    // and on the API container. Read by ChunkTranscodeService::runsOnThisNode(): jobs that encode a
+    // sample themselves (probe, preflight) can only do it where the hardware is.
     'node_accel' => env('NODE_ACCEL'),
 
     'codecs' => [

@@ -19,19 +19,12 @@ use Throwable;
  */
 class PerTitleCrfService
 {
-    private const SAMPLE_SECONDS = 20;
-
     private const ANCHOR_STEP = 8;
 
     // The probe corrects the template CRF, it doesn't replace template intent — bound the swing.
     private const MAX_DECREASE = 4;
 
     private const MAX_INCREASE = 12;
-
-    private const MIN_DURATION = 120;
-
-    // Per probe process; a 20s sample encode/score never legitimately needs more.
-    private const PROCESS_TIMEOUT = 300;
 
     // The probe runs inside ONE worker slot, so it may not spend the whole node. Keep it to a
     // couple of samples at a time; the chunk encoders own the rest of the CPU.
@@ -64,7 +57,7 @@ class PerTitleCrfService
         $params = $this->stream->input_params;
         $base = (int) $params[$crfKey];
         $target = (int) $params['target_vmaf'];
-        $windows = self::sampleWindows($duration);
+        $windows = SampleEncode::windows($duration);
 
         $anchorCrfs = array_values(array_unique([$base, min($base + self::ANCHOR_STEP, $maxCrf)]));
 
@@ -115,17 +108,6 @@ class PerTitleCrfService
         $chosen = max($lowCrf - self::MAX_DECREASE, min($lowCrf + self::MAX_INCREASE, $chosen));
 
         return (int) max(1, min($maxCrf, round($chosen)));
-    }
-
-    /** @return list<float> window start offsets, spread across the middle of the runtime */
-    public static function sampleWindows(float $duration): array
-    {
-        $count = (int) min(4, max(3, ceil($duration / 1800)));
-
-        return array_map(
-            fn (int $i) => round(min($duration * (0.08 + 0.84 * $i / ($count - 1)), $duration - self::SAMPLE_SECONDS), 3),
-            range(0, $count - 1),
-        );
     }
 
     /**
@@ -204,7 +186,7 @@ class PerTitleCrfService
         return sprintf(
             'ffmpeg -hide_banner -y -ss %.3f -t %d -i %s -fps_mode passthrough %s -f %s %s',
             $start,
-            self::SAMPLE_SECONDS,
+            SampleEncode::SECONDS,
             escapeshellarg($sourcePath),
             $service->buildVideoArguments(windowed: true),
             $service->outputFormat(),
@@ -229,7 +211,7 @@ class PerTitleCrfService
         return sprintf(
             'ffmpeg -hide_banner -ss %.3f -t %d -i %s -i %s -lavfi "%s" -f null -',
             $start,
-            self::SAMPLE_SECONDS,
+            SampleEncode::SECONDS,
             escapeshellarg($sourcePath),
             escapeshellarg($samplePath),
             $filter,
@@ -257,7 +239,7 @@ class PerTitleCrfService
             try {
                 $results = Process::pool(function (Pool $pool) use ($batch) {
                     foreach ($batch as $command) {
-                        $pool->timeout(self::PROCESS_TIMEOUT)->command($command);
+                        $pool->timeout(SampleEncode::TIMEOUT)->command($command);
                     }
                 })->start(fn () => $tick())->wait();
 
@@ -298,7 +280,7 @@ class PerTitleCrfService
             return false;
         }
 
-        if ($duration < self::MIN_DURATION || ! $this->stream->width || ! $this->stream->height) {
+        if ($duration < SampleEncode::MIN_DURATION || ! $this->stream->width || ! $this->stream->height) {
             return false;
         }
 

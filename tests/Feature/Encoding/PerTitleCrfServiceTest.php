@@ -2,6 +2,7 @@
 
 use App\Models\Stream;
 use App\Services\PerTitleCrfService;
+use App\Services\SampleEncode;
 use Illuminate\Support\Facades\Process;
 
 describe('chooseCrf', function () {
@@ -32,15 +33,15 @@ describe('chooseCrf', function () {
     });
 });
 
-describe('sampleWindows', function () {
+describe('sample windows', function () {
     it('uses three windows for a short feature and four for a long one', function () {
-        expect(PerTitleCrfService::sampleWindows(1500.0))->toHaveCount(3)
-            ->and(PerTitleCrfService::sampleWindows(6800.0))->toHaveCount(4);
+        expect(SampleEncode::windows(1500.0))->toHaveCount(3)
+            ->and(SampleEncode::windows(6800.0))->toHaveCount(4);
     });
 
     it('keeps every window inside the runtime', function () {
         foreach ([130.0, 1500.0, 6800.0] as $duration) {
-            foreach (PerTitleCrfService::sampleWindows($duration) as $start) {
+            foreach (SampleEncode::windows($duration) as $start) {
                 expect($start)->toBeGreaterThanOrEqual(0.0)
                     ->and($start)->toBeLessThanOrEqual($duration - 20);
             }

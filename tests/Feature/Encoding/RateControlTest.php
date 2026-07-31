@@ -1,47 +1,20 @@
 <?php
 
-use App\Services\ChunkTranscodeService;
-use App\Services\QualityBitrateProbe;
-use Illuminate\Support\Facades\Process;
-
 /**
- * Rate control is resolved in exactly one place ({@see ChunkTranscodeService::resolveRateControl}),
+ * Rate control is resolved in exactly one place ({@see App\Services\Concerns\ResolvesRateControl}),
  * so this covers every mode it can pick, per codec: quality mode capped by the encoder's own VBV,
  * quality mode on an encoder blind to one, QSV's QVBR steering, and pinned ABR — each asserted on
  * the command that actually reaches ffmpeg.
  */
 
-/** A cheap 1.26 Mbps 1080p h264 source: the staging case where a re-encode outgrew its source. */
-const LIGHT_SOURCE = [
-    'index' => 0,
-    'source_codec' => 'h264',
-    'source_pix_fmt' => 'yuv420p',
-    'source_width' => 1920,
-    'source_height' => 1080,
-    'source_bit_rate' => 1_263_599,
-];
+use App\Services\ChunkTranscodeService;
+use App\Services\QualityBitrateProbe;
+use Illuminate\Support\Facades\Process;
 
 function rateArgs(array $params, array $meta = LIGHT_SOURCE, int $width = 1920, int $height = 1080): string
 {
     return (new ChunkTranscodeService(matrixStream($params, meta: $meta, width: $width, height: $height)))
         ->buildVideoArguments(windowed: true);
-}
-
-/** The quality knob each codec steers with, as its template renders it. */
-const QUALITY_KNOBS = [
-    'libx264' => ['crf' => 23, 'flag' => '-crf 23'],
-    'libx265' => ['crf' => 26, 'flag' => '-crf 26'],
-    'libsvtav1' => ['svtav1_crf' => 30, 'flag' => '-crf 30'],
-    'h264_qsv' => ['qsv_global_quality' => 23, 'flag' => '-global_quality 23'],
-    'hevc_qsv' => ['qsv_global_quality' => 24, 'flag' => '-global_quality 24'],
-    'av1_qsv' => ['qsv_global_quality' => 22, 'flag' => '-global_quality 22'],
-    'h264_nvenc' => ['nvenc_cq' => 25, 'flag' => '-cq 25'],
-    'av1_nvenc' => ['nvenc_cq' => 30, 'flag' => '-cq 30'],
-];
-
-function qualityTemplate(string $codec, array $extra = []): array
-{
-    return ['video_codec' => $codec, 'gop_size' => 60, ...collect(QUALITY_KNOBS[$codec])->except('flag')->all(), ...$extra];
 }
 
 describe('uncapped quality templates', function () {
