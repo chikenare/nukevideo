@@ -349,7 +349,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 'ulid' => $sub->ulid,
                 'height' => null,
                 'language' => $sub->language,
-                'forced' => (bool) data_get($sub->meta, 'forced', false),
+                'forced' => $sub->forced,
                 'hearing_impaired' => (bool) data_get($sub->meta, 'hearing_impaired', false),
                 'name' => $sub->name,
             ];

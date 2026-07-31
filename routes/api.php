@@ -70,6 +70,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('videos/{video}', [VideoController::class, 'destroy']);
 
         // Streams
+        Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);
         Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
 
         // Activity log (scoped to the project's videos)

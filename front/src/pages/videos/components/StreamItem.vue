@@ -15,20 +15,25 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
 type Stream = App.Data.StreamData
-import { MoreVertical, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk } from '@lucide/vue'
+import { MoreVertical, Pencil, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk } from '@lucide/vue'
 import prettyBytes from 'pretty-bytes'
 import { toast } from 'vue-sonner'
 
-const { stream, codecLabel } = defineProps<{
+const { stream, codecLabel, editable } = defineProps<{
   stream: Stream
   /** Resolves an ffmpeg codec name (e.g. `libx264`) to its display label; falls back to the raw name. */
   codecLabel: (codec?: string | null) => string | null
+  /** False while the video is still processing — the API rejects edits until then. */
+  editable?: boolean
 }>()
-const emit = defineEmits(['onDeleted'])
+const emit = defineEmits<{ onDeleted: []; onEdit: [stream: Stream] }>()
 
 const isErrorExpanded = ref(false)
 const isDeleteDialogOpen = ref(false)
-const isForced = computed(() => stream.type === 'subtitle' && Boolean(stream.meta?.forced))
+const isForced = computed(() => stream.type === 'subtitle' && stream.forced)
+
+// Only audio and text tracks carry a name, language or forced flag in a manifest.
+const canEdit = computed(() => editable && ['audio', 'subtitle'].includes(stream.type))
 
 const handleDelete = async () => {
   try {
@@ -123,6 +128,9 @@ const details = computed(() => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem v-if="canEdit" @click="emit('onEdit', stream)">
+              <Pencil :size="14" class="mr-2" /> Edit
+            </DropdownMenuItem>
             <DropdownMenuItem @click="isDeleteDialogOpen = true" class="text-destructive">
               <Trash2 :size="14" class="mr-2" /> Delete
             </DropdownMenuItem>

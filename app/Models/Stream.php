@@ -27,6 +27,7 @@ class Stream extends Model
         'width',
         'height',
         'language',
+        'forced',
         'channels',
 
         'error_log',
@@ -48,6 +49,7 @@ class Stream extends Model
             'input_params' => 'array',
             'package_size' => 'integer',
             'file_size' => 'integer',
+            'forced' => 'boolean',
         ];
     }
 
