@@ -55,13 +55,26 @@ class Template extends Model
         return $query->where('ulid', $ulid)->firstOrFail();
     }
 
+    /**
+     * GPU families this template's outputs encode on, empty for an all-CPU template.
+     *
+     * @return list<string>
+     */
+    public function accels(): array
+    {
+        return collect($this->query['outputs'] ?? [])
+            ->map(fn (array $output) => ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
     /** First GPU family this template needs that no active worker node provides, or null. */
     public function missingAccel(): ?string
     {
-        foreach ($this->query['outputs'] ?? [] as $output) {
-            $accel = ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null);
-
-            if ($accel && ! Node::worker()->active()->where('accel', $accel)->exists()) {
+        foreach ($this->accels() as $accel) {
+            if (! Node::worker()->active()->where('accel', $accel)->exists()) {
                 return $accel;
             }
         }

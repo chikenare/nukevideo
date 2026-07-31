@@ -7,15 +7,15 @@ use App\Support\Cpu;
 
 class ChunkTranscodeService
 {
-    use Concerns\BuildsArguments, Concerns\DetectsStreamCopy, Concerns\ResolvesScale;
+    use Concerns\BuildsArguments, Concerns\DetectsStreamCopy, Concerns\ResolvesRateControl, Concerns\ResolvesScale;
 
     public function __construct(
         private Stream $stream,
     ) {}
 
     /**
-     * The ffmpeg output muxer (`-f`) for this stream, resolved per codec from config/ffmpeg.php.
-     * Passed explicitly because the `.part` output paths give ffmpeg no extension to infer it from.
+     * The ffmpeg output muxer (`-f`) for this stream. Passed explicitly because the `.part` output
+     * paths give ffmpeg no extension to infer it from.
      */
     public function outputFormat(): string
     {
@@ -31,10 +31,9 @@ class ChunkTranscodeService
     }
 
     /**
-     * The container/muxer a codec is packaged into (config/ffmpeg.php `format`). This doubles as
-     * the stored file extension and the ffmpeg `-f` muxer, so the two can never disagree. nginx-vod
-     * reads MP4 only, so every codec we serve (incl. Opus, via ISO-BMFF) maps to mp4; this stays
-     * codec-driven for any future non-mp4 container. Falls back to mp4 for unknown/unset codecs.
+     * The container a codec is packaged into (config/ffmpeg.php `format`), doubling as the stored
+     * file extension and the ffmpeg `-f` muxer so the two can never disagree. nginx-vod reads MP4
+     * only, so everything we serve (incl. Opus, via ISO-BMFF) maps to mp4.
      */
     public static function formatForCodec(?string $codec): string
     {
@@ -45,6 +44,19 @@ class ChunkTranscodeService
     public static function accelForCodec(?string $codec): ?string
     {
         return collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec)['accel'] ?? null;
+    }
+
+    /**
+     * Whether this stream's encoder can run on the node executing right now. Chunk jobs are routed
+     * to matching hardware by {@see \App\Models\Stream::encodeQueue}, but the orchestration jobs that
+     * encode a sample themselves ({@see SampleEncode}) run wherever they land — and `av1_qsv` on a
+     * node with no QSV device fails for want of hardware, not of parameters.
+     */
+    public function runsOnThisNode(): bool
+    {
+        $accel = self::accelForCodec(data_get($this->stream->input_params, 'video_codec'));
+
+        return $accel === null || $accel === config('ffmpeg.node_accel');
     }
 
     /** Source codecs every supported GPU generation decodes in hardware. */
@@ -110,9 +122,8 @@ class ChunkTranscodeService
     private const TEN_BIT_FORMATS = ['yuv420p10le', 'p010le'];
 
     /**
-     * AV1 always encodes 10-bit, even from 8-bit sources: same speed and weight on the media
-     * engine, and the extra precision kills dark-gradient banding — the encoder has no
-     * per-block AQ to fight it otherwise. H.264 is 8-bit only; HEVC follows the source.
+     * AV1 always encodes 10-bit, even from 8-bit sources: same speed and weight on the media engine,
+     * and the extra precision kills dark-gradient banding. H.264 is 8-bit only; HEVC follows the source.
      */
     private function gpuEncodeFormat(string $codec): string
     {
@@ -127,11 +138,9 @@ class ChunkTranscodeService
 
     public function buildVideoArguments(bool $windowed = false): string
     {
-        // Copy fast-path: remux when the source already matches the target codec/size at or under
-        // the target bitrate. Skipped for window-cut chunks: `-c:v copy` can't honour the accurate
-        // `-ss/-to` cut — it snaps back to the previous keyframe, so adjacent chunks overlap and the
-        // concatenated rendition runs long. Video is always chunked today, so this only ever remuxes
-        // a whole-source (non-windowed) pass.
+        // Copy fast-path: remux when the source already matches the target codec/size at or under the
+        // target bitrate. Never for window-cut chunks — `-c:v copy` snaps back to the previous
+        // keyframe, so adjacent chunks overlap and the concatenated rendition runs long.
         if (! $windowed && $this->shouldCopyVideo()) {
             return implode(' ', [
                 '-c:v copy',
@@ -140,13 +149,9 @@ class ChunkTranscodeService
             ]);
         }
 
-        $params = $this->clampMaxrateToSource($this->stream->input_params ?? []);
+        $params = $this->resolveRateControl($this->stream->input_params ?? []);
 
         $accel = self::accelForCodec($params['video_codec'] ?? null);
-
-        if ($accel === 'intel') {
-            $params = $this->steerQsvRateControl($params);
-        }
 
         $args = [];
 
@@ -171,123 +176,34 @@ class ChunkTranscodeService
 
         $args = array_merge($args, $this->buildParamsArguments($params, 'video'));
 
-        // Force an ABR-aligned keyframe grid: disable scene-cut (else keyframes drift off the
-        // `-g` grid and misalign across renditions) and close the GOP. Flags and the thread
-        // syntax are codec-specific — `-threads`/`-sc_threshold` only reach libx264, while x265
-        // and svtav1 need `pools=`/`lp=` inside their *-params strings.
-        $threads = $this->perEncoderThreads();
-        $args[] = match ($params['video_codec'] ?? null) {
-            'libx265' => '-x265-params scenecut=0:open-gop=0'.($threads > 0 ? ":pools={$threads}" : ''),
-            'libsvtav1' => $this->svtAv1Params($params, $threads),
-            // QSV: pin I-frames to the -g grid; -mbbrc = adaptive per-block quant (h264/hevc; AV1
-            // has no such option). AV1's BRC lever is -extbrc + lookahead instead — but only in
-            // quality mode; under VBR (pinned -b:v) the AV1 runtime rejects extension flags.
-            'h264_qsv', 'hevc_qsv' => '-adaptive_i 0 -mbbrc 1',
-            'av1_qsv' => '-adaptive_i 0'.(empty($params['constant_bitrate']) ? ' -extbrc 1 -look_ahead_depth 16' : ''),
-            'h264_nvenc', 'hevc_nvenc', 'av1_nvenc' => '-no-scenecut 1 -forced-idr 1'.$this->nvencBitrateReset($params),
-            default => '-sc_threshold 0 -x264-params open-gop=0'.($threads > 0 ? " -threads {$threads}" : ''), // libx264
-        };
+        $args[] = $this->keyframeGridArguments($params);
         $args[] = '-map '.$this->mapTarget();
         $args[] = '-an'; // video-only: audio is its own rendition/chunk set
 
         return implode(' ', $args);
     }
 
-    // Below this a source bitrate is bogus probe data, and the clamp would emit '-maxrate 0k'.
-    private const MIN_CLAMP_BPS = 100_000;
-
     /**
-     * Safety net for already-compressed sources: cap the template VBV at the source's own
-     * bitrate (scaled to the rendition's pixel count) so a re-encode never outweighs its source.
-     * Skipped for ABR templates (clamping under their pinned -b:v would corrupt the VBV triple)
-     * and when the target codec is less efficient than the source's — matching an AV1 source's
-     * bitrate with x264 would starve it.
+     * Force an ABR-aligned keyframe grid: disable scene-cut (else keyframes drift off the `-g` grid
+     * and misalign across renditions) and close the GOP. The flags and the thread syntax are
+     * codec-specific — `-threads`/`-sc_threshold` only reach libx264, while x265 and svtav1 need
+     * `pools=`/`lp=` inside their *-params strings.
      */
-    private function clampMaxrateToSource(array $params): array
+    private function keyframeGridArguments(array $params): string
     {
-        if (empty($params['maxrate']) || ! empty($params['constant_bitrate'])) {
-            return $params;
-        }
+        $threads = $this->perEncoderThreads();
 
-        $meta = $this->stream->meta ?? [];
-
-        if (self::codecRank($params['video_codec'] ?? null) < self::codecRank($meta['source_codec'] ?? null)) {
-            return $params;
-        }
-
-        $sourceRate = (int) ($meta['source_bit_rate'] ?? 0);
-        $sourcePixels = (int) ($meta['source_width'] ?? 0) * (int) ($meta['source_height'] ?? 0);
-        $targetPixels = (int) $this->stream->width * (int) $this->stream->height;
-
-        if ($sourceRate <= 0 || $sourcePixels <= 0 || $targetPixels <= 0) {
-            return $params;
-        }
-
-        // Bitrate scales sublinearly with resolution (~0.75 power law).
-        $cap = (int) round($sourceRate * min(1.0, ($targetPixels / $sourcePixels) ** 0.75));
-        $maxrate = $this->parseBitrateValue($params['maxrate']);
-
-        if ($cap < self::MIN_CLAMP_BPS || $cap >= $maxrate) {
-            return $params;
-        }
-
-        if (! empty($params['bufsize'])) {
-            // Keep the template's own bufsize:maxrate ratio — a strict 1x VBV stays strict.
-            $ratio = $this->parseBitrateValue($params['bufsize']) / max(1, $maxrate);
-            $params['bufsize'] = intdiv((int) round($cap * $ratio), 1000).'k';
-        }
-
-        $params['maxrate'] = intdiv($cap, 1000).'k';
-
-        return $params;
-    }
-
-    /** Rough compression-efficiency ordering of codec generations. */
-    private static function codecRank(?string $codec): int
-    {
-        return match ($codec) {
-            'libsvtav1', 'av1', 'av1_qsv', 'av1_nvenc' => 3,
-            'libx265', 'hevc', 'vp9', 'hevc_qsv', 'hevc_nvenc' => 2,
-            default => 1, // h264 family and anything older/unknown
+        return match ($params['video_codec'] ?? null) {
+            'libx265' => '-x265-params scenecut=0:open-gop=0'.($threads > 0 ? ":pools={$threads}" : ''),
+            'libsvtav1' => $this->svtAv1Params($params, $threads),
+            // QSV: pin I-frames to the -g grid; -mbbrc = adaptive per-block quant (h264/hevc only).
+            // AV1's BRC lever is -extbrc + lookahead instead, and only in quality mode — under VBR
+            // (pinned -b:v) the AV1 runtime rejects extension flags.
+            'h264_qsv', 'hevc_qsv' => '-adaptive_i 0 -mbbrc 1',
+            'av1_qsv' => '-adaptive_i 0'.(empty($params['constant_bitrate']) ? ' -extbrc 1 -look_ahead_depth 16' : ''),
+            'h264_nvenc', 'hevc_nvenc', 'av1_nvenc' => '-no-scenecut 1 -forced-idr 1'.$this->nvencBitrateReset($params),
+            default => '-sc_threshold 0 -x264-params open-gop=0'.($threads > 0 ? " -threads {$threads}" : ''), // libx264
         };
-    }
-
-    // QVBR's average target as a fraction of the template's peak cap.
-    private const QSV_QVBR_TARGET_RATIO = 0.75;
-
-    /**
-     * Steer QSV into a real quality mode (verified on Arc B580/iHD): global_quality+maxrate
-     * alone selects CQP and silently drops the cap. QVBR needs a -b:v below maxrate — and the
-     * AV1 runtime has no QVBR at all, so its cap is dropped to land in ICQ.
-     */
-    private function steerQsvRateControl(array $params): array
-    {
-        if (! empty($params['constant_bitrate'])) {
-            return $params;
-        }
-
-        // AV1 has no QVBR: without a pinned -b:v any cap lands it in CQP (or an unsupported
-        // mode alongside the extension flags), so the cap is always dropped in favour of ICQ.
-        if (str_starts_with($params['video_codec'], 'av1')) {
-            unset($params['maxrate'], $params['bufsize']);
-
-            return $params;
-        }
-
-        if (empty($params['qsv_global_quality']) || empty($params['maxrate'])) {
-            return $params;
-        }
-
-        $target = (int) round($this->parseBitrateValue($params['maxrate']) * self::QSV_QVBR_TARGET_RATIO / 1000);
-        $params['constant_bitrate'] = "{$target}k";
-
-        return $params;
-    }
-
-    /** NVENC's CQ mode only bites with `-b:v 0` — its default 2M bitrate target caps it otherwise. */
-    private function nvencBitrateReset(array $params): string
-    {
-        return ! empty($params['nvenc_cq']) && empty($params['constant_bitrate']) ? ' -b:v 0' : '';
     }
 
     /**
@@ -354,9 +270,8 @@ class ChunkTranscodeService
     }
 
     /**
-     * The source track this rendition encodes. Uses the stream's absolute index (not
-     * 0:v:0 / 0:a:0) so multi-track sources (e.g. several audio languages) each map their
-     * own track instead of collapsing onto the first.
+     * The source track this rendition encodes. Uses the stream's absolute index (not 0:v:0 / 0:a:0)
+     * so multi-track sources each map their own track instead of collapsing onto the first.
      */
     public function mapTarget(): string
     {
