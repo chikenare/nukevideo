@@ -28,7 +28,10 @@ Thumbs.db
 # Dependencies (installed in container)
 /vendor
 /node_modules
-/front/node_modules
+
+# SPA: the api and proxy images never serve it, and shipping it in the context invalidates
+# api-build's `COPY . .` layer on every front-only commit. front-dev bind-mounts it at runtime.
+/front
 
 # Storage & cache
 /storage/app/private/*

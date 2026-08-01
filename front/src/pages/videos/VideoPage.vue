@@ -13,7 +13,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useRoute } from 'vue-router'
 import VideoService from '@/services/VideoService'
-import prettyBytes from 'pretty-bytes'
+import { formatBytes } from '@/utils/byteFormatter'
+import StorageSize from '@/components/StorageSize.vue'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -133,7 +134,8 @@ const handleUpdate = async () => {
   }
 }
 
-const sizeFormatted = computed(() => prettyBytes(video.value?.size ?? 0, { binary: true }))
+/** Everything `size` counts beyond the streamed packages: kept renditions and the source. */
+const retainedSize = computed(() => (video.value?.size ?? 0) - (video.value?.servedSize ?? 0))
 
 const formatLabel: Record<string, string> = {
   hls: 'HLS',
@@ -145,8 +147,8 @@ const formatIcon: Record<string, typeof Radio> = {
   dash: Box,
 }
 
-const getOutputSize = (output: Output): number =>
-  output.streams.reduce((sum, s) => sum + (s.packageSize ?? 0) + (s.fileSize ?? 0), 0)
+const sumStreams = (output: Output, key: 'packageSize' | 'fileSize'): number =>
+  output.streams.reduce((sum, s) => sum + (s[key] ?? 0), 0)
 
 const subtitleStreams = computed(() =>
   video.value?.streams.filter(s => s.type === 'subtitle') ?? []
@@ -259,14 +261,14 @@ onUnmounted(() => {
           <span class="text-sm text-muted-foreground">Size</span>
           <div class="flex items-center gap-1.5">
             <HardDrive :size="14" class="text-muted-foreground" />
-            <span class="text-sm font-semibold">{{ sizeFormatted }}</span>
+            <StorageSize class="text-sm font-semibold" :served="video.servedSize" :retained="retainedSize" />
           </div>
         </div>
         <div v-if="originalStream" class="flex items-center justify-between py-2 border-b">
           <span class="text-sm text-muted-foreground">Source</span>
           <div class="flex items-center gap-1.5">
             <FileVideo :size="14" class="text-muted-foreground" />
-            <span class="text-sm font-semibold">{{ prettyBytes(originalStream.fileSize ?? 0) }}</span>
+            <span class="text-sm font-semibold">{{ formatBytes(originalStream.fileSize) }}</span>
             <Button
               v-if="canManageStreams"
               variant="ghost"
@@ -355,7 +357,11 @@ onUnmounted(() => {
                 <Badge :variant="getStatusVariant(output.status)" class="text-xs">{{ output.status }}</Badge>
               </div>
               <div class="flex items-center gap-2 shrink-0">
-                <span class="text-sm text-muted-foreground">{{ prettyBytes(getOutputSize(output)) }}</span>
+                <StorageSize
+                  class="text-sm text-muted-foreground"
+                  :served="sumStreams(output, 'packageSize')"
+                  :retained="sumStreams(output, 'fileSize')"
+                />
                 <Button
                   v-if="output.status === 'completed'"
                   variant="ghost"

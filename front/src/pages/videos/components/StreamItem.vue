@@ -16,7 +16,7 @@ import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
 type Stream = App.Data.StreamData
 import { MoreVertical, Pencil, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk } from '@lucide/vue'
-import prettyBytes from 'pretty-bytes'
+import StorageSize from '@/components/StorageSize.vue'
 import { toast } from 'vue-sonner'
 
 const { stream, codecLabel, editable } = defineProps<{
@@ -59,8 +59,6 @@ const codec = computed((): string | null => {
   if (stream.type === 'audio') return (stream.inputParams?.audio_codec as string) ?? null
   return null
 })
-
-const storedSize = computed(() => (stream.packageSize ?? 0) + (stream.fileSize ?? 0))
 
 const codecText = computed(() => codecLabel(codec.value))
 
@@ -109,7 +107,11 @@ const details = computed(() => {
       </div>
 
       <div class="flex items-center gap-1.5 shrink-0">
-        <span class="text-xs text-muted-foreground">{{ prettyBytes(storedSize) }}</span>
+        <StorageSize
+          class="text-xs text-muted-foreground"
+          :served="stream.packageSize"
+          :retained="stream.fileSize"
+        />
 
         <Button
           v-if="stream.errorLog"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import prettyBytes from 'pretty-bytes'
+import { formatBytes } from '@/utils/byteFormatter'
 import { VisXYContainer, VisArea, VisAxis, VisLine } from '@unovis/vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -56,7 +56,7 @@ function pctOfTotal(bytes: number): string {
 
 function formatCardValue(card: AnalyticsCard): string {
   switch (card.format) {
-    case 'bytes': return prettyBytes(card.value)
+    case 'bytes': return formatBytes(card.value)
     case 'seconds': {
       if (card.value < 60) return `${card.value.toFixed(1)}s`
       if (card.value < 3600) return `${(card.value / 60).toFixed(1)}m`
@@ -141,7 +141,7 @@ function formatCardValue(card: AnalyticsCard): string {
               :line-width="2"
             />
             <VisAxis type="x" :x="(_: BandwidthOverTime, i: number) => i" :tick-format="(i: number) => data!.bandwidthOverTime[i] ? formatDate(data!.bandwidthOverTime[i].date) : ''" :num-ticks="6" />
-            <VisAxis type="y" :tick-format="(v: number) => prettyBytes(v)" />
+            <VisAxis type="y" :tick-format="(v: number) => formatBytes(v)" />
             <ChartCrosshair color="var(--chart-1)" :template="componentToString(bwChartConfig, ChartTooltipContent, { labelFormatter: (i: number | Date) => data!.bandwidthOverTime[Number(i)] ? formatDate(data!.bandwidthOverTime[Number(i)]!.date) : '' })" />
           </VisXYContainer>
         </ChartContainer>
@@ -171,7 +171,7 @@ function formatCardValue(card: AnalyticsCard): string {
             <TableBody>
               <TableRow v-for="ip in data.topIps" :key="ip.ip">
                 <TableCell class="font-mono text-xs">{{ ip.ip }}</TableCell>
-                <TableCell class="text-right text-xs">{{ prettyBytes(ip.bytes) }}</TableCell>
+                <TableCell class="text-right text-xs">{{ formatBytes(ip.bytes) }}</TableCell>
                 <TableCell class="text-right text-xs text-muted-foreground">{{ pctOfTotal(ip.bytes) }}</TableCell>
               </TableRow>
             </TableBody>
@@ -205,7 +205,7 @@ function formatCardValue(card: AnalyticsCard): string {
                   </RouterLink>
                   <span v-else class="text-muted-foreground">{{ video.externalResourceId?.slice(0, 8) || '—' }}</span>
                 </TableCell>
-                <TableCell class="text-right text-xs">{{ prettyBytes(video.bytes) }}</TableCell>
+                <TableCell class="text-right text-xs">{{ formatBytes(video.bytes) }}</TableCell>
                 <TableCell class="text-right text-xs text-muted-foreground">{{ pctOfTotal(video.bytes) }}</TableCell>
               </TableRow>
             </TableBody>
@@ -234,7 +234,7 @@ function formatCardValue(card: AnalyticsCard): string {
           <TableBody>
             <TableRow v-for="user in data.topExternalUsers" :key="user.externalUserId">
               <TableCell class="font-mono text-xs">{{ user.externalUserId }}</TableCell>
-              <TableCell class="text-right text-xs">{{ prettyBytes(user.bytes) }}</TableCell>
+              <TableCell class="text-right text-xs">{{ formatBytes(user.bytes) }}</TableCell>
             </TableRow>
           </TableBody>
         </Table>
