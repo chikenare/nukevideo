@@ -503,6 +503,7 @@ class CreateVideoStreamsService
 
         if ($codecType === 'subtitle') {
             $attributes['language'] = $this->sourceLanguage($stream);
+            $attributes['forced'] = $this->hasDisposition($stream, 'forced');
         }
 
         return $video->streams()->create($attributes);

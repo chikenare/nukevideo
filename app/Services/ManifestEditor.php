@@ -8,6 +8,7 @@ use App\Models\Video;
 use DOMDocument;
 use DOMElement;
 use DOMXPath;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -21,6 +22,18 @@ use Illuminate\Support\Facades\Storage;
 class ManifestEditor
 {
     private const DASH_NS = 'urn:mpeg:dash:schema:mpd:2011';
+
+    private const ROLE_SCHEME = 'urn:mpeg:dash:role:2011';
+
+    /** The only `<Role>` values {@see relabelStream} owns; anything else on the set is left alone. */
+    private const TEXT_ROLES = ['subtitle', 'caption', 'forced-subtitle'];
+
+    /** Rendered comma-separated into HLS `CHARACTERISTICS`, mirroring what the packager emits from
+     *  the semicolon-separated `hls_characteristics` descriptor field. */
+    private const CAPTION_CHARACTERISTICS = [
+        'public.accessibility.transcribes-spoken-dialog',
+        'public.accessibility.describes-music-and-sound',
+    ];
 
     /**
      * Re-uploads must keep the manifest's Content-Type or the VOD edge's `secure_token` module
@@ -90,6 +103,52 @@ class ManifestEditor
         }
 
         $disk->deleteDirectory($segmentsPath);
+    }
+
+    /**
+     * Rewrite one stream's presentation — label, language, forced flag — in every manifest that
+     * lists it, the counterpart to {@see removeStream}. Only audio and text tracks carry any of
+     * this in a manifest; a video rendition has no label, language or role
+     * ({@see \App\Services\PackagerCommandBuilder::streamDescriptor}).
+     *
+     * `$fields` narrows the write to what the user actually edited, because the packager normalizes
+     * languages to their shortest form: a source tagged `eng` is emitted as `lang="en"`, so
+     * rewriting a language nobody touched would drift the manifest back to the raw container value.
+     * Idempotent, so a retry after a partial failure converges. The segments' own `mdhd`/`elng`
+     * language is left alone — players read the manifest, so an edited package is simply not
+     * byte-identical to a repackaged one.
+     *
+     * @param  list<string>  $fields  any of `name`, `language`, `forced`
+     */
+    public function relabelStream(Video $video, Stream $stream, array $fields): void
+    {
+        if ($fields === []) {
+            return;
+        }
+
+        $disk = Storage::disk('s3');
+
+        // Same scoping as removeStream: subtitles aren't pivoted to outputs, they're grafted into
+        // every output's manifest.
+        $outputs = $stream->type === 'subtitle' ? $video->outputs : $stream->outputs;
+
+        foreach ($outputs as $output) {
+            foreach ($this->existingManifests($video, $output) as $manifest) {
+                ['format' => $format, 'path' => $path] = $manifest;
+
+                $content = $disk->get($path);
+
+                // Null already means "nothing to write" — a string compare can't stand in for it
+                // here, since saveXML() re-indents the whole document.
+                $edited = $format === 'dash'
+                    ? $this->dashRelabel($content, $stream, $fields)
+                    : $this->hlsRelabel($content, $stream, $fields);
+
+                if ($edited !== null) {
+                    $disk->put($path, $edited, ['ContentType' => self::CONTENT_TYPES[$format]]);
+                }
+            }
+        }
     }
 
     /**
@@ -311,6 +370,161 @@ class ManifestEditor
         return $doc->saveXML();
     }
 
+    // --- DASH relabel ------------------------------------------------------
+
+    /**
+     * Rewrite the `AdaptationSet` packaged under this stream's ulid. Returns null when the manifest
+     * doesn't list the stream or when nothing would change.
+     *
+     * @param  list<string>  $fields
+     */
+    private function dashRelabel(string $xml, Stream $stream, array $fields): ?string
+    {
+        [$doc, $xpath] = $this->loadMpd($xml);
+
+        if (! $doc) {
+            return null;
+        }
+
+        $set = $this->segmentTemplate($xpath, $stream->ulid)?->parentNode?->parentNode;
+
+        if (! $set instanceof DOMElement || $set->localName !== 'AdaptationSet') {
+            return null;
+        }
+
+        // A set holding several renditions was merged by the packager (same language and label —
+        // what uniqueName() exists to prevent); its lang/label describe all of them, so editing one
+        // stream through it would silently relabel the siblings too.
+        if ($xpath->query('m:Representation', $set)->length > 1) {
+            Log::warning('Skipping relabel of a shared AdaptationSet', ['stream' => $stream->id]);
+
+            return null;
+        }
+
+        $changed = false;
+
+        if (in_array('language', $fields, true)) {
+            $changed = $this->dashSetLanguage($set, $stream->language) || $changed;
+        }
+
+        if (in_array('name', $fields, true)) {
+            $changed = $this->dashSetLabel($doc, $xpath, $set, (string) $stream->name) || $changed;
+        }
+
+        if ($stream->type === 'subtitle' && in_array('forced', $fields, true)) {
+            $changed = $this->dashSetTextRole($doc, $xpath, $set, $stream) || $changed;
+        }
+
+        return $changed ? $doc->saveXML() : null;
+    }
+
+    private function dashSetLanguage(DOMElement $set, ?string $language): bool
+    {
+        $next = (string) $language;
+
+        if ($set->getAttribute('lang') === $next) {
+            return false;
+        }
+
+        if ($next === '') {
+            $set->removeAttribute('lang');
+        } else {
+            $set->setAttribute('lang', $next);
+        }
+
+        return true;
+    }
+
+    /** The packager writes the label as a `<Label>` child, right before the first `<Representation>`. */
+    private function dashSetLabel(DOMDocument $doc, DOMXPath $xpath, DOMElement $set, string $label): bool
+    {
+        $existing = $xpath->query('m:Label', $set)->item(0);
+
+        if ($existing instanceof DOMElement) {
+            if ($existing->textContent === $label) {
+                return false;
+            }
+
+            $existing->textContent = $label;
+
+            return true;
+        }
+
+        $node = $doc->createElementNS(self::DASH_NS, 'Label');
+        $node->appendChild($doc->createTextNode($label));
+
+        $this->insertBeforeRepresentations($xpath, $set, $node);
+
+        return true;
+    }
+
+    /**
+     * Keep exactly one managed `<Role>` on a text set, mirroring the single role
+     * {@see \App\Services\PackagerCommandBuilder::textDescriptor} emits for the same flags. The
+     * first managed role is edited in place so it keeps its document position; roles outside the
+     * managed set aren't ours and stay.
+     */
+    private function dashSetTextRole(DOMDocument $doc, DOMXPath $xpath, DOMElement $set, Stream $stream): bool
+    {
+        $managed = [];
+
+        foreach ($xpath->query("m:Role[@schemeIdUri='".self::ROLE_SCHEME."']", $set) as $role) {
+            if ($role instanceof DOMElement && in_array($role->getAttribute('value'), self::TEXT_ROLES, true)) {
+                $managed[] = $role;
+            }
+        }
+
+        $first = array_shift($managed);
+        $changed = $managed !== [];
+
+        foreach ($managed as $extra) {
+            $set->removeChild($extra);
+        }
+
+        $value = $this->textRole($stream);
+
+        if ($first instanceof DOMElement) {
+            if ($first->getAttribute('value') === $value) {
+                return $changed;
+            }
+
+            $first->setAttribute('value', $value);
+
+            return true;
+        }
+
+        $role = $doc->createElementNS(self::DASH_NS, 'Role');
+        $role->setAttribute('schemeIdUri', self::ROLE_SCHEME);
+        $role->setAttribute('value', $value);
+
+        $this->insertBeforeRepresentations($xpath, $set, $role);
+
+        return true;
+    }
+
+    private function insertBeforeRepresentations(DOMXPath $xpath, DOMElement $set, DOMElement $node): void
+    {
+        $first = $xpath->query('m:Representation', $set)->item(0);
+
+        if ($first instanceof DOMElement) {
+            $set->insertBefore($node, $first);
+
+            return;
+        }
+
+        $set->appendChild($node);
+    }
+
+    /** @see \App\Services\PackagerCommandBuilder::textDescriptor — a forced track wins over SDH. */
+    private function textRole(Stream $stream): string
+    {
+        if ($stream->forced) {
+            return 'forced-subtitle';
+        }
+
+        return data_get($stream->meta, 'hearing_impaired', false) ? 'caption' : 'subtitle';
+    }
+
     /** @return array{0:?DOMDocument,1:?DOMXPath} */
     private function loadMpd(string $xml): array
     {
@@ -394,6 +608,99 @@ class ManifestEditor
         }
 
         return $hit ? implode("\n", $out) : null;
+    }
+
+    /**
+     * Rewrite this stream's `#EXT-X-MEDIA` line in a master playlist. Only masters carry these
+     * attributes — a media playlist (`{ulid}/index.m3u8`) holds nothing but segments. Null when the
+     * stream isn't listed or nothing changed.
+     *
+     * @param  list<string>  $fields
+     */
+    private function hlsRelabel(string $content, Stream $stream, array $fields): ?string
+    {
+        $needle = "URI=\"{$stream->ulid}/";
+        $lines = preg_split('/\R/', $content);
+        $attributes = $this->hlsAttributes($stream, $fields);
+        $changed = false;
+
+        foreach ($lines as $i => $line) {
+            if (! str_starts_with($line, '#EXT-X-MEDIA') || ! str_contains($line, $needle)) {
+                continue;
+            }
+
+            $edited = $this->hlsSetMediaAttributes($line, $attributes);
+
+            if ($edited !== $line) {
+                $lines[$i] = $edited;
+                $changed = true;
+            }
+        }
+
+        return $changed ? implode("\n", $lines) : null;
+    }
+
+    /**
+     * The `#EXT-X-MEDIA` attributes this edit owns, null meaning "remove". `DEFAULT` and `AUTOSELECT`
+     * are deliberately absent: the packager emits `DEFAULT=NO,AUTOSELECT=YES` on every audio and text
+     * track whether or not it is forced, so they aren't ours to touch. `FORCED` and `CHARACTERISTICS`
+     * only ever exist in their positive form (RFC 8216 §4.3.4.1 — an absent `FORCED` means NO).
+     *
+     * @param  list<string>  $fields
+     * @return array<string, ?string>
+     */
+    private function hlsAttributes(Stream $stream, array $fields): array
+    {
+        $attributes = [];
+
+        if (in_array('name', $fields, true)) {
+            $attributes['NAME'] = (string) $stream->name;
+        }
+
+        if (in_array('language', $fields, true)) {
+            $attributes['LANGUAGE'] = $stream->language ?: null;
+        }
+
+        if ($stream->type === 'subtitle' && in_array('forced', $fields, true)) {
+            $attributes['FORCED'] = $stream->forced ? 'YES' : null;
+            $attributes['CHARACTERISTICS'] = $this->textRole($stream) === 'caption'
+                ? implode(',', self::CAPTION_CHARACTERISTICS)
+                : null;
+        }
+
+        return $attributes;
+    }
+
+    /**
+     * Insert/replace/remove attributes on one `#EXT-X-MEDIA` line — in place where already present,
+     * appended otherwise, since RFC 8216 §4.2 makes attribute order insignificant.
+     *
+     * @param  array<string, ?string>  $attributes
+     */
+    private function hlsSetMediaAttributes(string $line, array $attributes): string
+    {
+        foreach ($attributes as $key => $value) {
+            // Comma-anchored so LANGUAGE can't match inside ASSOC-LANGUAGE; TYPE is always the first
+            // attribute, so none of ours is ever line-initial.
+            $pattern = '/,'.$key.'=(?:"[^"]*"|[^,]*)/';
+
+            if ($value === null) {
+                $line = preg_replace($pattern, '', $line, 1);
+
+                continue;
+            }
+
+            // FORCED is an enumerated-string; the rest are quoted-strings. Values can't contain a
+            // quote, comma or newline ({@see \App\Data\Stream\UpdateStreamData}).
+            $rendered = ",{$key}=".($key === 'FORCED' ? $value : "\"{$value}\"");
+
+            // Callback, not a replacement string: a `$1` in a user-chosen name is not a backreference.
+            $line = preg_match($pattern, $line)
+                ? preg_replace_callback($pattern, fn () => $rendered, $line, 1)
+                : $line.$rendered;
+        }
+
+        return $line;
     }
 
     /**

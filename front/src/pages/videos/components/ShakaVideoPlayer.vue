@@ -55,6 +55,15 @@ const handlePlayVideo = async () => {
     await player.attach(videoEl.value!)
     ui = new shaka.ui.Overlay(player, containerEl.value!, videoEl.value!)
 
+    // Shaka's menus default to naming tracks by LANGUAGE, which ignores the track label entirely —
+    // two Spanish audio tracks both read as "Español" and subtitles fall back to their DASH role
+    // ("subtitle", "caption", "forced-subtitle"). LABEL_OR_LANGUAGE shows the label we package into
+    // the manifest (DASH `<Label>` / HLS `NAME`) and only falls back to the language when absent.
+    ui.configure({
+      trackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL_OR_LANGUAGE,
+      textTrackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL_OR_LANGUAGE,
+    })
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     player.addEventListener('error', (event: any) => {
       console.error('Shaka Player error', event.detail)

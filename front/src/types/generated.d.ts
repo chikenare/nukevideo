@@ -34,6 +34,7 @@ bunny: App.Data.BunnyConfigData,
 };
 export type NodeData = {
 id: number,
+uuid: string,
 name: string,
 user: string | null,
 ipAddress: string,
@@ -103,6 +104,7 @@ meta: Record<string, any> | null,
 width: number | null,
 height: number | null,
 language: string | null,
+forced: boolean,
 channels: number | null,
 errorLog: string | null,
 createdAt: string,
@@ -273,6 +275,13 @@ export type StoreSshKeyData = {
 name: string,
 publicKey: string,
 privateKey: string,
+};
+}
+namespace Stream {
+export type UpdateStreamData = {
+name: string,
+language: string | null,
+forced: boolean,
 };
 }
 namespace Template {

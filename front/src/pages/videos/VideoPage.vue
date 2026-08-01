@@ -29,6 +29,7 @@ import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon, Clock, HardDrive,
 import { formatSecondsToTime } from '@/utils/timeFormatter'
 import DeleteVideoButton from './components/DeleteVideoButton.vue'
 import StreamItem from './components/StreamItem.vue'
+import EditStreamDialog from './components/EditStreamDialog.vue'
 import { toast } from 'vue-sonner'
 import { ApiException } from '@/exceptions/ApiException'
 import ShakaVideoPlayer from './components/ShakaVideoPlayer.vue'
@@ -80,6 +81,23 @@ const getStatusVariant = (status: VideoStatus): BadgeVariant => {
     uploading: 'default',
   }
   return variants[status] || 'default'
+}
+
+const editStreamDialog = ref<InstanceType<typeof EditStreamDialog>>()
+
+/**
+ * A subtitle is the very same object in every output card (`outputStreams` concatenates the
+ * video-level list), so replacing it in `video.streams` refreshes all of them at once. An audio
+ * track is serialized per output, so each `output.streams` copy has to be replaced too.
+ */
+function onStreamUpdated(updated: Stream) {
+  const replace = (streams?: Stream[]) => {
+    const idx = streams?.findIndex(s => s.ulid === updated.ulid) ?? -1
+    if (idx !== -1) streams?.splice(idx, 1, updated)
+  }
+
+  replace(video.value?.streams)
+  video.value?.outputs.forEach(output => replace(output.streams))
 }
 
 function onStreamDeleted(stream: Stream) {
@@ -141,8 +159,8 @@ const originalStream = computed(() =>
 
 const isDeleteSourceOpen = ref(false)
 
-// The API rejects deleting any stream of a video that is still being processed.
-const canDeleteSource = computed(() =>
+// The API rejects deleting or editing any stream of a video that is still being processed.
+const canManageStreams = computed(() =>
   !!video.value && terminalStatuses.includes(video.value.status)
 )
 
@@ -250,7 +268,7 @@ onUnmounted(() => {
             <FileVideo :size="14" class="text-muted-foreground" />
             <span class="text-sm font-semibold">{{ prettyBytes(originalStream.fileSize ?? 0) }}</span>
             <Button
-              v-if="canDeleteSource"
+              v-if="canManageStreams"
               variant="ghost"
               size="icon"
               class="h-6 w-6 text-destructive"
@@ -376,13 +394,17 @@ onUnmounted(() => {
                 :key="stream.ulid"
                 :stream="stream"
                 :codec-label="codecLabel"
+                :editable="canManageStreams"
                 @on-deleted="() => onStreamDeleted(stream)"
+                @on-edit="s => editStreamDialog?.show(s)"
               />
             </div>
           </CardContent>
         </Card>
       </div>
     </div>
+
+    <EditStreamDialog ref="editStreamDialog" @updated="onStreamUpdated" />
 
     <!-- Edit Video Dialog -->
     <Dialog v-model:open="isEditDialogOpen">

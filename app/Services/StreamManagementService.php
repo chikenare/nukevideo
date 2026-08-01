@@ -2,15 +2,80 @@
 
 namespace App\Services;
 
+use App\Data\Stream\UpdateStreamData;
 use App\Enums\VideoStatus;
 use App\Models\Project;
 use App\Models\Stream;
+use App\Models\Video;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 class StreamManagementService
 {
     public function __construct(private ManifestEditor $manifests) {}
+
+    /**
+     * Rename / relanguage / (un)force a track and push it into the already-packaged manifests. Runs
+     * under a lock on the video row because every stream of a video shares the same manifest files:
+     * two concurrent edits would otherwise read-modify-write the same objects and the later one
+     * would silently revert the earlier.
+     */
+    public function update(string $ulid, UpdateStreamData $data, Project $project): Stream
+    {
+        return DB::transaction(function () use ($ulid, $data, $project) {
+            $stream = $this->findOrFail($ulid, $project);
+            $video = $stream->video;
+
+            Video::whereKey($video->id)->lockForUpdate()->first();
+
+            if (! in_array($stream->type, ['audio', 'subtitle'], true)) {
+                throw ValidationException::withMessages(['message' => 'Only audio and subtitle tracks can be edited.'])->status(400);
+            }
+
+            if (! in_array($video->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
+                throw ValidationException::withMessages(['message' => 'You cannot edit any stream until the video is processed.'])->status(400);
+            }
+
+            $this->assertNameIsFree($stream, $data->name);
+
+            $stream->update($data->toDatabase());
+
+            // Only what actually changed: the packager normalizes languages, so rewriting an
+            // untouched one would drift the manifests ({@see ManifestEditor::relabelStream}).
+            $fields = array_values(array_filter(
+                ['name', 'language', 'forced'],
+                fn (string $field) => $stream->wasChanged($field),
+            ));
+
+            // A FAILED video was never packaged, so it has no manifests to edit.
+            if ($video->status === VideoStatus::COMPLETED->value) {
+                $this->manifests->relabelStream($video, $stream, $fields);
+            }
+
+            return $stream;
+        });
+    }
+
+    /**
+     * Track names stay unique within their type: the packager merges same-language same-label tracks
+     * into one AdaptationSet and HLS groups collide on `NAME`, which is why the ingest dedupes them
+     * ({@see CreateVideoStreamsService::uniqueName}). Case-insensitive, like the ingest.
+     */
+    private function assertNameIsFree(Stream $stream, string $name): void
+    {
+        $taken = Stream::where('video_id', $stream->video_id)
+            ->where('type', $stream->type)
+            ->whereKeyNot($stream->id)
+            ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+            ->exists();
+
+        if ($taken) {
+            throw ValidationException::withMessages([
+                'name' => 'Another '.$stream->type.' track of this video already uses that name.',
+            ]);
+        }
+    }
 
     public function destroy(string $ulid, Project $project): void
     {
