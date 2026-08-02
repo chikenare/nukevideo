@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Stream;
 use App\Support\MediaSource;
 use Illuminate\Support\Collection;
+use InvalidArgumentException;
 
 class EncodeCommandBuilder
 {
@@ -19,6 +20,14 @@ class EncodeCommandBuilder
      */
     public static function build(Collection $streams, string $source, array $outputPaths, ?float $start = null, ?float $end = null): string
     {
+        $types = $streams->pluck('type')->unique();
+
+        // A subtitle output ends the whole ffmpeg session with exit 0 once its sparse text stream
+        // runs dry, cutting every sibling output short without a word on stderr. Own pass, always.
+        if ($types->count() > 1 && $types->contains('subtitle')) {
+            throw new InvalidArgumentException('Subtitle outputs need an ffmpeg pass of their own');
+        }
+
         $windowed = $start !== null && $end !== null;
 
         $seek = $windowed
