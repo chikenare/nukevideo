@@ -85,7 +85,7 @@ class PrepareVideoJob implements ShouldQueue
      * This job runs on `orchestration`, which every worker drains — GPU or not — but it encodes
      * sample windows itself ({@see resolveRenditions}), and a hardware encoder needs its hardware.
      * So hand the video to a node that has it; the fleet is known to have one
-     * ({@see assertAccelCapacity}) and GPU nodes drain this queue too. Bounded, because running
+     * ({@see assertEncodeCapacity}) and GPU nodes drain this queue too. Bounded, because running
      * unmeasured beats failing a video over scheduling.
      */
     private function handedToCapableNode(Video $video): bool
@@ -170,7 +170,7 @@ class PrepareVideoJob implements ShouldQueue
         $localPath = Storage::disk('local')->path($mirrorPath);
 
         try {
-            $this->assertAccelCapacity($video);
+            $this->assertEncodeCapacity($video);
 
             $this->ensureLocalSource($video, $mirrorPath, $localPath);
 
@@ -365,14 +365,14 @@ class PrepareVideoJob implements ShouldQueue
     }
 
     /**
-     * Second line of defense (ingest already refused templates without GPU capacity): a node
+     * Second line of defense (ingest already refused templates without capacity): a node
      * deactivated since then would leave the chunks on a queue nobody consumes and the video
      * hanging in RUNNING until the reaper — fail before fan-out with a message naming the gap.
      */
-    private function assertAccelCapacity(Video $video): void
+    private function assertEncodeCapacity(Video $video): void
     {
-        if ($accel = $video->template->missingAccel()) {
-            throw new RuntimeException("Template needs a {$accel} GPU worker node, but none is active.");
+        if ($missing = $video->template->missingCapacity()) {
+            throw new RuntimeException("Template needs a {$missing} worker node, but none is active.");
         }
     }
 

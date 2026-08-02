@@ -13,6 +13,9 @@ class Template extends Model
 {
     use BuildsArguments;
 
+    /** Marker for "encodes on the CPU queue", the counterpart of a node's GPU accel. */
+    public const CPU = 'cpu';
+
     protected $fillable = [
         'name',
         'query',
@@ -62,20 +65,39 @@ class Template extends Model
      */
     public function accels(): array
     {
+        return array_values(array_diff($this->capacities(), [self::CPU]));
+    }
+
+    /**
+     * Hardware each output encodes on: a GPU family, or CPU.
+     *
+     * @return list<string>
+     */
+    public function capacities(): array
+    {
         return collect($this->query['outputs'] ?? [])
-            ->map(fn (array $output) => ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null))
-            ->filter()
+            ->map(fn (array $output) => ChunkTranscodeService::accelForCodec($output['video_codec'] ?? null) ?? self::CPU)
             ->unique()
             ->values()
             ->all();
     }
 
-    /** First GPU family this template needs that no active worker node provides, or null. */
-    public function missingAccel(): ?string
+    /**
+     * First hardware this template needs that no active worker node provides, or null. Chunks are
+     * routed per hardware ({@see Stream::encodeQueue}), so a missing family — CPU included, since
+     * GPU nodes never drain the CPU queue — leaves the video hanging until the reaper.
+     */
+    public function missingCapacity(): ?string
     {
-        foreach ($this->accels() as $accel) {
-            if (! Node::worker()->active()->where('accel', $accel)->exists()) {
-                return $accel;
+        foreach ($this->capacities() as $capacity) {
+            $nodes = Node::worker()->active();
+
+            $available = $capacity === self::CPU
+                ? $nodes->whereNull('accel')->exists()
+                : $nodes->where('accel', $capacity)->exists();
+
+            if (! $available) {
+                return $capacity;
             }
         }
 
