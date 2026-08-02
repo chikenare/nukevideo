@@ -57,33 +57,41 @@ function videoWithRendition(string $codec): Video
     return $video;
 }
 
-function assertAccelCapacity(Video $video): void
+function assertEncodeCapacity(Video $video): void
 {
     $job = new PrepareVideoJob($video->id, 'original.mp4');
-    (fn () => $this->assertAccelCapacity($video))->call($job);
+    (fn () => $this->assertEncodeCapacity($video))->call($job);
 }
 
 it('fails fast when a GPU rendition has no matching active node', function () {
-    assertAccelCapacity(videoWithRendition('av1_qsv'));
-})->throws(RuntimeException::class, 'intel GPU worker');
+    assertEncodeCapacity(videoWithRendition('av1_qsv'));
+})->throws(RuntimeException::class, 'intel worker');
 
 it('does not accept an inactive or wrong-hardware node as capacity', function () {
     Node::create(['name' => 'gpu-off', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel', 'is_active' => false]);
     Node::create(['name' => 'gpu-nv', 'ip_address' => '10.0.0.17', 'type' => 'worker', 'accel' => 'nvidia']);
 
-    assertAccelCapacity(videoWithRendition('av1_qsv'));
-})->throws(RuntimeException::class, 'intel GPU worker');
+    assertEncodeCapacity(videoWithRendition('av1_qsv'));
+})->throws(RuntimeException::class, 'intel worker');
 
 it('passes when a matching GPU node is active', function () {
     Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel']);
 
-    assertAccelCapacity(videoWithRendition('av1_qsv'));
+    assertEncodeCapacity(videoWithRendition('av1_qsv'));
 
     expect(true)->toBeTrue();
 });
 
-it('never gates CPU renditions on nodes', function () {
-    assertAccelCapacity(videoWithRendition('libsvtav1'));
+it('fails fast when a CPU rendition has no CPU node, GPU nodes included', function () {
+    Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel']);
+
+    assertEncodeCapacity(videoWithRendition('libsvtav1'));
+})->throws(RuntimeException::class, 'cpu worker');
+
+it('passes when a CPU node is active', function () {
+    Node::create(['name' => 'cpu-01', 'ip_address' => '10.0.0.20', 'type' => 'worker']);
+
+    assertEncodeCapacity(videoWithRendition('libsvtav1'));
 
     expect(true)->toBeTrue();
 });
@@ -91,11 +99,11 @@ it('never gates CPU renditions on nodes', function () {
 it('names the missing hardware straight from the template', function () {
     $video = videoWithRendition('hevc_nvenc');
 
-    expect($video->template->missingAccel())->toBe('nvidia');
+    expect($video->template->missingCapacity())->toBe('nvidia');
 
     Node::create(['name' => 'gpu-nv', 'ip_address' => '10.0.0.17', 'type' => 'worker', 'accel' => 'nvidia']);
 
-    expect($video->template->fresh()->missingAccel())->toBeNull();
+    expect($video->template->fresh()->missingCapacity())->toBeNull();
 });
 
 describe('handing the video to a node that has the hardware', function () {

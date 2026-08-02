@@ -48,13 +48,13 @@ class OnVideoUploadedService
         [$user, $project, $template] = $this->resolveUserProjectAndTemplate();
 
         // The only template checks possible without probing; fail before creating a doomed video
-        // (and before a GPU-less cluster downloads gigabytes it can never encode).
+        // (and before a cluster downloads gigabytes it has no hardware to encode).
         if (empty($template->query['outputs'] ?? [])) {
             throw new Exception("No outputs configured for template {$this->meta->template}");
         }
 
-        if ($accel = $template->missingAccel()) {
-            throw new Exception("Template {$this->meta->template} needs an active {$accel} GPU worker node.");
+        if ($missing = $template->missingCapacity()) {
+            throw new Exception("Template {$this->meta->template} needs an active {$missing} worker node.");
         }
 
         try {
