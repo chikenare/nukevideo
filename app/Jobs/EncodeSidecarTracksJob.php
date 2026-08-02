@@ -24,10 +24,10 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Encodes every audio and subtitle track in one pass over the mirrored source and uploads
- * each straight to S3 — no chunking, no concat. Chunking exists only to bound the heavy video
- * encode; per-segment concat would corrupt gapless codecs like Opus (each segment keeps its
- * own pre-skip priming, so a `-c copy` merge drifts shorter than the manifest).
+ * Encodes every audio and subtitle track over the mirrored source, one pass per track type
+ * ({@see runPass()}), and uploads each straight to S3 — no chunking, no concat. Chunking exists
+ * only to bound the heavy video encode; per-segment concat would corrupt gapless codecs like Opus
+ * (each segment keeps its own pre-skip priming, so a `-c copy` merge drifts shorter than the manifest).
  *
  * Runs in parallel with the video batch and settles its own outputs via {@see CompletesVideo};
  * the lock there resolves the race over which job finalizes the video.
@@ -100,22 +100,9 @@ class EncodeSidecarTracksJob implements ShouldQueue
 
         try {
             $sourceUrl = PrepareVideoJob::sourceUrl($this->mirrorPath);
-            $command = EncodeCommandBuilder::build($streams, $sourceUrl, $outputPaths);
 
-            Log::debug($command);
-
-            $process = Process::timeout($this->timeout - 120)->run($command, function () use ($video) {
-                $this->heartbeat($video);
-            });
-
-            if (! $process->successful()) {
-                if (EncodeInterruptedException::causedTermination($process->errorOutput())) {
-                    Log::warning('Sidecar ffmpeg killed by signal; job will be retried', ['video' => $this->videoId]);
-                    throw EncodeInterruptedException::fromErrorOutput($process->errorOutput());
-                }
-
-                Log::error('Sidecar ffmpeg failed', ['video' => $this->videoId, 'error' => $process->errorOutput()]);
-                throw new RuntimeException($process->errorOutput());
+            foreach ($streams->groupBy('type') as $pass) {
+                $this->runPass($video, EncodeCommandBuilder::build($pass, $sourceUrl, $outputPaths));
             }
 
             foreach ($streams as $stream) {
@@ -127,6 +114,32 @@ class EncodeSidecarTracksJob implements ShouldQueue
                 @unlink($path);
             }
         }
+    }
+
+    /**
+     * One ffmpeg run per track type. Audio and subtitle outputs must never share a run: once the
+     * sparse subtitle output runs dry ffmpeg ends the whole session with exit 0, cutting every
+     * audio output minutes into the source without a single line on stderr.
+     */
+    private function runPass(Video $video, string $command): void
+    {
+        Log::debug($command);
+
+        $process = Process::timeout($this->timeout - 120)->run($command, function () use ($video) {
+            $this->heartbeat($video);
+        });
+
+        if ($process->successful()) {
+            return;
+        }
+
+        if (EncodeInterruptedException::causedTermination($process->errorOutput())) {
+            Log::warning('Sidecar ffmpeg killed by signal; job will be retried', ['video' => $this->videoId]);
+            throw EncodeInterruptedException::fromErrorOutput($process->errorOutput());
+        }
+
+        Log::error('Sidecar ffmpeg failed', ['video' => $this->videoId, 'error' => $process->errorOutput()]);
+        throw new RuntimeException($process->errorOutput());
     }
 
     /**

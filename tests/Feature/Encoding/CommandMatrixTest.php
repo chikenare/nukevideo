@@ -177,25 +177,45 @@ describe('command assembly', function () {
             ->toContain('-vf scale=1280:720,format=p010le');
     });
 
-    it('builds one sidecar pass for the audio and subtitle tracks', function () {
-        $audio = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 1]);
-        $subtitle = matrixStream([], type: 'subtitle', meta: ['index' => 2]);
-        $subtitle->id = 2;
+    it('builds one sidecar pass for every audio track', function () {
+        $spanish = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 1]);
+        $english = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 2]);
+        $english->id = 2;
 
         $command = EncodeCommandBuilder::build(
-            new Collection([$audio, $subtitle]),
+            new Collection([$spanish, $english]),
             'src.mkv',
-            [1 => 'a.mp4', 2 => 's.vtt'],
+            [1 => 'a1.mp4', 2 => 'a2.mp4'],
         );
 
         expect($command)
             ->toStartWith('ffmpeg -hide_banner -y -i "src.mkv"')
-            ->toContain('-c:a libopus -ac 2 -b:a 128k -map 0:1 -vn -movflags +faststart -f mp4 "a.mp4"')
-            ->toContain('-map 0:2 -c:s webvtt -f webvtt "s.vtt"')
+            ->toContain('-c:a libopus -ac 2 -b:a 128k -map 0:1 -vn -movflags +faststart -f mp4 "a1.mp4"')
+            ->toContain('-c:a libopus -ac 2 -b:a 128k -map 0:2 -vn -movflags +faststart -f mp4 "a2.mp4"')
             // Sidecars run whole-source, never windowed, and never take decode-side flags.
             ->not->toContain('-ss ')
             ->not->toContain('-hwaccel');
     });
+
+    it('builds the subtitle pass on its own', function () {
+        $subtitle = matrixStream([], type: 'subtitle', meta: ['index' => 2]);
+
+        $command = EncodeCommandBuilder::build(new Collection([$subtitle]), 'src.mkv', [1 => 's.vtt']);
+
+        expect($command)->toBe('ffmpeg -hide_banner -y -i "src.mkv" -map 0:2 -c:s webvtt -f webvtt "s.vtt"');
+    });
+
+    /**
+     * The staging regression: audio and subtitles shared one run, so ffmpeg quit with exit 0 when the
+     * forced subtitle track ran dry and shipped 107s of audio for a 1:53:51 film — no error anywhere.
+     */
+    it('refuses to put a subtitle output in the same run as the audio', function () {
+        $audio = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 1]);
+        $subtitle = matrixStream([], type: 'subtitle', meta: ['index' => 2]);
+        $subtitle->id = 2;
+
+        EncodeCommandBuilder::build(new Collection([$audio, $subtitle]), 'src.mkv', [1 => 'a.mp4', 2 => 's.vtt']);
+    })->throws(InvalidArgumentException::class, 'Subtitle outputs need an ffmpeg pass of their own');
 
     it('packages every codec into the container its config declares', function (string $codec, string $format) {
         expect(ChunkTranscodeService::formatForCodec($codec))->toBe($format);
