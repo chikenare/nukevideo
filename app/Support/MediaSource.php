@@ -15,4 +15,26 @@ class MediaSource
     {
         return self::isUrl($input) || file_exists($input);
     }
+
+    /**
+     * Input flags that make ffmpeg re-issue a ranged request when a long read over HTTP drops.
+     * Without them a dropped connection reads as EOF: ffmpeg exits 0 and leaves an output that
+     * covers only the bytes it managed to read.
+     *
+     * @return list<string>
+     */
+    public static function reconnectArguments(string $input): array
+    {
+        if (! self::isUrl($input)) {
+            return [];
+        }
+
+        return [
+            '-reconnect', '1',
+            '-reconnect_streamed', '1',
+            '-reconnect_on_network_error', '1',
+            '-reconnect_on_http_error', '5xx',
+            '-reconnect_delay_max', '30',
+        ];
+    }
 }

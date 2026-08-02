@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Stream;
+use App\Support\MediaSource;
 use Illuminate\Support\Collection;
 
 class EncodeCommandBuilder
@@ -30,7 +31,10 @@ class EncodeCommandBuilder
             ? (new ChunkTranscodeService($streams->first()))->inputArguments($windowed)
             : '';
 
-        $parts = [sprintf('ffmpeg -hide_banner -y %s-i "%s"', $input.$seek, $source)];
+        $reconnect = MediaSource::reconnectArguments($source);
+        $reconnect = $reconnect === [] ? '' : implode(' ', $reconnect).' ';
+
+        $parts = [sprintf('ffmpeg -hide_banner -y %s-i "%s"', $reconnect.$input.$seek, $source)];
 
         foreach ($streams as $stream) {
             $svc = new ChunkTranscodeService($stream);
