@@ -8,6 +8,7 @@ use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
+use App\Support\MediaDuration;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Collection;
@@ -118,12 +119,33 @@ class EncodeSidecarTracksJob implements ShouldQueue
             }
 
             foreach ($streams as $stream) {
+                $this->assertCoversSource($video, $stream, $outputPaths[$stream->id]);
                 $this->uploadTrack($stream, $outputPaths[$stream->id]);
             }
         } finally {
             foreach ($outputPaths as $path) {
                 @unlink($path);
             }
+        }
+    }
+
+    /**
+     * A source read that dies mid-file ends the pass with a success exit code, so an audio track
+     * can stop minutes into a full-length video and still get staged and packaged — the player
+     * then clamps the whole timeline to where the audio ends. Fail the attempt instead.
+     */
+    private function assertCoversSource(Video $video, Stream $stream, string $localPath): void
+    {
+        if ($stream->type !== 'audio') {
+            return;
+        }
+
+        $short = MediaDuration::truncated($localPath, (float) $video->duration);
+
+        if ($short !== null) {
+            throw new RuntimeException(
+                "Audio track {$stream->id} encoded {$short}s of {$video->duration}s; source read truncated"
+            );
         }
     }
 

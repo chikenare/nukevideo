@@ -9,6 +9,7 @@ use App\Services\ChunkProgressReporter;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
 use App\Services\UsageService;
+use App\Support\MediaDuration;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -107,8 +108,25 @@ class ProcessChunkJob implements ShouldQueue
             );
         }
 
+        $this->assertWindowEncoded($localPath, $windowDuration);
         $this->upload($chunkKey, $localPath);
         $this->reportDone($outputs);
+    }
+
+    /**
+     * Same silent-truncation guard as the sidecar pass ({@see EncodeSidecarTracksJob}): a source
+     * read that dies mid-window still exits 0, and a chunk that stops short would concat into a
+     * rendition shorter than the manifest declares.
+     */
+    private function assertWindowEncoded(string $localPath, float $windowDuration): void
+    {
+        $short = MediaDuration::truncated($localPath, $windowDuration);
+
+        if ($short !== null) {
+            throw new RuntimeException(
+                "Chunk {$this->chunkIndex} of stream {$this->streamId} encoded {$short}s of {$windowDuration}s; source read truncated"
+            );
+        }
     }
 
     /**
