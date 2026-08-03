@@ -20,8 +20,9 @@ FROM alpine:3.20 AS ffmpeg-builder
 
 ARG TARGETARCH
 ARG FFMPEG_URL=""
-ARG FFMPEG_BUILD_TAG=autobuild-2026-07-09-14-21
-ARG FFMPEG_BUILD_ID=N-125509-g8ad6288553
+# Rolling build; pin with --build-arg FFMPEG_BUILD_TAG=autobuild-… FFMPEG_BUILD_ID=N-…
+ARG FFMPEG_BUILD_TAG=latest
+ARG FFMPEG_BUILD_ID=master-latest
 
 RUN apk add --no-cache curl tar xz && \
     if [ -z "$FFMPEG_URL" ]; then \
