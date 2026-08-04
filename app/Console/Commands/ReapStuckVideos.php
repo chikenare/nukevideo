@@ -51,7 +51,7 @@ class ReapStuckVideos extends Command
         $failed = 0;
 
         foreach ($stuck as $video) {
-            $video->markAsFailed();
+            $video->markAsFailed("No worker reported progress for over {$minutes} minutes; the video was left mid-processing.");
             $failed++;
             $this->warn("Video {$video->id} failed (no heartbeat for >{$minutes} minutes).");
         }
