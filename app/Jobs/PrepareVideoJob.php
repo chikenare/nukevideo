@@ -134,16 +134,16 @@ class PrepareVideoJob implements ShouldQueue
             return;
         }
 
-        // Redelivery guard: a LIVE encode batch means fan-out ran and its jobs are still coming.
-        // Best-effort — a double fan-out is idempotent (re-encode/uploads/concats all skip), just
-        // wasteful. Names are "encode video {id} {queue}"; the trailing space keeps id 12 from
-        // matching 123. Finished/cancelled batches are excluded on purpose: they linger for a week
-        // ({@see queue:prune-batches}) and counting them would turn every retry of a failed video
-        // into a silent hang — no fan-out, no jobs, terminal only once the reaper notices.
-        if (DB::table('job_batches')
-            ->where('name', 'like', "encode video {$video->id} %")
-            ->whereNull('finished_at')
-            ->exists()) {
+        // Redelivery guard: if an encode batch already exists, fan-out ran. Names are
+        // "encode video {id} {queue}"; the trailing space keeps id 12 from matching 123.
+        //
+        // Deliberately counts FINISHED batches too. A second fan-out re-encodes nothing (every
+        // chunk job skips an uploaded chunk), but its then() would transition the video into
+        // UPLOADING a second time and dispatch a second PackageVideoJob alongside the one already
+        // running — they share a gather directory and a sync target. So a retry does not get here
+        // with the old rows in place: {@see \App\Console\Commands\RetryVideos} clears them, which
+        // is also what stops a hand-rolled status flip from hanging silently.
+        if (DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->exists()) {
             Log::info('Segments already planned; skipping redelivery', ['video' => $this->videoId]);
 
             return;

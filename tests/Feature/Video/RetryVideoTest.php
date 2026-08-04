@@ -34,7 +34,7 @@ function failedVideo(array $attributes = []): Video
         ...$attributes,
     ]);
 
-    $video->streams()->create(['path' => 'tmp-videos/source.mkv', 'type' => 'original', 'meta' => []]);
+    $video->streams()->create(['path' => originalPath($video), 'type' => 'original', 'meta' => []]);
     $video->streams()->create([
         'path' => "{$video->ulid}/video/rendition.mp4",
         'type' => 'video',
@@ -43,9 +43,15 @@ function failedVideo(array $attributes = []): Video
     ]);
     $video->outputs()->create(['status' => 'failed']);
 
-    Storage::disk('s3')->put('tmp-videos/source.mkv', 'x');
+    Storage::disk('s3')->put(originalPath($video), 'x');
 
     return $video;
+}
+
+/** The upload key PrepareVideoJob would pull from when the internal mirror is gone. */
+function originalPath(Video $video): string
+{
+    return "tmp-videos/{$video->ulid}.mkv";
 }
 
 beforeEach(function () {
@@ -85,7 +91,7 @@ describe('videos:retry', function () {
 
     it('refuses when the source is gone from both the mirror and S3', function () {
         $video = failedVideo();
-        Storage::disk('s3')->delete('tmp-videos/source.mkv');
+        Storage::disk('s3')->delete(originalPath($video));
 
         // A retry would re-download nothing and die 20 minutes later.
         $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
@@ -95,7 +101,7 @@ describe('videos:retry', function () {
 
     it('retries off the internal mirror when the upload is already gone', function () {
         $video = failedVideo();
-        Storage::disk('s3')->delete('tmp-videos/source.mkv');
+        Storage::disk('s3')->delete(originalPath($video));
         Storage::disk('chunks')->put($video->sourceMirrorPath('mkv'), 'x');
 
         $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
@@ -121,7 +127,7 @@ describe('videos:retry', function () {
         expect($video->fresh()->status)->toBe('failed');
     });
 
-    it('is not blocked by the finished batch of the run that failed', function () {
+    it('clears the finished batch of the run that failed, which would block fan-out', function () {
         $video = failedVideo();
 
         DB::table('job_batches')->insert([
@@ -138,7 +144,29 @@ describe('videos:retry', function () {
 
         $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
 
-        expect($video->fresh()->status)->toBe('pending');
+        // PrepareVideoJob reads any such row as "fan-out already ran" and plans nothing.
+        expect($video->fresh()->status)->toBe('pending')
+            ->and(DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->count())->toBe(0);
+    });
+
+    it('leaves another video\'s batches alone', function () {
+        $video = failedVideo();
+        $other = failedVideo();
+
+        DB::table('job_batches')->insert([
+            'id' => 'batch-other',
+            'name' => "encode video {$other->id} video-processing-intel",
+            'total_jobs' => 10,
+            'pending_jobs' => 0,
+            'failed_jobs' => 0,
+            'failed_job_ids' => '[]',
+            'created_at' => now()->timestamp,
+            'finished_at' => now()->timestamp,
+        ]);
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+
+        expect(DB::table('job_batches')->where('id', 'batch-other')->count())->toBe(1);
     });
 
     it('drops derived streams and outputs with --reprobe so the source is probed again', function () {
@@ -155,10 +183,22 @@ describe('videos:retry', function () {
     it('changes nothing with --dry-run', function () {
         $video = failedVideo();
 
+        DB::table('job_batches')->insert([
+            'id' => 'batch-1',
+            'name' => "encode video {$video->id} video-processing-intel",
+            'total_jobs' => 10,
+            'pending_jobs' => 0,
+            'failed_jobs' => 1,
+            'failed_job_ids' => '[]',
+            'created_at' => now()->timestamp,
+            'finished_at' => now()->timestamp,
+        ]);
+
         $this->artisan('videos:retry', ['video' => [$video->id], '--dry-run' => true])->assertSuccessful();
 
         expect($video->fresh()->status)->toBe('failed')
-            ->and($video->streams()->whereNotNull('error_log')->count())->toBe(1);
+            ->and($video->streams()->whereNotNull('error_log')->count())->toBe(1)
+            ->and(DB::table('job_batches')->count())->toBe(1);
     });
 
     it('reports an unknown video instead of failing silently', function () {

@@ -65,8 +65,8 @@ class RetryVideos extends Command
             return false;
         }
 
-        // Only a batch still in flight blocks fan-out; a finished one lingers for a week and
-        // PrepareVideoJob now ignores it. Report it rather than tearing it down under running jobs.
+        // An unfinished batch means jobs are still on their way to this video; let them land
+        // rather than fan out a second set alongside them.
         $live = DB::table('job_batches')
             ->where('name', 'like', "encode video {$video->id} %")
             ->whereNull('finished_at')
@@ -83,6 +83,12 @@ class RetryVideos extends Command
 
             return true;
         }
+
+        // The finished batches of the run that failed. PrepareVideoJob treats any of them as
+        // "fan-out already happened" and would skip planning entirely, leaving the video queued
+        // behind a job that does nothing; they are spent bookkeeping either way
+        // ({@see queue:prune-batches} drops them a week later).
+        DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->delete();
 
         // Nothing else ever clears these: the panel would show the failed run's error and its
         // progress bar frozen wherever it died, on top of a video that is encoding again.
