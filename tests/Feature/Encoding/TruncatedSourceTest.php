@@ -1,5 +1,7 @@
 <?php
 
+use App\Jobs\EncodeSidecarTracksJob;
+use App\Models\Video;
 use App\Services\EncodeCommandBuilder;
 use App\Support\MediaDuration;
 use Illuminate\Support\Collection;
@@ -50,5 +52,24 @@ describe('truncation guard', function () {
 
         expect(MediaDuration::truncated('/tmp/audio.mp4', 6831.0))->toBeNull()
             ->and(MediaDuration::truncated('/tmp/audio.mp4', 0.0))->toBeNull();
+    });
+});
+
+describe('audio reference duration', function () {
+    $video = fn (float $duration) => (new Video)->forceFill(['duration' => $duration]);
+
+    it('measures a track against its own end, not the container', function () use ($video) {
+        // The container runs to the longest track: subtitles or a second audio track outliving
+        // this one would otherwise make a complete encode look 55s short.
+        $stream = matrixStream([], 'audio', ['index' => 1, 'source_end' => 6684.6]);
+
+        expect(EncodeSidecarTracksJob::expectedSeconds($stream, $video(6740.4)))->toBe(6684.6);
+    });
+
+    it('falls back to the container for a source probed before per-track ends existed', function () use ($video) {
+        expect(EncodeSidecarTracksJob::expectedSeconds(matrixStream([], 'audio', ['index' => 1]), $video(6740.4)))
+            ->toBe(6740.4)
+            ->and(EncodeSidecarTracksJob::expectedSeconds(matrixStream([], 'audio', ['index' => 1, 'source_end' => null]), $video(6740.4)))
+            ->toBe(6740.4);
     });
 });

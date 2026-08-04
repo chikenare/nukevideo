@@ -65,6 +65,10 @@ class PrepareVideoJob implements ShouldQueue
     // Above this, `avg_frame_rate` is a VFR container lying (1000/1 and friends), not a real rate.
     private const MAX_FPS = 120.0;
 
+    // Held past the last video packet so `-to` keeps that frame whole, and short enough to stay
+    // inside the truncation guard's tolerance.
+    private const TAIL_SLACK = 0.5;
+
     // Light orchestration queue every worker drains (thumbnail/storyboard/sidecar); the heavy
     // chunk transcode fans out per-hardware via Stream::encodeQueue(), not this queue.
     private const QUEUE = 'orchestration';
@@ -274,21 +278,48 @@ class PrepareVideoJob implements ShouldQueue
             throw new RuntimeException($process->errorOutput());
         }
 
+        return self::windowsFromPackets($process->output(), (float) $video->duration, $this->chunkSeconds($video));
+    }
+
+    /**
+     * Pure window planning off the packet probe: keyframe-aligned blocks that stop where the VIDEO
+     * track does. Static so it's covered without a DB round-trip or a real probe.
+     *
+     * `$containerDuration` is the video's stored duration, which ffprobe reads off the container —
+     * i.e. the LONGEST track. An MKV whose audio runs past the picture (common) would otherwise get
+     * a last window asking for video that isn't there, and ProcessChunkJob's truncation guard would
+     * reject that complete encode on every retry. The last packet is the picture's real end.
+     *
+     * @return list<array{0:float,1:float}> ordered [start, end] windows in seconds
+     */
+    public static function windowsFromPackets(string $probeOutput, float $containerDuration, int $chunkSeconds): array
+    {
         $keyTimes = [];
-        foreach (explode("\n", trim($process->output())) as $line) {
+        $lastPacket = 0.0;
+
+        foreach (explode("\n", trim($probeOutput)) as $line) {
             // Each line is "<pts_time>,<flags>", e.g. "12.345000,K__".
             [$time, $flags] = array_pad(explode(',', $line), 2, '');
 
-            if ($time === '' || $time === 'N/A' || ! str_contains($flags, 'K')) {
+            if ($time === '' || $time === 'N/A') {
                 continue;
             }
 
-            $keyTimes[] = (float) $time;
+            // B-frames put packets out of order, so the tail is the max, not the last line.
+            $lastPacket = max($lastPacket, (float) $time);
+
+            if (str_contains($flags, 'K')) {
+                $keyTimes[] = (float) $time;
+            }
         }
 
         sort($keyTimes);
 
-        return $this->groupKeyframes($keyTimes, (float) $video->duration, $this->chunkSeconds($video));
+        $end = $lastPacket > 0.0
+            ? min($containerDuration, $lastPacket + self::TAIL_SLACK)
+            : $containerDuration;
+
+        return self::groupKeyframes($keyTimes, $end, $chunkSeconds);
     }
 
     /**
@@ -343,7 +374,7 @@ class PrepareVideoJob implements ShouldQueue
      * @param  list<float>  $keyTimes
      * @return list<array{0:float,1:float}>
      */
-    private function groupKeyframes(array $keyTimes, float $duration, int $chunkSeconds): array
+    private static function groupKeyframes(array $keyTimes, float $duration, int $chunkSeconds): array
     {
         if ($duration <= 0) {
             return [];
