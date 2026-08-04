@@ -12,5 +12,7 @@ Schedule::command('videos:prune')->everyThirtyMinutes();
 Schedule::command('queue:prune-batches --hours=168 --unfinished=168 --cancelled=168')->daily();
 
 // Reclaim local scratch + the shared chunk store left by failed/deleted/orphaned videos
-// (the success path cleans up immediately; this is the backstop). Runs on a worker.
-Schedule::job(new PruneScratchJob, 'video-processing')->everyThirtyMinutes();
+// (the success path cleans up immediately; this is the backstop). Runs on a worker, via the queue
+// EVERY worker drains: `video-processing` is the CPU transcode queue, which an all-GPU fleet has
+// no consumer for — the job piled up there unnoticed instead of ever running.
+Schedule::job(new PruneScratchJob, 'orchestration')->everyThirtyMinutes();
