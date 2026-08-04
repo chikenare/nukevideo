@@ -13,7 +13,7 @@ Most video solutions are either expensive SaaS products or full-blown platforms 
 
 ## Architecture at a Glance
 
-- **Backend** — Laravel (PHP 8.5). Production runs FrankenPHP + Laravel Octane; queues run on Laravel Horizon (Redis).
+- **Backend** — Laravel (PHP 8.5). queues run on Laravel Horizon (Redis).
 - **Admin panel** — Vue 3 + TypeScript SPA, served by nginx in production.
 - **Databases** — MariaDB 11 for application data, ClickHouse for bandwidth and usage analytics.
 - **Storage** — Any S3-compatible service (AWS S3, MinIO, RustFS, iDrive e2). Transfers use s5cmd.

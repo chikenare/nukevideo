@@ -49,7 +49,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 
 | Layer | Technology |
 |-------|-----------|
-| API | Laravel (PHP 8.5), FrankenPHP + Octane in production |
+| API | Laravel (PHP 8.5) in production |
 | Admin panel | Vue 3, TypeScript, Vite |
 | Queue | Redis + Laravel Horizon |
 | Database | MariaDB 11 (MySQL-compatible) |
@@ -70,7 +70,6 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
                                 │ webhook
                          ┌──────┴───────┐
                          │     API      │  Laravel · Horizon · admin panel
-                         │  (Octane)    │
                          └──────┬───────┘
               ┌────────────────┼────────────────┐
         ┌─────┴─────┐    ┌─────┴─────┐    ┌──────┴──────┐
@@ -121,7 +120,7 @@ Then open:
 
 Production images are built and pushed to Docker Hub automatically on every `v*` git tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`), for `linux/amd64` and `linux/arm64`.
 
-The provided `docker-compose.yml` pulls those images and runs the core stack — API (FrankenPHP/Octane), Horizon, scheduler, MariaDB, Redis, and ClickHouse:
+The provided `docker-compose.yml` pulls those images and runs the core stack — API, Horizon, scheduler, MariaDB, Redis, and ClickHouse:
 
 ```bash
 cp .env.example .env      # then set APP_KEY, DB/Redis/ClickHouse creds, S3, WEBHOOK_SECRET, INTERNAL_API_SECRET...
