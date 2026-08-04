@@ -153,13 +153,27 @@ class EncodeSidecarTracksJob implements ShouldQueue
             return;
         }
 
-        $short = MediaDuration::truncated($localPath, (float) $video->duration);
+        $expected = self::expectedSeconds($stream, $video);
+        $short = MediaDuration::truncated($localPath, $expected);
 
         if ($short !== null) {
             throw new RuntimeException(
-                "Audio track {$stream->id} encoded {$short}s of {$video->duration}s; source read truncated"
+                "Audio track {$stream->id} encoded {$short}s of {$expected}s; source read truncated"
             );
         }
+    }
+
+    /**
+     * Seconds this track's encode has to cover: the end of the track itself, probed at ingestion
+     * ({@see \App\Services\CreateVideoStreamsService}). The video's duration is the CONTAINER's,
+     * i.e. its longest track, so it only stands in for sources probed before per-track ends were
+     * recorded — where a shorter audio track still reads as truncated.
+     */
+    public static function expectedSeconds(Stream $stream, Video $video): float
+    {
+        $end = $stream->meta['source_end'] ?? null;
+
+        return is_numeric($end) && (float) $end > 0.0 ? (float) $end : (float) $video->duration;
     }
 
     private function uploadTrack(Stream $stream, string $localPath): void

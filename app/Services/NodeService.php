@@ -27,6 +27,14 @@ class NodeService
 
     private const DOCKER_RUN_FLAGS = ['DOCKER_CPUSET_CPUS', 'DOCKER_MEMORY'];
 
+    // What every worker node runs with. Public because they are also the recovery window a video
+    // gets when a worker dies mid-job: the queue re-delivers after RETRY_AFTER and the redelivered
+    // job may run for WORKER_TIMEOUT, so {@see \App\Console\Commands\ReapStuckVideos} waits both
+    // out before calling a video stuck. The API host's own env says nothing about either.
+    public const WORKER_TIMEOUT = 600;
+
+    public const QUEUE_RETRY_AFTER = 1850;
+
     // Keeps the worker's idle Redis connection alive through ISP CGNAT during long ffmpeg
     // encodes; without outgoing traffic the NAT mapping is dropped and the next command read-errors.
     private const WORKER_SYSCTLS = [
@@ -70,10 +78,6 @@ class NodeService
 
     public function getEnvironmentVariables(Node $node): array
     {
-        $timeout = 600;
-
-        $retryAfter = 1850;
-
         $scheme = app()->isLocal() ? 'http://' : 'https://';
         $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
@@ -85,8 +89,8 @@ class NodeService
             'API_UPSTREAM_HOST' => 'API_UPSTREAM_HOST='.parse_url(config('app.url'), PHP_URL_HOST),
             'NODE_ID' => "NODE_ID={$node->id}",
             'NODE_TYPE' => "NODE_TYPE={$node->type->value}",
-            'VIDEO_WORKER_TIMEOUT' => "VIDEO_WORKER_TIMEOUT={$timeout}",
-            'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.$retryAfter,
+            'VIDEO_WORKER_TIMEOUT' => 'VIDEO_WORKER_TIMEOUT='.self::WORKER_TIMEOUT,
+            'REDIS_QUEUE_RETRY_AFTER' => 'REDIS_QUEUE_RETRY_AFTER='.self::QUEUE_RETRY_AFTER,
             'DOMAIN' => "DOMAIN={$node->hostname}",
             'VOD_BASE_URL' => "VOD_BASE_URL={$scheme}{$node->hostname}",
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),

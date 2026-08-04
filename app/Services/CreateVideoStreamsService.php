@@ -25,6 +25,16 @@ class CreateVideoStreamsService
     /** Subtitle codecs convertible to webvtt; bitmap formats (PGS, DVD/DVB, xsub) are skipped. */
     private const TEXT_SUBTITLE_CODECS = ['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text', 'text'];
 
+    /** How far back from the container's end a track's last packet is looked for before scanning the whole file. */
+    private const TAIL_PROBE_SECONDS = 300.0;
+
+    private string $localPath = '';
+
+    private float $containerDuration = 0.0;
+
+    /** Where each audio track's packets stop, keyed by ffprobe stream index. */
+    private array $trackEnds = [];
+
     private array $videoStreamCache = [];
 
     private array $audioStreamCache = [];
@@ -50,10 +60,19 @@ class CreateVideoStreamsService
 
         $streamCollection = $mediaInfo['streamCollection'];
 
+        $this->localPath = $localPath;
+        $this->containerDuration = (float) $mediaInfo['duration'];
+        $this->trackEnds = [];
+
         $this->validateSourceVideo($streamCollection->videos()->first());
 
         foreach ($streamCollection->audios() as $audio) {
             $this->validateSourceAudio($audio);
+
+            // Probed here, before the write transaction: the local source is only around during
+            // this job, and one probe per track serves however many renditions reuse it.
+            $index = (int) $audio->get('index');
+            $this->trackEnds[$index] = $this->trackEnd($index);
         }
 
         DB::transaction(function () use ($video, $streamCollection, $outputs, $mediaInfo) {
@@ -385,6 +404,52 @@ class CreateVideoStreamsService
         return 0;
     }
 
+    /**
+     * Where THIS track's own packets stop. The container duration is the longest track, so an audio
+     * pass measured against it reads as truncated whenever another track outlives it — and a source
+     * read that dies mid-file exits 0, so that check is the only thing standing between a half-length
+     * audio track and the manifest. Null when the track can't be timed; the caller falls back.
+     */
+    private function trackEnd(int $index): ?float
+    {
+        $tail = max(0.0, $this->containerDuration - self::TAIL_PROBE_SECONDS);
+
+        // A track ending before the tail window reads as empty; only then pay for a full scan.
+        return $this->lastPacketTime($index, $tail) ?? ($tail > 0.0 ? $this->lastPacketTime($index, 0.0) : null);
+    }
+
+    private function lastPacketTime(int $index, float $from): ?float
+    {
+        // Generous: the fallback path walks the whole file when a track ends before the tail window.
+        $result = Process::timeout(600)->run([
+            'ffprobe', '-v', 'error',
+            '-select_streams', (string) $index,
+            '-show_entries', 'packet=pts_time',
+            '-of', 'csv=p=0',
+            // From this second to EOF, so the tail is read without walking the whole file.
+            '-read_intervals', sprintf('%.3f%%', $from),
+            $this->localPath,
+        ]);
+
+        if (! $result->successful()) {
+            Log::warning('Track tail probe failed', ['index' => $index, 'error' => $result->errorOutput()]);
+
+            return null;
+        }
+
+        $end = 0.0;
+
+        foreach (explode("\n", trim($result->output())) as $line) {
+            $line = trim($line);
+
+            if (is_numeric($line)) {
+                $end = max($end, (float) $line);
+            }
+        }
+
+        return $end > 0.0 ? $end : null;
+    }
+
     /** Source frame rate, from the `avg_frame_rate` fraction ("24000/1001"). Zero when unknown. */
     private function sourceFrameRate(FFStream $stream): float
     {
@@ -484,6 +549,8 @@ class CreateVideoStreamsService
                 ...($codecType === 'audio' ? [
                     'hearing_impaired' => $this->hasDisposition($stream, 'hearing_impaired'),
                     'visual_impaired' => $this->hasDisposition($stream, 'visual_impaired'),
+                    // What this track's encode is measured against ({@see \App\Jobs\EncodeSidecarTracksJob}).
+                    'source_end' => $this->trackEnds[(int) $stream->get('index')] ?? null,
                 ] : []),
                 ...($codecType === 'subtitle' ? [
                     'forced' => $this->hasDisposition($stream, 'forced'),

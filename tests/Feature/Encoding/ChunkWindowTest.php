@@ -65,3 +65,72 @@ describe('chunkWindowSeconds', function () {
         }
     });
 });
+
+/** ffprobe's `packet=pts_time,flags` CSV: one "<pts_time>,<flags>" line per packet. */
+function packets(array $lines): string
+{
+    return implode("\n", array_map(
+        fn (array $packet) => sprintf('%.6f,%s', $packet[0], $packet[1] ? 'K__' : '___'),
+        $lines
+    ))."\n";
+}
+
+describe('windowsFromPackets', function () {
+    it('ends the last window where the video track does, not where the container does', function () {
+        // The bug that failed a 1h52m MKV forever: eac3 ran 55s past the picture, so the container
+        // duration asked the last chunk for video that did not exist and the truncation guard
+        // rejected a complete encode on every retry.
+        $windows = PrepareVideoJob::windowsFromPackets(
+            packets([[0.0, true], [100.0, true], [200.0, true], [240.5, false]]),
+            300.0,
+            100,
+        );
+
+        expect($windows)->toBe([[0.0, 100.0], [100.0, 200.0], [200.0, 241.0]]);
+    });
+
+    it('keeps the container duration when the picture runs to the end', function () {
+        $windows = PrepareVideoJob::windowsFromPackets(
+            packets([[0.0, true], [100.0, true], [200.0, true], [299.8, false]]),
+            300.0,
+            100,
+        );
+
+        expect($windows)->toBe([[0.0, 100.0], [100.0, 200.0], [200.0, 300.0]]);
+    });
+
+    it('reads the tail off the highest pts, not the last line', function () {
+        // B-frames arrive out of order.
+        $windows = PrepareVideoJob::windowsFromPackets(
+            packets([[0.0, true], [100.0, true], [140.2, false], [139.9, false]]),
+            300.0,
+            100,
+        );
+
+        expect($windows)->toBe([[0.0, 100.0], [100.0, 140.7]]);
+    });
+
+    it('falls back to the container duration when the probe reports no timestamps', function () {
+        expect(PrepareVideoJob::windowsFromPackets("N/A,K__\nN/A,___\n", 300.0, 100))
+            ->toBe([[0.0, 300.0]])
+            ->and(PrepareVideoJob::windowsFromPackets('', 300.0, 100))
+            ->toBe([[0.0, 300.0]]);
+    });
+
+    it('covers the picture with contiguous, non-empty windows', function () {
+        $packets = [];
+        for ($t = 0.0; $t < 240.0; $t += 4.0) {
+            $packets[] = [$t, fmod($t, 20.0) === 0.0];
+        }
+
+        $windows = PrepareVideoJob::windowsFromPackets(packets($packets), 300.0, 100);
+        $cursor = 0.0;
+
+        foreach ($windows as [$start, $end]) {
+            expect($start)->toBe($cursor)->and($end)->toBeGreaterThan($start);
+            $cursor = $end;
+        }
+
+        expect($cursor)->toBe(236.5);
+    });
+});
