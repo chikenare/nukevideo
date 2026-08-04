@@ -134,10 +134,16 @@ class PrepareVideoJob implements ShouldQueue
             return;
         }
 
-        // Redelivery guard: if an encode batch already exists, fan-out ran. Best-effort —
-        // a double fan-out is idempotent (re-encode/uploads/concats all skip), just wasteful.
-        // Names are "encode video {id} {queue}"; the trailing space keeps id 12 from matching 123.
-        if (DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->exists()) {
+        // Redelivery guard: a LIVE encode batch means fan-out ran and its jobs are still coming.
+        // Best-effort — a double fan-out is idempotent (re-encode/uploads/concats all skip), just
+        // wasteful. Names are "encode video {id} {queue}"; the trailing space keeps id 12 from
+        // matching 123. Finished/cancelled batches are excluded on purpose: they linger for a week
+        // ({@see queue:prune-batches}) and counting them would turn every retry of a failed video
+        // into a silent hang — no fan-out, no jobs, terminal only once the reaper notices.
+        if (DB::table('job_batches')
+            ->where('name', 'like', "encode video {$video->id} %")
+            ->whereNull('finished_at')
+            ->exists()) {
             Log::info('Segments already planned; skipping redelivery', ['video' => $this->videoId]);
 
             return;
@@ -429,6 +435,10 @@ class PrepareVideoJob implements ShouldQueue
         // many chunks, so a prematurely-completed batch can't publish a short rendition.
         $video->update(['chunk_count' => $chunkCount]);
 
+        // A fresh attempt starts with a clean slate: nothing else ever clears these, so a retried
+        // video would keep showing the error and the progress of the run that failed.
+        $video->streams()->whereNotNull('error_log')->update(['error_log' => null]);
+
         // Progress is tracked per Output as one field per (chunk × rendition it contains);
         // seed each output's Redis hash so its percent is meaningful from the first tick.
         foreach ($video->outputs as $output) {
@@ -483,6 +493,6 @@ class PrepareVideoJob implements ShouldQueue
 
     public function failed(Throwable $e): void
     {
-        Video::find($this->videoId)?->markAsFailed();
+        Video::find($this->videoId)?->markAsFailed("Preparation failed: {$e->getMessage()}");
     }
 }
