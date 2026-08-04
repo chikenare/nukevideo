@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Models\Video;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
 
 uses(RefreshDatabase::class);
@@ -50,6 +51,8 @@ function failedVideo(array $attributes = []): Video
 beforeEach(function () {
     Storage::fake('s3');
     Storage::fake('chunks');
+    // Chunk progress is a Redis hash the command has to drop; no Redis in CI.
+    Redis::shouldReceive('del')->andReturn(1);
 });
 
 describe('videos:retry', function () {
