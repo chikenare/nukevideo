@@ -1,9 +1,6 @@
 services:
   nukevideo-api:
     image: chikenare/nukevideo-api:${TAG:-latest}
-    command: [ "php", "artisan", "octane:start", "--server=frankenphp", "--port=8080", "--caddyfile=/etc/frankenphp/Caddyfile" ]
-    healthcheck:
-        test: [ "CMD", "healthcheck-octane" ]
     restart: unless-stopped
     env_file: .env
     ports:

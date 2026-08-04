@@ -1,5 +1,4 @@
 ARG PHP_FPM_IMAGE=serversideup/php:8.5-fpm-nginx
-ARG PHP_FRANKEN_IMAGE=serversideup/php:8.5-frankenphp
 ARG S5CMD_IMAGE=peakcom/s5cmd:v2.3.0
 ARG SHAKA_PACKAGER_VERSION=v3.7.2
 
@@ -114,7 +113,7 @@ RUN mkdir -p bootstrap/cache \
 RUN php artisan package:discover
 
 # --- API prod ---
-FROM ${PHP_FRANKEN_IMAGE} AS api-prod
+FROM ${PHP_FPM_IMAGE} AS api-prod
 
 ENV PHP_OPCACHE_ENABLE=true
 
