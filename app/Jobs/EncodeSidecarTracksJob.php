@@ -15,8 +15,6 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use Illuminate\Support\Facades\Bus;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
@@ -207,16 +205,20 @@ class EncodeSidecarTracksJob implements ShouldQueue
             return;
         }
 
-        // Stop the parallel video batch — this video can no longer complete.
-        $batchId = DB::table('job_batches')->where('name', "encode video {$video->id}")->value('id');
-        if ($batchId) {
-            Bus::findBatch($batchId)?->cancel();
-        }
+        // Stop the parallel video batches — this video can no longer complete. Cancel BEFORE the
+        // finalize below, or their in-flight chunks race it and die against a source it removed.
+        $this->cancelEncodeBatches($video);
 
         foreach ($video->streams as $stream) {
             $this->markOutputsFailedForStream($stream);
+
+            // The pass encodes every track in one go, so the ones that never reached the mirror are
+            // the ones it died on. Same field the panel already renders for a failed chunk.
+            if (! Storage::disk('chunks')->exists($stream->stagingPath())) {
+                $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
+            }
         }
 
-        $this->finalizeVideoIfReady($video);
+        $this->finalizeVideoIfReady($video, $e->getMessage());
     }
 }
