@@ -296,8 +296,14 @@ class CreateVideoStreamsService
     {
         $streamIds = [];
 
+        $derivedGop = $this->deriveGopSize($this->sourceFrameRate($sourceVideo));
+
         foreach ($this->filterVariants($sourceVideo, $variants) as $variantConfig) {
             $variantConfig = array_merge(['video_codec' => $videoCodec], $variantConfig);
+
+            if (empty($variantConfig['gop_size']) && $derivedGop) {
+                $variantConfig['gop_size'] = $derivedGop;
+            }
 
             $key = $this->streamSignature($variantConfig);
 
@@ -529,6 +535,29 @@ class CreateVideoStreamsService
         }
 
         return $end > 0.0 ? $end : null;
+    }
+
+    /** What a derived keyframe interval aims for, before it is rounded to divide a segment. */
+    private const TARGET_KEYFRAME_SECONDS = 2.0;
+
+    /**
+     * Frames between keyframes, for a template that pinned none. A GOP only means something in
+     * seconds — the same 60 frames is 2.503s of a 23.976fps film and 2.4s of a 25fps broadcast — so
+     * a fixed frame count drifts against `packager.segment_duration`, which the packager can only
+     * honour by cutting at a keyframe. Derived the other way round: a whole number of GOPs per
+     * segment, each as close to {@see TARGET_KEYFRAME_SECONDS} as the source's rate allows.
+     * Null when the rate is unknown, leaving the encoder its own default.
+     */
+    private function deriveGopSize(float $fps): ?int
+    {
+        if ($fps <= 0) {
+            return null;
+        }
+
+        $segment = (float) config('packager.segment_duration');
+        $gopsPerSegment = max(1, (int) round($segment / self::TARGET_KEYFRAME_SECONDS));
+
+        return max(1, (int) round($fps * $segment / $gopsPerSegment));
     }
 
     /** Source frame rate, from the `avg_frame_rate` fraction ("24000/1001"). Zero when unknown. */

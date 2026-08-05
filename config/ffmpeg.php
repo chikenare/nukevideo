@@ -254,7 +254,7 @@ return [
             'type' => 'video',
             'input_type' => 'integer',
             'label' => 'GOP Size (Keyframes)',
-            'help' => 'Distance between keyframes. For streaming use 2x framerate (e.g. 60 for 30fps).',
+            'help' => 'Frames between keyframes. Leave empty to derive it from the source frame rate — a whole number of GOPs per segment, ~2s each.',
             'rules' => ['nullable', 'integer', 'min:1'],
             'template' => '-g %s',
             'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
