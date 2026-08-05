@@ -21,6 +21,8 @@ class UpdateStreamData extends RequestData
         public string $name,
         public ?string $language,
         public bool $forced,
+        /** Null means "not sent" — the flag keeps whatever the probe (or a previous edit) set. */
+        public ?bool $hearingImpaired = null,
     ) {}
 
     /** Same BCP-47 criterion the ingest applies ({@see \App\Services\CreateVideoStreamsService::sourceLanguage}). */

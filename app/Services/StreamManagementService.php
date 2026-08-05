@@ -37,9 +37,10 @@ class StreamManagementService
                 throw ValidationException::withMessages(['message' => 'You cannot edit any stream until the video is processed.'])->status(400);
             }
 
-            $this->assertNameIsFree($stream, $data->name);
+            $this->assertNameIsFree($stream, $data);
 
-            $stream->update($data->toDatabase());
+            // Not a column: the flag lives in `meta`, next to where the probe wrote it.
+            $stream->update(collect($data->toDatabase())->except('hearing_impaired')->all());
 
             // Only what actually changed: the packager normalizes languages, so rewriting an
             // untouched one would drift the manifests ({@see ManifestEditor::relabelStream}).
@@ -47,6 +48,10 @@ class StreamManagementService
                 ['name', 'language', 'forced'],
                 fn (string $field) => $stream->wasChanged($field),
             ));
+
+            if ($this->applyHearingImpaired($stream, $data)) {
+                $fields[] = 'hearing_impaired';
+            }
 
             // A FAILED video was never packaged, so it has no manifests to edit.
             if ($video->status === VideoStatus::COMPLETED->value) {
@@ -61,20 +66,52 @@ class StreamManagementService
      * Track names stay unique within their type: the packager merges same-language same-label tracks
      * into one AdaptationSet and HLS groups collide on `NAME`, which is why the ingest dedupes them
      * ({@see CreateVideoStreamsService::uniqueName}). Case-insensitive, like the ingest.
+     *
+     * Subtitles compare within their forced flag — the flag the EDIT is setting, since a rename may
+     * flip it in the same request: a forced track and a full track legitimately share a name
+     * ("Español" twice, one FORCED=YES), which is how Apple's own HLS examples label forced subs.
      */
-    private function assertNameIsFree(Stream $stream, string $name): void
+    private function assertNameIsFree(Stream $stream, UpdateStreamData $data): void
     {
-        $taken = Stream::where('video_id', $stream->video_id)
+        $query = Stream::where('video_id', $stream->video_id)
             ->where('type', $stream->type)
             ->whereKeyNot($stream->id)
-            ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
-            ->exists();
+            ->whereRaw('LOWER(name) = ?', [mb_strtolower($data->name)]);
 
-        if ($taken) {
+        if ($stream->type === 'subtitle') {
+            $query->where('forced', $data->forced);
+        }
+
+        if ($query->exists()) {
             throw ValidationException::withMessages([
                 'name' => 'Another '.$stream->type.' track of this video already uses that name.',
             ]);
         }
+    }
+
+    /**
+     * Flip `meta.hearing_impaired` when the request carries a different value. Subtitles only: for
+     * them the flag is pure presentation (role/CHARACTERISTICS, same machinery as `forced`), while
+     * on audio it was baked into the packaged DASH Accessibility descriptor and editing the flag
+     * without that surgery would make the API contradict the manifests.
+     */
+    private function applyHearingImpaired(Stream $stream, UpdateStreamData $data): bool
+    {
+        $current = (bool) data_get($stream->meta, 'hearing_impaired', false);
+
+        if ($data->hearingImpaired === null || $data->hearingImpaired === $current) {
+            return false;
+        }
+
+        if ($stream->type !== 'subtitle') {
+            throw ValidationException::withMessages([
+                'hearingImpaired' => 'Only subtitle tracks can change this flag after packaging.',
+            ]);
+        }
+
+        $stream->update(['meta' => [...($stream->meta ?? []), 'hearing_impaired' => $data->hearingImpaired]]);
+
+        return true;
     }
 
     public function destroy(string $ulid, Project $project): void
