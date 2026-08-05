@@ -29,6 +29,13 @@ class QualityBitrateProbe
         $service = new ChunkTranscodeService($this->stream);
 
         if (! $service->needsQualityBitrateProbe()) {
+            if ($service->encodesUncapped()) {
+                Log::warning('Quality mode runs uncapped: the source states no bit rate', [
+                    'stream' => $this->stream->id,
+                    'codec' => $this->stream->input_params['video_codec'] ?? null,
+                ]);
+            }
+
             return;
         }
 

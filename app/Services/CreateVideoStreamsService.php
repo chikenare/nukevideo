@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Video;
 use Exception;
 use FFMpeg\FFProbe;
+use FFMpeg\FFProbe\DataMapping\Format;
 use FFMpeg\FFProbe\DataMapping\Stream as FFStream;
 use FFMpeg\FFProbe\DataMapping\StreamCollection;
 use Illuminate\Support\Facades\DB;
@@ -45,6 +46,9 @@ class CreateVideoStreamsService
     /** Per-track metadata from the mkvmerge header probe, keyed by track index (== ffprobe stream index):
      *  `[index => ['language' => ?string BCP-47, 'name' => ?string]]`. Empty for non-Matroska sources. */
     private array $trackMeta = [];
+
+    /** Fallback for {@see sourceBitRate} when the video track states no rate of its own. */
+    private int $containerVideoBitRate = 0;
 
     public function handle(Video $video, string $localPath): void
     {
@@ -98,7 +102,9 @@ class CreateVideoStreamsService
             throw new Exception("Invalid video file for video {$video->ulid}");
         }
 
-        $duration = $ffprobe->format($localPath)->get('duration')
+        $format = $ffprobe->format($localPath);
+
+        $duration = $format->get('duration')
             ?? $videoStream->get('duration');
 
         // A duration-less source would only die much later (the segment planner yields no
@@ -107,11 +113,38 @@ class CreateVideoStreamsService
             throw new Exception("Could not determine a positive duration for video {$video->ulid}");
         }
 
+        $this->containerVideoBitRate = $this->containerVideoBitRate($format, $streamCollection);
+
         return [
             'streamCollection' => $streamCollection,
             'duration' => $duration,
             'aspectRatio' => $videoStream->get('display_aspect_ratio', $this->calculateAspectRatio($videoStream->get('width'), $videoStream->get('height'))),
         ];
+    }
+
+    /**
+     * What the container spends on video, for sources whose video track states no rate of its own.
+     * The container's rate covers every track, so the tracks that do state one are discounted; what
+     * remains still bounds the video from above rather than measuring it, which is all its readers
+     * ask of it — a ceiling. Zero when the container states no rate either.
+     */
+    private function containerVideoBitRate(Format $format, StreamCollection $streams): int
+    {
+        $containerRate = $format->get('bit_rate');
+
+        if (! is_numeric($containerRate)) {
+            return 0;
+        }
+
+        $stated = 0;
+
+        foreach ($streams as $stream) {
+            if ($stream->get('codec_type') !== 'video' && is_numeric($rate = $stream->get('bit_rate'))) {
+                $stated += (int) $rate;
+            }
+        }
+
+        return max(0, (int) $containerRate - $stated);
     }
 
     /**
@@ -425,10 +458,15 @@ class CreateVideoStreamsService
     }
 
     /**
-     * Source bit rate in bps. Matroska carries none per stream, so fall back to mkvmerge's `BPS` tag
-     * (suffixed per language, e.g. `BPS-eng`); the container's own bit_rate is no substitute, it sums
-     * every track. Zero when unknown. Read by {@see \App\Services\Concerns\DetectsStreamCopy}, whose
-     * copy fast-path is currently unreachable — video is always window-cut ({@see \App\Services\ChunkTranscodeService}).
+     * Source bit rate in bps, most precise source first: Matroska carries none per stream, so fall
+     * back to mkvmerge's `BPS` tag (suffixed per language, e.g. `BPS-eng`) and then to the container
+     * ({@see containerVideoBitRate}). Zero only when the file states no rate anywhere.
+     *
+     * The container used to be rejected here as too coarse — it sums every track — which was true of
+     * the only reader at the time ({@see \App\Services\Concerns\DetectsStreamCopy}, whose fast-path is
+     * unreachable anyway: video is always window-cut). It stopped being the whole story once
+     * {@see \App\Services\Concerns\ResolvesRateControl} began reading it, because there a coarse
+     * number is a ceiling and zero is *no* ceiling: every MKV re-encoded uncapped.
      */
     private function sourceBitRate(FFStream $stream): int
     {
@@ -444,7 +482,7 @@ class CreateVideoStreamsService
             }
         }
 
-        return 0;
+        return $this->containerVideoBitRate;
     }
 
     /**
