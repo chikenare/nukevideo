@@ -44,7 +44,7 @@ class RenditionPreflight
         ]);
 
         throw new RuntimeException(
-            "Rendition {$this->stream->name} cannot be encoded with these parameters: "
+            "Rendition {$this->stream->width}x{$this->stream->height} cannot be encoded with these parameters: "
             .Str::limit($result->error, 400)
         );
     }

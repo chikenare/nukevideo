@@ -95,7 +95,7 @@ createdAt: string,
 };
 export type StreamData = {
 ulid: string,
-name: string,
+name: string | null,
 type: string,
 packageSize: number | null,
 fileSize: number | null,

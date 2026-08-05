@@ -37,7 +37,8 @@ const show = (stream: Stream) => {
   ulid.value = stream.ulid
   isSubtitle.value = stream.type === 'subtitle'
   form.value = {
-    name: stream.name,
+    // Only audio/subtitle tracks reach this dialog; video renditions are the unnamed ones.
+    name: stream.name ?? '',
     language: stream.language ?? '',
     forced: stream.forced,
     hearingImpaired: stream.hearingImpaired,

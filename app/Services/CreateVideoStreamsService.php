@@ -572,7 +572,9 @@ class CreateVideoStreamsService
                     'hearing_impaired' => $this->hasDisposition($stream, 'hearing_impaired'),
                 ] : []),
             ],
-            'name' => $this->uniqueName($this->baseName($stream, $codecType), $codecType),
+            // A rendition carries no label anywhere — not in a manifest, not in the panel (which
+            // shows its height) — so storing the source title on it only made "name" look load-bearing.
+            'name' => $codecType === 'video' ? null : $this->uniqueName($this->baseName($stream, $codecType), $codecType),
             'input_params' => $inputParams,
             'width' => $width,
             'height' => $height,

@@ -9,7 +9,8 @@ class StreamData extends Data
 {
     public function __construct(
         public string $ulid,
-        public string $name,
+        /** Null for video renditions — they carry no label anywhere; the panel shows their height. */
+        public ?string $name,
         public string $type,
         public ?int $packageSize,
         public ?int $fileSize,
