@@ -191,7 +191,15 @@ class Video extends Model
             ->max(fn (Stream $s) => $s->meta['source_height'] ?? null);
     }
 
-    public function markAsFailed(): void
+    /**
+     * @param  string|null  $reason  What went wrong. Stream-scoped failures also write it to that
+     *                               stream's `error_log`; this one carries the ones no single
+     *                               stream owns (a stalled worker, a source that never arrived),
+     *                               which otherwise leave a failed video explainable only by log
+     *                               forensics. Rides the activity entry, read back through
+     *                               {@see \App\Http\Controllers\Api\ActivityLogController}.
+     */
+    public function markAsFailed(?string $reason = null): void
     {
         // Guarded + atomic: only an active video may move to FAILED, so a reaper/prune sweep
         // can't clobber one a slow-but-alive worker just COMPLETED, nor double-fire the webhook.
@@ -214,8 +222,17 @@ class Video extends Model
             ->performedOn($this)
             ->causedBy($this->user)
             ->event('video_failed')
+            ->withProperties(array_filter(['reason' => self::trimReason($reason)]))
             ->log("Video processing failed: {$this->name}");
 
         WebhookDispatcher::forVideo('video.error', $this);
+    }
+
+    /** ffmpeg pours its whole stderr into an exception; keep the head, where the cause is. */
+    public static function trimReason(?string $reason): ?string
+    {
+        $reason = trim((string) $reason);
+
+        return $reason === '' ? null : Str::limit($reason, 1000);
     }
 }

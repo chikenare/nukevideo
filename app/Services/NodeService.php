@@ -35,6 +35,14 @@ class NodeService
 
     public const QUEUE_RETRY_AFTER = 1850;
 
+    // How long a redeploy waits for the old worker to finish its in-flight jobs before SIGKILL.
+    // Horizon on SIGTERM stops taking work and finishes what it has; killing it early instead
+    // strands those jobs as `reserved` in Redis for QUEUE_RETRY_AFTER (~31 min) with the new
+    // container up and idle. One chunk pass (WORKER_TIMEOUT) plus slack covers what is running
+    // almost always; a packaging job caught mid-run still pays the redelivery wait, by choice —
+    // covering it too would hold every deploy for up to 30 minutes.
+    public const WORKER_STOP_GRACE = self::WORKER_TIMEOUT + 60;
+
     // Keeps the worker's idle Redis connection alive through ISP CGNAT during long ffmpeg
     // encodes; without outgoing traffic the NAT mapping is dropped and the next command read-errors.
     private const WORKER_SYSCTLS = [
@@ -174,7 +182,9 @@ class NodeService
     public function runFullDeploy(Node $node, \Closure $onOutput): void
     {
         $script = $this->buildDeployScript($node);
-        $this->ssh($node, 'bash -s', 300, $script, $onOutput);
+        // Covers the worst case: a full drain (WORKER_STOP_GRACE) plus image pull and startup.
+        // The old 300s would have cut the SSH session mid-drain and left no container at all.
+        $this->ssh($node, 'bash -s', self::WORKER_STOP_GRACE + 600, $script, $onOutput);
     }
 
     public function buildDeployScript(Node $node): string
@@ -260,6 +270,7 @@ class NodeService
 
         $image = $this->resolveImage('api');
         $name = "nukevideo_worker_{$node->id}";
+        $stopGrace = self::WORKER_STOP_GRACE;
 
         $dockerFlags = $this->extractDockerFlags($node);
 
@@ -267,6 +278,8 @@ class NodeService
             'env' => $this->getEnvironmentVariables($node),
             'labels' => ['vector.enable=true'],
             'sysctls' => self::WORKER_SYSCTLS,
+            // So a plain `docker stop` (host reboot included) also drains instead of killing at 10s.
+            'stop_timeout' => $stopGrace,
             'command' => 'php /var/www/html/artisan horizon',
             'healthcheck' => 'healthcheck-horizon',
             'cpuset' => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
@@ -287,6 +300,12 @@ class NodeService
         pull_image {$image}
 
         echo "=== Deploying worker ==="
+        # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit
+        # reserved in Redis for ~31 minutes with the new container idle. No-op when idle.
+        if docker inspect {$name} &>/dev/null; then
+            echo "Draining running jobs (up to {$stopGrace}s)..."
+            docker stop --time={$stopGrace} {$name} || true
+        fi
         docker rm -f {$name} 2>/dev/null || true
         docker run -d {$runArgs}
 
@@ -546,6 +565,10 @@ class NodeService
         if (! empty($options['group_add'])) {
             // Raw on purpose: the value may be a shell expansion resolved on the node.
             $cmd .= " --group-add {$options['group_add']}";
+        }
+
+        if (! empty($options['stop_timeout'])) {
+            $cmd .= ' --stop-timeout '.(int) $options['stop_timeout'];
         }
 
         if (! empty($options['cpuset'])) {

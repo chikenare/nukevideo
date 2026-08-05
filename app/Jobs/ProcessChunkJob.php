@@ -236,7 +236,7 @@ class ProcessChunkJob implements ShouldQueue
 
         $this->batch()?->cancel();
 
-        $stream->update(['error_log' => $e->getMessage()]);
-        $video->markAsFailed();
+        $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
+        $video->markAsFailed("Rendition {$stream->name} failed on chunk {$this->chunkIndex}: {$e->getMessage()}");
     }
 }

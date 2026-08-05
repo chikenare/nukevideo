@@ -40,9 +40,16 @@ class CleanupVideoResourcesJob implements ShouldQueue
 
         // Safety net for runs that never reached finalizeVideoIfReady. Only our own subtrees
         // (the store reuses the default bucket), never the whole `{ulid}/` prefix.
-        Storage::disk('chunks')->deleteDirectory(Video::chunksDirFor($this->videoUlid));
-        Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::SOURCE_DIR);
-        Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::FINAL_DIR);
+        //
+        // A FAILED video keeps them: its mirrored source and staged work are what make a retry
+        // minutes rather than a full re-download and re-encode ({@see \App\Console\Commands\RetryVideos}).
+        // PruneScratchJob reclaims them once it is 30 minutes cold, so the reprieve is bounded.
+        // An orphan (no video row at all) is still swept — nothing can retry it.
+        if ($video?->status !== VideoStatus::FAILED->value) {
+            Storage::disk('chunks')->deleteDirectory(Video::chunksDirFor($this->videoUlid));
+            Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::SOURCE_DIR);
+            Storage::disk('chunks')->deleteDirectory("{$this->videoUlid}/".Video::FINAL_DIR);
+        }
 
         // The uploaded source is only reclaimed after a SUCCESSFUL run. A FAILED video keeps it
         // for the PruneStaleVideos window (24h) — same policy as reaper/chunk failures — so the
