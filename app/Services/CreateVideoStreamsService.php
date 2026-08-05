@@ -225,23 +225,38 @@ class CreateVideoStreamsService
         $output->streams()->attach([...$videoIds, ...$audioIds]);
     }
 
+    /**
+     * Which template variants THIS source gets, decided by what each would actually produce.
+     * {@see ResolvesScale::resolveOutputDimensions} never upscales, so comparing nominal sizes was
+     * both redundant as an upscale guard and wrong at the edges: a real 4K master is rarely 3840
+     * exactly (cinema crops — 3832x1596 — run a few pixels short) and lost its 4K rung to that
+     * shortfall. Instead, resolve every variant against the source and keep one per DISTINCT
+     * output size; among variants that would produce the same pixels, the nominally smallest wins —
+     * its quality knobs are the ones tuned for that resolution. Template order is preserved.
+     */
     private function filterVariants(FFStream $sourceVideo, array $variants): array
     {
-        $sourceMax = max($sourceVideo->get('width'), $sourceVideo->get('height'));
+        $sourceWidth = (int) $sourceVideo->get('width');
+        $sourceHeight = (int) $sourceVideo->get('height');
 
-        $kept = array_values(array_filter($variants, function (array $variant) use ($sourceMax) {
-            $variantMax = max($variant['width'] ?? 0, $variant['height'] ?? 0);
+        $bySize = collect($variants)
+            ->sortBy(fn (array $variant) => max($variant['width'] ?? 0, $variant['height'] ?? 0));
 
-            return $sourceMax >= $variantMax;
-        }));
+        $seen = [];
+        $keptKeys = [];
 
-        if (empty($kept) && ! empty($variants)) {
-            usort($variants, fn (array $a, array $b) => max($a['width'] ?? 0, $a['height'] ?? 0) <=> max($b['width'] ?? 0, $b['height'] ?? 0));
+        foreach ($bySize as $key => $variant) {
+            [$width, $height] = $this->resolveOutputDimensions($variant, $sourceWidth, $sourceHeight);
 
-            return [$variants[0]];
+            if (isset($seen["{$width}x{$height}"])) {
+                continue;
+            }
+
+            $seen["{$width}x{$height}"] = true;
+            $keptKeys[$key] = true;
         }
 
-        return $kept;
+        return array_values(array_intersect_key($variants, $keptKeys));
     }
 
     private function resolveVideoStreams(Video $video, FFStream $sourceVideo, array $variants, ?string $videoCodec): array
