@@ -283,6 +283,7 @@ export type UpdateStreamData = {
 name: string,
 language: string | null,
 forced: boolean,
+hearingImpaired: boolean | null,
 };
 }
 namespace Template {

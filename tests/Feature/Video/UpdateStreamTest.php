@@ -287,6 +287,57 @@ it('accepts a null language', function () {
     expect(Storage::disk('s3')->get($this->hlsPath))->not->toContain('LANGUAGE="es-419"');
 });
 
+it('lets a forced subtitle share its name with the full track', function () {
+    // Apple's own HLS examples label forced subs identically to their full counterpart —
+    // the FORCED attribute is the distinction, not the name.
+    $this->video->streams()->create([
+        'path' => "{$this->video->ulid}/subtitle/full.mp4",
+        'type' => 'subtitle',
+        'meta' => [],
+        'name' => 'Español',
+        'forced' => false,
+    ]);
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'Español',
+        'language' => 'es',
+        'forced' => true,
+    ])->assertOk()->assertJsonPath('data.name', 'Español');
+});
+
+it('still rejects a duplicate name within the same forced flag', function () {
+    $this->video->streams()->create([
+        'path' => "{$this->video->ulid}/subtitle/full.mp4",
+        'type' => 'subtitle',
+        'meta' => [],
+        'name' => 'Español',
+        'forced' => false,
+    ]);
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'español',
+        'language' => 'es',
+        'forced' => false,
+    ])->assertStatus(422)->assertJsonValidationErrors('name');
+});
+
+it('checks the collision against the forced flag being set, not the stored one', function () {
+    // Flipping forced and renaming in one request must collide with the DESTINATION group.
+    $this->video->streams()->create([
+        'path' => "{$this->video->ulid}/subtitle/forced.mp4",
+        'type' => 'subtitle',
+        'meta' => [],
+        'name' => 'Español',
+        'forced' => true,
+    ]);
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'Español',
+        'language' => 'es',
+        'forced' => true,
+    ])->assertStatus(422)->assertJsonValidationErrors('name');
+});
+
 it('rejects a name already used by another track of the same type', function () {
     $this->video->streams()->create([
         'path' => "{$this->video->ulid}/audio/other.mp4",
@@ -308,6 +359,83 @@ it('allows an audio and a subtitle track to share a name', function () {
         'language' => 'en',
         'forced' => false,
     ])->assertOk();
+});
+
+it('marks a subtitle as SDH in the database and in both manifests', function () {
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'English (SDH)',
+        'language' => 'en',
+        'forced' => false,
+        'hearingImpaired' => true,
+    ])->assertOk()->assertJsonPath('data.hearingImpaired', true);
+
+    expect(Storage::disk('s3')->get($this->dashPath))
+        ->toContain('<Role schemeIdUri="urn:mpeg:dash:role:2011" value="caption"/>')
+        ->not->toContain('value="subtitle"');
+
+    expect(Storage::disk('s3')->get($this->hlsPath))
+        ->toContain('CHARACTERISTICS="public.accessibility.transcribes-spoken-dialog,public.accessibility.describes-music-and-sound"');
+});
+
+it('drops the SDH markers again when the flag is turned off', function () {
+    $this->subtitle->update(['meta' => ['hearing_impaired' => true]]);
+    Storage::disk('s3')->put($this->dashPath, str_replace(
+        'value="subtitle"',
+        'value="caption"',
+        Storage::disk('s3')->get($this->dashPath),
+    ));
+    Storage::disk('s3')->put($this->hlsPath, str_replace(
+        'NAME="English",DEFAULT=NO,AUTOSELECT=YES',
+        'NAME="English",DEFAULT=NO,AUTOSELECT=YES,CHARACTERISTICS="public.accessibility.transcribes-spoken-dialog,public.accessibility.describes-music-and-sound"',
+        Storage::disk('s3')->get($this->hlsPath),
+    ));
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'English',
+        'language' => 'en',
+        'forced' => false,
+        'hearingImpaired' => false,
+    ])->assertOk()->assertJsonPath('data.hearingImpaired', false);
+
+    expect(Storage::disk('s3')->get($this->dashPath))->toContain('value="subtitle"');
+    expect(Storage::disk('s3')->get($this->hlsPath))->not->toContain('CHARACTERISTICS');
+});
+
+it('keeps the forced role when an SDH flag lands on a forced subtitle', function () {
+    // forced-subtitle outranks caption ({@see ManifestEditor::textRole}); the flag is stored
+    // and resurfaces the moment the track is unforced.
+    $this->subtitle->update(['forced' => true]);
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'English',
+        'language' => 'en',
+        'forced' => true,
+        'hearingImpaired' => true,
+    ])->assertOk();
+
+    expect(Storage::disk('s3')->get($this->dashPath))->not->toContain('value="caption"');
+    expect(Storage::disk('s3')->get($this->hlsPath))->not->toContain('CHARACTERISTICS');
+});
+
+it('leaves the flag alone when the request does not carry it', function () {
+    $this->subtitle->update(['meta' => ['hearing_impaired' => true]]);
+
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'Renamed',
+        'language' => 'en',
+        'forced' => false,
+    ])->assertOk()->assertJsonPath('data.hearingImpaired', true);
+});
+
+it('refuses to flip the flag on an audio track', function () {
+    // Audio SDH was baked into the packaged DASH Accessibility descriptor; without that surgery
+    // the API would contradict the manifests.
+    $this->putJson("/api/streams/{$this->audio->ulid}", [
+        'name' => 'Espanol',
+        'language' => 'es-419',
+        'forced' => false,
+        'hearingImpaired' => true,
+    ])->assertStatus(422)->assertJsonValidationErrors('hearingImpaired');
 });
 
 it('refuses to edit a video rendition', function () {

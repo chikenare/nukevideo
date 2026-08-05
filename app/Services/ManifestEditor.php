@@ -118,7 +118,7 @@ class ManifestEditor
      * language is left alone — players read the manifest, so an edited package is simply not
      * byte-identical to a repackaged one.
      *
-     * @param  list<string>  $fields  any of `name`, `language`, `forced`
+     * @param  list<string>  $fields  any of `name`, `language`, `forced`, `hearing_impaired`
      */
     public function relabelStream(Video $video, Stream $stream, array $fields): void
     {
@@ -411,7 +411,8 @@ class ManifestEditor
             $changed = $this->dashSetLabel($doc, $xpath, $set, (string) $stream->name) || $changed;
         }
 
-        if ($stream->type === 'subtitle' && in_array('forced', $fields, true)) {
+        // Both flags resolve into the same single Role ({@see textRole}), so either edit rewrites it.
+        if ($stream->type === 'subtitle' && array_intersect(['forced', 'hearing_impaired'], $fields) !== []) {
             $changed = $this->dashSetTextRole($doc, $xpath, $set, $stream) || $changed;
         }
 
@@ -663,6 +664,10 @@ class ManifestEditor
 
         if ($stream->type === 'subtitle' && in_array('forced', $fields, true)) {
             $attributes['FORCED'] = $stream->forced ? 'YES' : null;
+        }
+
+        // CHARACTERISTICS follows the resolved role, which either flag can move ({@see textRole}).
+        if ($stream->type === 'subtitle' && array_intersect(['forced', 'hearing_impaired'], $fields) !== []) {
             $attributes['CHARACTERISTICS'] = $this->textRole($stream) === 'caption'
                 ? implode(',', self::CAPTION_CHARACTERISTICS)
                 : null;

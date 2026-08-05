@@ -30,6 +30,7 @@ const form = ref({
   name: '',
   language: '',
   forced: false,
+  hearingImpaired: false,
 })
 
 const show = (stream: Stream) => {
@@ -39,6 +40,7 @@ const show = (stream: Stream) => {
     name: stream.name,
     language: stream.language ?? '',
     forced: stream.forced,
+    hearingImpaired: stream.hearingImpaired,
   }
   errors.value = {}
   dialogOpen.value = true
@@ -53,6 +55,8 @@ const handleUpdate = async () => {
       name: form.value.name,
       language: form.value.language.trim() || null,
       forced: isSubtitle.value && form.value.forced,
+      // Audio SDH is baked into the packaged manifests; the API only lets subtitles change it.
+      hearingImpaired: isSubtitle.value ? form.value.hearingImpaired : null,
     })
     dialogOpen.value = false
     emit('updated', updated)
@@ -97,6 +101,16 @@ defineExpose({ show })
             <p class="text-xs text-muted-foreground">For foreign-language dialogue only.</p>
           </div>
           <Switch id="edit_stream_forced" v-model="form.forced" />
+        </div>
+        <div v-if="isSubtitle" class="flex items-center justify-between">
+          <div>
+            <Label for="edit_stream_sdh">SDH</Label>
+            <p class="text-xs text-muted-foreground">Subtitles for the deaf and hard of hearing.</p>
+          </div>
+          <Switch id="edit_stream_sdh" v-model="form.hearingImpaired" />
+          <p v-if="errors.hearingImpaired" class="text-sm text-destructive">
+            {{ errors.hearingImpaired[0] }}
+          </p>
         </div>
         <DialogFooter>
           <Button type="submit" :disabled="loading">
