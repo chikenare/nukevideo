@@ -52,6 +52,12 @@ class TemplateController extends Controller
     {
         $template = $request->project()->templates()->where('ulid', $ulid)->firstOrFail();
 
+        // Videos keep a reference to the template they were encoded with; deleting it under
+        // them used to cascade the whole library away.
+        if ($template->videos()->exists()) {
+            abort(422, 'This template has videos encoded with it. Delete them first.');
+        }
+
         $template->delete();
 
         return response()->json(['message' => 'Template deleted successfully']);

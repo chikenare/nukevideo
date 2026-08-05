@@ -114,30 +114,35 @@ class StreamManagementService
         return true;
     }
 
+    /** Same lock as {@see update}: both edit the video's shared manifest files on S3. */
     public function destroy(string $ulid, Project $project): void
     {
-        $stream = $this->findOrFail($ulid, $project);
-        $video = $stream->video;
+        DB::transaction(function () use ($ulid, $project) {
+            $stream = $this->findOrFail($ulid, $project);
+            $video = $stream->video;
 
-        if (! in_array($video->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
-            throw ValidationException::withMessages(['message' => 'You cannot delete any stream until the video is processed.'])->status(400);
-        }
+            Video::whereKey($video->id)->lockForUpdate()->first();
 
-        if ($stream->type === 'video' && $video->streams()->where('type', 'video')->count() <= 1) {
-            throw ValidationException::withMessages(['message' => 'You cannot delete the last video rendition.'])->status(400);
-        }
-
-        // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery.
-        if ($video->status === VideoStatus::COMPLETED->value) {
-            $this->manifests->removeStream($video, $stream);
-
-            // removeStream cleans up CMAF segments; the original staged file (VTT) is separate.
-            if ($stream->type === 'subtitle') {
-                Storage::disk('s3')->delete($stream->path);
+            if (! in_array($video->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
+                throw ValidationException::withMessages(['message' => 'You cannot delete any stream until the video is processed.'])->status(400);
             }
-        }
 
-        $stream->delete();
+            if ($stream->type === 'video' && $video->streams()->where('type', 'video')->count() <= 1) {
+                throw ValidationException::withMessages(['message' => 'You cannot delete the last video rendition.'])->status(400);
+            }
+
+            // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery.
+            if ($video->status === VideoStatus::COMPLETED->value) {
+                $this->manifests->removeStream($video, $stream);
+
+                // removeStream cleans up CMAF segments; the original staged file (VTT) is separate.
+                if ($stream->type === 'subtitle') {
+                    Storage::disk('s3')->delete($stream->path);
+                }
+            }
+
+            $stream->delete();
+        });
     }
 
     private function findOrFail(string $ulid, Project $project): Stream

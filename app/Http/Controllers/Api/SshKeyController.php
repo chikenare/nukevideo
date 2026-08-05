@@ -32,6 +32,13 @@ class SshKeyController extends Controller
     public function destroy(string $id)
     {
         $key = SshKey::findOrFail($id);
+
+        // nodes.ssh_key_id nulls on delete, and a node without a key can't be deployed to or
+        // torn down — refuse while anything still authenticates with it.
+        if ($key->nodes()->exists()) {
+            abort(422, 'This key is assigned to one or more nodes. Reassign them first.');
+        }
+
         $key->delete();
 
         return response()->json(['message' => 'SSH key deleted']);
