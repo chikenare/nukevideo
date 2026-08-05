@@ -27,9 +27,20 @@ describe('worker deploy drain', function () {
 
         // SIGKILLing Horizon mid-encode strands its jobs as reserved in Redis for ~31 minutes
         // while the new container sits idle; `docker stop --time` lets it finish them first.
-        expect($script)->toContain("docker stop --time={$grace}")
-            ->and(strpos($script, "docker stop --time={$grace}"))
+        // `-t`, not `--time`/`--timeout`: the long forms flipped between docker CLI generations.
+        expect($script)->toContain("DRAIN={$grace}")
+            ->and($script)->toContain('docker stop -t "$DRAIN"')
+            ->and(strpos($script, 'docker stop -t'))
             ->toBeLessThan(strpos($script, 'docker rm -f nukevideo_worker_'));
+    });
+
+    it('lets a run opt out of the drain', function () {
+        $script = app(NodeService::class)->buildDeployScript(workerNode());
+
+        // `curl ... | bash -s -- --no-drain` (or --drain=N); the panel sends ?drain=0 the same way.
+        expect($script)->toContain('--no-drain) DRAIN=0')
+            ->and($script)->toContain('--drain=*) DRAIN=')
+            ->and($script)->toContain('[ "$DRAIN" -gt 0 ]');
     });
 
     it('bakes the same grace into the new container for every future stop', function () {

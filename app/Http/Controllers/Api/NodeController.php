@@ -52,7 +52,10 @@ class NodeController extends Controller
     {
         $node->load('sshKey');
 
-        return response()->stream(function () use ($node) {
+        // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
+        $drain = request()->boolean('drain', true);
+
+        return response()->stream(function () use ($node, $drain) {
             $send = function (string $type, string $data = '') {
                 echo 'data: '.json_encode(['type' => $type, 'data' => $data])."\n\n";
                 if (ob_get_level()) {
@@ -68,7 +71,7 @@ class NodeController extends Controller
 
                 $this->nodeService->runFullDeploy($node, function ($output) use ($send) {
                     $send('output', $output);
-                });
+                }, $drain);
                 $send('done');
             } catch (\Throwable $e) {
                 $send('error', $e->getMessage());

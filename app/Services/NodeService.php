@@ -179,17 +179,20 @@ class NodeService
         return "/home/{$node->user}/nukevideo/node-{$node->uuid}";
     }
 
-    public function runFullDeploy(Node $node, \Closure $onOutput): void
+    public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true): void
     {
         $script = $this->buildDeployScript($node);
-        // Covers the worst case: a full drain (WORKER_STOP_GRACE) plus image pull and startup.
-        // The old 300s would have cut the SSH session mid-drain and left no container at all.
-        $this->ssh($node, 'bash -s', self::WORKER_STOP_GRACE + 600, $script, $onOutput);
+        $grace = $drain ? self::WORKER_STOP_GRACE : 0;
+
+        // SSH timeout covers the worst case: the drain window plus image pull and startup.
+        // The old flat 300s cut the session mid-drain and left no container at all.
+        $this->ssh($node, 'bash -s'.($drain ? '' : ' -- --no-drain'), $grace + 600, $script, $onOutput);
     }
 
     public function buildDeployScript(Node $node): string
     {
         $workdir = self::workdir($node);
+        $stopGrace = self::WORKER_STOP_GRACE;
         $vectorImage = 'timberio/vector:0.56.0-alpine';
         $nodeType = $node->type->value;
         $nodeId = $node->id;
@@ -220,6 +223,20 @@ class NodeService
         WORKDIR="{$workdir}"
         SUDO=""
         [ "\$(id -u)" -ne 0 ] && SUDO="sudo"
+
+        # Seconds the old worker gets to finish in-flight jobs before it is killed. The default
+        # covers one full chunk pass; docker stop returns the moment Horizon exits, so an idle
+        # worker drains in seconds either way. Override per run when the wait is not worth it
+        # (killed jobs sit reserved in Redis for ~31 min before redelivery):
+        #   curl ... | bash -s -- --no-drain
+        #   curl ... | bash -s -- --drain=60
+        DRAIN={$stopGrace}
+        for arg in "\$@"; do
+            case "\$arg" in
+                --no-drain) DRAIN=0 ;;
+                --drain=*) DRAIN="\${arg#--drain=}" ;;
+            esac
+        done
 
         pull_image() {
             docker pull "\$1" 2>/dev/null || docker image inspect "\$1" &>/dev/null \
@@ -301,10 +318,12 @@ class NodeService
 
         echo "=== Deploying worker ==="
         # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit
-        # reserved in Redis for ~31 minutes with the new container idle. No-op when idle.
-        if docker inspect {$name} &>/dev/null; then
-            echo "Draining running jobs (up to {$stopGrace}s)..."
-            docker stop --time={$stopGrace} {$name} || true
+        # reserved in Redis for ~31 minutes with the new container idle. Returns as soon as
+        # Horizon exits — the cap only bites with a job mid-flight. `-t`, not `--time`/`--timeout`:
+        # the long forms flipped between docker CLI generations, the short one never did.
+        if [ "\$DRAIN" -gt 0 ] && docker inspect {$name} &>/dev/null; then
+            echo "Draining running jobs (up to \${DRAIN}s)..."
+            docker stop -t "\$DRAIN" {$name} || true
         fi
         docker rm -f {$name} 2>/dev/null || true
         docker run -d {$runArgs}
