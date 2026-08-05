@@ -36,6 +36,11 @@ jobs:
       - name: Install dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
 
+      # SourceBitRateTest muxes real fixtures: what ffprobe reports per container IS the
+      # regression under test, so faking the processes would test nothing.
+      - name: Install media tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends ffmpeg mkvtoolnix
+
       - name: Prepare environment
         run: |
           cp .env.example .env
