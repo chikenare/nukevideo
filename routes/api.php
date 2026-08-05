@@ -76,7 +76,8 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         // Activity log (scoped to the project's videos)
         Route::get('activity-log', [ActivityLogController::class, 'index']);
 
-        // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
+        // Upload (S3) — the project arrives in the metadata: Uppy does not go through our axios
+        // interceptor, so it never sends the X-Project-Ulid header.
         Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
         Route::post('s3/multipart', [MyCustomUppyController::class, 'createMultipartUpload']);
         Route::get('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'getUploadedParts']);

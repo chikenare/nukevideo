@@ -1,71 +1,70 @@
 # CLAUDE.md
 
-Guía para Claude Code en este repositorio. Léela antes de escribir código.
+Guidance for Claude Code in this repository. Read it before writing code.
 
-## Qué es NukeVideo
+## What NukeVideo is
 
-Motor open-source de procesamiento y entrega de video: recibe un archivo subido directo a S3, lo
-transcodifica en paralelo repartiendo ventanas entre nodos de trabajo remotos (CPU o GPU), lo
-empaqueta como CMAF (HLS + DASH sobre los mismos segmentos) y lo sirve por CDN. El panel de
-administración es una SPA propia y hay además una API pública para consumidores externos.
+An open-source video processing and delivery engine: it takes a file uploaded straight to S3,
+transcodes it in parallel by spreading keyframe-aligned windows across remote worker nodes (CPU or
+GPU), packages it as CMAF (HLS + DASH over the same segments) and serves it through a CDN. The
+admin panel is a first-party SPA, and there is a public API for external consumers.
 
-Monorepo: **backend Laravel 12 en la raíz**, **SPA Vue 3 en `front/`**, **docs VitePress en `docs/`**.
+Monorepo: **Laravel 12 backend at the root**, **Vue 3 SPA in `front/`**, **VitePress docs in `docs/`**.
 
 ## Layout
 
 ```
-.                       # Laravel 12 (PHP ^8.2) en la raíz
+.                       # Laravel 12 (PHP ^8.2) at the root
 ├── app/
 │   ├── Console/Commands/   # videos:dispatch, videos:reap, videos:prune, videos:retry
-│   ├── Data/               # Spatie Data — DTOs de entrada y salida (NO hay FormRequests)
-│   ├── DTOs/               # DTOs planos, no Spatie (UploadMeta, StorageWebhookData)
-│   ├── Enums/              # enums backed de string
-│   ├── Http/Controllers/   # + Controllers/Api para admin/cuenta
+│   ├── Data/               # Spatie Data — request and response DTOs (there are NO FormRequests)
+│   ├── DTOs/               # plain DTOs, not Spatie (UploadMeta, StorageWebhookData)
+│   ├── Enums/              # backed string enums
+│   ├── Http/Controllers/   # plus Controllers/Api for admin and account endpoints
 │   ├── Http/Middleware/    # ResolveProject, DenyProjectKey, EnsureAdmin, Verify*
 │   ├── Jobs/ + Jobs/Concerns/
 │   ├── Models/             # Video, Output, Stream, Template, Node, Project, User, SshKey
-│   ├── Observers/          # registrados con #[ObservedBy] en el modelo
-│   ├── Rules/              # reglas usadas dentro de rules() de los Data
-│   ├── Services/           # + Services/Cdn (proveedores) y Services/Concerns (traits)
+│   ├── Observers/          # registered with #[ObservedBy] on the model
+│   ├── Rules/              # rules used inside the Data objects' rules()
+│   ├── Services/           # plus Services/Cdn (providers) and Services/Concerns (traits)
 │   ├── Settings/           # spatie/laravel-settings
-│   └── Support/            # helpers sin estado: Cpu, Gpu, MediaDuration, MediaSource
+│   └── Support/            # stateless helpers: Cpu, Gpu, MediaDuration, MediaSource
 ├── database/
-│   ├── migrations/             # MariaDB en prod, SQLite en tests
+│   ├── migrations/             # MariaDB in production, SQLite in tests
 │   ├── clickhouse-migrations/  # php artisan clickhouse:migrate
-│   └── settings/               # migraciones de spatie/laravel-settings
+│   └── settings/               # spatie/laravel-settings migrations
 ├── docs/                   # VitePress (guide/ + api/)
-├── front/                  # SPA Vue 3 + Vite (proyecto pnpm independiente)
-├── vod/                    # nginx del edge de entrega (secure_token)
-├── vector/                 # config de Vector: logs del edge → ClickHouse
-└── compose.yml             # el stack local completo
+├── front/                  # Vue 3 + Vite SPA (its own pnpm project)
+├── vod/                    # delivery edge nginx (secure_token)
+├── vector/                 # Vector config: edge logs → ClickHouse
+└── compose.yml             # the whole local stack
 ```
 
-**No hay `app/Actions`, ni `app/Http/Requests`, ni `app/Policies`, ni `routes/web.php`.**
+**There is no `app/Actions`, no `app/Http/Requests`, no `app/Policies` and no `routes/web.php`.**
 
-## Comandos
+## Commands
 
-Todo corre en Docker. Nunca ejecutes `php`, `composer`, `pnpm` o `artisan` directo en el host.
-El contenedor del backend es **`nukevideo-api`** (no `app`).
+Everything runs in Docker. Never run `php`, `composer`, `pnpm` or `artisan` directly on the host.
+The backend container is **`nukevideo-api`** (not `app`).
 
 ```bash
-docker compose up -d                                          # levantar el stack
-docker compose exec nukevideo-api php artisan <comando>
-docker compose exec nukevideo-api composer <comando>
+docker compose up -d                                          # bring the stack up
+docker compose exec nukevideo-api php artisan <command>
+docker compose exec nukevideo-api composer <command>
 
-# Tests — config:clear SIEMPRE primero (ver "Gotchas")
+# Tests — ALWAYS clear the config first (see "Gotchas")
 docker compose exec nukevideo-api php artisan config:clear
 docker compose exec nukevideo-api php artisan test
 
-docker compose exec nukevideo-api ./vendor/bin/pint           # formatear PHP
+docker compose exec nukevideo-api ./vendor/bin/pint           # format PHP
 docker compose exec nukevideo-api php artisan migrate
 docker compose exec nukevideo-api php artisan clickhouse:migrate
-docker compose exec nukevideo-api php artisan typescript:transform   # regenera front/src/types/generated.d.ts
-docker compose exec nukevideo-api php artisan data:cache-structures  # tras editar app/Data
+docker compose exec nukevideo-api php artisan typescript:transform   # regenerates front/src/types/generated.d.ts
+docker compose exec nukevideo-api php artisan data:cache-structures  # after editing app/Data
 ```
 
-Frontend (`front/`, **pnpm exclusivamente** — el lockfile es `pnpm-lock.yaml`). El servidor de Vite
-ya arranca solo con `docker compose up -d` (es el `CMD` del contenedor), así que `exec` es solo
-para las verificaciones:
+Frontend (`front/`, **pnpm only** — the lockfile is `pnpm-lock.yaml`). The Vite dev server already
+starts with `docker compose up -d` (it is the container's `CMD`), so `exec` is only for the checks:
 
 ```bash
 docker compose exec nukevideo-front pnpm run lint         # eslint . --fix --cache
@@ -73,147 +72,151 @@ docker compose exec nukevideo-front pnpm run type-check   # vue-tsc --build
 docker compose exec nukevideo-front pnpm run format       # prettier
 ```
 
-Docs (`docs/`, también pnpm): el contenedor `nukevideo-docs` sirve `docs:dev` en
-`docs.nukevideo.localhost`. Para compilar: `docker compose exec nukevideo-docs pnpm run docs:build`.
+Docs (`docs/`, pnpm as well): the `nukevideo-docs` container serves `docs:dev` at
+`docs.nukevideo.localhost`. To build: `docker compose exec nukevideo-docs pnpm run docs:build`.
 
-**CI es la referencia de qué debe pasar** (`.github/workflows/ci.yml`, solo en PRs a `main`):
-`./vendor/bin/pint --test` + `php artisan test` en la raíz, y `pnpm exec eslint .` (sin `--fix`) +
-`pnpm run type-check` en `front/`. Las imágenes solo se publican en tags `v*`.
+**CI is the reference for what must pass** (`.github/workflows/ci.yml`, on PRs to `main` only):
+`./vendor/bin/pint --test` and `php artisan test` at the root, plus `pnpm exec eslint .` (no
+`--fix`) and `pnpm run type-check` in `front/`. Images are published on `v*` tags only.
 
-> `composer dev` y `composer setup` son los scripts stock de Laravel y **están rotos aquí**:
-> invocan `npm run dev` y `npm install` en la raíz, donde no hay `package.json`. Usa
-> `docker compose up -d`. `composer test` sí funciona (hace `config:clear` y luego `artisan test`).
+> `composer dev` and `composer setup` are stock Laravel scripts and **are broken here**: they call
+> `npm run dev` and `npm install` at the root, where there is no `package.json`. Use
+> `docker compose up -d`. `composer test` does work (it runs `config:clear`, then `artisan test`).
 
 ## Stack
 
-**Backend:** Laravel 12, PHP ^8.2 (CI compila con 8.5) · Sanctum (sesión para la SPA + tokens
-personales y de proyecto) · Spatie Laravel Data (DTOs y validación) ·
-spatie/laravel-typescript-transformer (genera los types del front) · Horizon sobre Redis ·
-Telescope (solo en local, registrado condicionalmente porque está en `dont-discover`) ·
-Pest 4 · Pint · spatie/laravel-activitylog · spatie/laravel-settings · Sentry · phpseclib (SSH a
-los nodos) · ClickHouse vía cybercog/laravel-clickhouse.
+**Backend:** Laravel 12, PHP ^8.2 (CI builds on 8.5) · Sanctum (session for the SPA, plus personal
+and project tokens) · Spatie Laravel Data (DTOs and validation) ·
+spatie/laravel-typescript-transformer (generates the frontend types) · Horizon on Redis ·
+Telescope (local only — it is in `dont-discover` and registered conditionally) · Pest 4 · Pint ·
+spatie/laravel-activitylog · spatie/laravel-settings · Sentry · phpseclib (SSH to the nodes) ·
+ClickHouse through cybercog/laravel-clickhouse.
 
 **Frontend:** Vue 3 `<script setup lang="ts">` · Vite 7 · Pinia (setup stores) · Vue Router ·
-Tailwind v4 (sin `tailwind.config.js`, la config vive en CSS) · shadcn-vue sobre reka-ui ·
+Tailwind v4 (no `tailwind.config.js`; the config lives in CSS) · shadcn-vue on top of reka-ui ·
 axios · shaka-player / hls.js / dashjs · Uppy.
 
-**Infra:** Docker + Traefik (`*.nukevideo.localhost`) · **MariaDB 11** (no PostgreSQL) · Redis ·
-RustFS (S3) · ClickHouse · **ffmpeg** y **shaka-packager** (compilados en el Dockerfile) ·
-**s5cmd** para todas las transferencias S3 · Vector.
+**Infrastructure:** Docker + Traefik (`*.nukevideo.localhost`) · **MariaDB 11** (not PostgreSQL) ·
+Redis · RustFS (S3) · ClickHouse · **ffmpeg** and **shaka-packager** (both compiled in the
+Dockerfile) · **s5cmd** for every S3 transfer · Vector.
 
-## El pipeline de encoding
+## The encoding pipeline
 
-Es el corazón del proyecto; entiéndelo antes de tocar `app/Jobs` o `app/Services`.
+This is the heart of the project; understand it before touching `app/Jobs` or `app/Services`.
 
-Subida directa a S3 (Uppy multipart) → webhook del bucket → `OnVideoUploaded` crea el `Video`
-(status `PENDING`) y su `Stream` de tipo `original` → el scheduler `videos:dispatch` reclama un
-hueco de worker y despacha **`PrepareVideoJob`** (cola `orchestration`), que descarga la fuente
-**una sola vez** de S3 principal, la espeja al almacén LAN `chunks`, la sondea para crear
-`Output`s y `Stream`s, corre los probes (per-title CRF, bitrate, preflight), planea ventanas
-alineadas a keyframes y hace fan-out de **un `Bus::batch` por cola de hardware** con un
-`ProcessChunkJob` por (ventana × rendición). En paralelo corren `EncodeSidecarTracksJob` (audio y
-subtítulos en una sola pasada, nunca chunked), `ExtractThumbnailJob` y `GenerateVideoStoryboard`.
-El `then()` del último batch pasa el video a `UPLOADING` y despacha **`PackageVideoJob`** (cola
-`packaging`, `ShouldBeUnique`), que concatena chunks con `-c copy`, corre shaka-packager una vez
-por altura distinta sobre un árbol de segmentos compartido, injerta los subtítulos con
-`ManifestEditor` y sincroniza todo a S3 principal con `s5cmd`. `CompletesVideo` cierra el video.
+Direct multipart upload to S3 (Uppy) → bucket webhook → `OnVideoUploaded` creates the `Video`
+(status `PENDING`) and its `original` stream → the `videos:dispatch` scheduler claims a worker slot
+and dispatches **`PrepareVideoJob`** (`orchestration` queue), which downloads the source from
+primary S3 **exactly once**, mirrors it to the LAN `chunks` store, probes it into `Output`s and
+`Stream`s, runs the probes (per-title CRF, bitrate, preflight), plans keyframe-aligned windows and
+fans out **one `Bus::batch` per hardware queue** with a `ProcessChunkJob` per (window × rendition).
+`EncodeSidecarTracksJob` (audio and subtitles in a single pass, never chunked),
+`ExtractThumbnailJob` and `GenerateVideoStoryboard` run alongside it. The last batch's `then()`
+moves the video to `UPLOADING` and dispatches **`PackageVideoJob`** (`packaging` queue,
+`ShouldBeUnique`), which concatenates the chunks with `-c copy`, runs shaka-packager once per
+distinct height over a shared segment tree, grafts the subtitles in with `ManifestEditor` and
+`s5cmd sync`s everything to primary S3. `CompletesVideo` closes the video out.
 
-Conceptos que hay que tener claros:
+Concepts worth having straight:
 
-- **Stream** = una pista concreta (`original` | `video` | `audio` | `subtitle`). Una "rendición"
-  es un stream de video. Los segmentos viven en `{videoUlid}/{streamUlid}/`.
-- **Output** = un paquete CMAF / familia de manifiestos, 1:1 con una entrada de
-  `query.outputs[]` de la plantilla. **Los streams se comparten entre outputs** cuando sus
-  parámetros resueltos son idénticos; lo que es por-output son los manifiestos.
-- **Template** = columna JSON `query` con `outputs[].variants[]`. `config/ffmpeg.php` es el
-  catálogo de códecs y el esquema de cada parámetro (reglas, `available_for`, plantilla del flag).
-- **Disco `chunks` vs `s3`**: `chunks` es un RustFS en la LAN, desechable (fuente espejada,
-  chunks, sidecars). El `s3` principal se lee una vez y se escribe una vez por video.
-- **Colas**: `default` (solo la API), `orchestration` (todos los workers), `packaging`,
-  `video-processing` (CPU) y `video-processing-{intel,nvidia}` (los nodos GPU no drenan la de CPU).
-  `config/horizon.php` decide los supervisores según `NODE_TYPE`/`NODE_ACCEL`.
+- **Stream** = one concrete track (`original` | `video` | `audio` | `subtitle`). A "rendition" is a
+  video stream. Segments live under `{videoUlid}/{streamUlid}/`.
+- **Output** = one CMAF package / manifest family, 1:1 with an entry of the template's
+  `query.outputs[]`. **Streams are shared across outputs** when their resolved parameters are
+  identical; what is per-output is the manifests.
+- **Template** = a JSON `query` column holding `outputs[].variants[]`. `config/ffmpeg.php` is the
+  codec catalogue and the schema for every parameter (rules, `available_for`, flag template).
+- **`chunks` disk vs `s3`**: `chunks` is a RustFS on the LAN, disposable (mirrored source, chunks,
+  staged sidecars). Primary `s3` is read once and written once per video.
+- **Queues**: `default` (API host only), `orchestration` (every worker), `packaging`,
+  `video-processing` (CPU) and `video-processing-{intel,nvidia}` (GPU nodes do not drain the CPU
+  queue). `config/horizon.php` picks the supervisors from `NODE_TYPE`/`NODE_ACCEL`.
 
-Configs propias: `ffmpeg.php` (catálogo de códecs y parámetros), `packager.php`, `nuke.php`
-(secretos de webhook/interno, timeout de worker), `template-presets.php`, `horizon.php`,
-`filesystems.php` (disco `chunks`).
+Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `packager.php`, `nuke.php`
+(webhook/internal secrets, worker timeout), `template-presets.php`, `horizon.php`,
+`filesystems.php` (the `chunks` disk).
 
-## Convenciones de backend
+## Backend conventions
 
-- **La lógica va en `app/Services`**, no en controladores. No hay Actions: no inventes el patrón.
-  El CRUD trivial sí vive inline en el controlador; lo destructivo o multi-paso va a un Service.
-- **Los Data objects son la validación.** No hay FormRequests y nada llama a `$request->validate()`.
-  - Entrada: `app/Data/{Dominio}/{Store|Update}{Modelo}Data.php` extiende `App\Data\RequestData`,
-    que aporta `toDatabase()` (array en snake_case, omitiendo los `Optional` ausentes).
-  - Salida: `app/Data/{Modelo}Data.php` extiende `Data`, con `fromModel()` por argumentos nombrados.
-  - **Casing**: el mapper global de *entrada* es snake_case y el de *salida* camelCase
-    (`config/data.php`). Por eso cada propiedad que deba aceptar camelCase del panel lleva
-    `#[MapInputName(CamelCaseMapper::class)]` **a nivel de propiedad** — un `#[MapName]` de clase
-    se ignora en la entrada. Las claves de `rules()` van en camelCase.
-  - Nada de `#[TypeScript]`: se transforman los directorios `app/Data` y `app/Enums` completos.
-- **Controladores delgados**: inyección por constructor promovido, el Data object se inyecta como
-  argumento de la acción, y se devuelve `response()->json(['data' => XData::fromModel($m)])`.
-- **Scoping por proyecto**: `$request->project()` es un macro de Request que aborta 400 si no hay
-  proyecto resuelto. Toda consulta de recurso sale de ahí
-  (`$request->project()->videos()->where('ulid', $ulid)->firstOrFail()`). Buscar por ULID sin ese
-  scoping es una fuga entre tenants, no un descuido de estilo.
-- **Rutas** (`routes/api.php`, plano, **sin versionado**): tres grupos dentro de
-  `auth:sanctum` + `throttle:api` — `no-project-key` (cuenta), `resolve.project` (recursos del
-  proyecto) y `['no-project-key', EnsureAdmin::class]` (admin). Elegir mal el grupo es un bug de
-  seguridad: una API key de proyecto autentica **como el proyecto**.
-- **Jobs**: siempre `$tries` y `$backoff` explícitos, con un comentario del porqué; los pesados
-  además `$timeout`. La cola va en una constante de clase (`private const QUEUE = 'orchestration';`)
-  y se despacha con `->onQueue(self::QUEUE)`. Los constructores reciben **primitivos**, no modelos.
-  `failed()` marca el video con `markAsFailed()`.
-- **Modelos**: ULID asignado en un `boot()` escrito a mano (no hay trait `HasUlid`); la PK sigue
-  siendo el autoincremental y el ULID es el identificador público. `casts()` como método. Los
-  observers se registran con `#[ObservedBy]`. Los modelos cargan bastante lógica de dominio y las
-  constantes de rutas de almacenamiento.
-- **Migraciones**: ver `/migration`. Clase anónima, docblock explicando el **porqué**, `down()`
-  siempre, guardas `Schema::hasColumn` para poder re-correrlas, y compatibles con MariaDB **y**
-  SQLite (sin `JSON_EXTRACT`; `dropForeign` guardado para sqlite).
-- **Estilo**: Pint con el preset por defecto (no hay `pint.json`). El código **no** usa
-  `declare(strict_types=1)` salvo en `Services/Cdn` y las migraciones de ClickHouse, y no hay
-  clases `final`: sigue lo que hay, no introduzcas un segundo estilo.
-- Los comentarios explican **por qué**, y razonan sobre modos de fallo. Esa densidad es la casa.
+- **Business logic lives in `app/Services`**, not in controllers. There are no Actions — do not
+  introduce the pattern. Trivial CRUD does sit inline in the controller; destructive or multi-step
+  work goes to a service.
+- **Data objects are the validation layer.** There are no FormRequests and nothing calls
+  `$request->validate()`.
+  - Input: `app/Data/{Domain}/{Store|Update}{Model}Data.php` extends `App\Data\RequestData`, which
+    supplies `toDatabase()` (a snake_case array, omitting absent `Optional` fields).
+  - Output: `app/Data/{Model}Data.php` extends `Data`, with a `fromModel()` built from named
+    arguments.
+  - **Casing**: the global *input* mapper is snake_case and the *output* one is camelCase
+    (`config/data.php`). That is why every property that has to accept camelCase from the panel
+    carries `#[MapInputName(CamelCaseMapper::class)]` **on the property** — a class-level
+    `#[MapName]` is ignored on input. `rules()` keys are written in camelCase.
+  - No `#[TypeScript]` attributes: the whole `app/Data` and `app/Enums` directories are transformed.
+- **Thin controllers**: promoted constructor injection, the Data object injected as an action
+  argument, and `response()->json(['data' => XData::fromModel($m)])` on the way out.
+- **Project scoping**: `$request->project()` is a Request macro that aborts 400 when no project is
+  resolved. Every resource query starts there
+  (`$request->project()->videos()->where('ulid', $ulid)->firstOrFail()`). Looking a resource up by
+  ULID without that scoping is a cross-tenant leak, not a style slip.
+- **Routes** (`routes/api.php`, flat, **unversioned**): three groups inside `auth:sanctum` +
+  `throttle:api` — `no-project-key` (account-wide), `resolve.project` (project resources) and
+  `['no-project-key', EnsureAdmin::class]` (admin). Picking the wrong group is a security bug: a
+  project API key authenticates **as the project**.
+- **Jobs**: always set `$tries` and `$backoff` deliberately, with a comment on the reasoning; heavy
+  ones also set `$timeout`. The queue goes in a class constant
+  (`private const QUEUE = 'orchestration';`) and dispatch goes through `->onQueue(self::QUEUE)`.
+  Constructors take **primitives**, not models. `failed()` marks the video with `markAsFailed()`.
+- **Models**: the ULID is assigned in a hand-written `boot()` (there is no `HasUlid` trait); the
+  primary key stays the auto-increment and the ULID is the public identifier. `casts()` is a
+  method. Observers are registered with `#[ObservedBy]`. Models carry a fair amount of domain logic
+  and the storage-path constants.
+- **Migrations**: see `/migration`. Anonymous class, a docblock explaining **why**, always a
+  `down()`, `Schema::hasColumn` guards so they can be re-run, and compatible with MariaDB **and**
+  SQLite (no `JSON_EXTRACT`; guard `dropForeign` for sqlite).
+- **Style**: Pint on the default preset (there is no `pint.json`). The codebase does **not** use
+  `declare(strict_types=1)` outside `Services/Cdn` and the ClickHouse migrations, and has no
+  `final` classes: follow what is there rather than introducing a second style.
+- Comments explain **why**, and reason about failure modes. That density is the house style.
 
-## Convenciones de frontend
+## Frontend conventions
 
-- Composition API con `<script setup lang="ts">`, siempre.
-- **Nunca escribas a mano types de la API.** Vienen de `front/src/types/generated.d.ts`
-  (`App.Data.VideoData`, `App.Enums.VideoStatus`), generado desde los Data objects. Si falta algo,
-  se arregla el Data object y se regenera. El archivo está versionado; no lo edites.
-- `front/src/services/` — una clase por dominio con `BASE_PATH`, `constructor(private api = apiClient)`
-  y export de una instancia única. El cliente axios central es `front/src/services/api.ts`
-  (interceptores: cabecera `X-Project-Ulid` desde localStorage, 401 → `/login`, 422 →
-  `ValidationException`).
-- Páginas en `front/src/pages/` (no `views/`). Stores Pinia en formato setup.
-- `front/src/components/ui/` es shadcn-vue generado: no se edita a mano (está fuera de ESLint).
-- Prettier: sin punto y coma, comillas simples, ancho 100.
+- Composition API with `<script setup lang="ts">`, always.
+- **Never hand-write API types.** They come from `front/src/types/generated.d.ts`
+  (`App.Data.VideoData`, `App.Enums.VideoStatus`), generated from the Data objects. If something is
+  missing, fix the Data object and regenerate. The file is committed; do not edit it.
+- `front/src/services/` — one class per domain with a `BASE_PATH`,
+  `constructor(private api = apiClient)` and a single exported instance. The central axios client is
+  `front/src/services/api.ts` (interceptors: `X-Project-Ulid` header from localStorage, 401 →
+  `/login`, 422 → `ValidationException`).
+- Pages live in `front/src/pages/` (not `views/`). Pinia stores are setup stores.
+- `front/src/components/ui/` is generated shadcn-vue: never edit by hand (it is excluded from ESLint).
+- Prettier: no semicolons, single quotes, print width 100.
 
-## Gotchas que cuestan horas
+## Gotchas that cost hours
 
-- **`config:clear` antes de los tests.** `TestCase::setUp` tira y remigra la base; con la config
-  cacheada lee la conexión de desarrollo y **borra la base real**. Hay una guarda que lo aborta,
-  pero corre `config:clear` igual.
-- **Caché de estructuras de Spatie Data**: tras editar una clase de `app/Data`, las propiedades
-  nuevas desaparecen del JSON. Vive en el store `file` (no en Redis):
-  `php artisan data:cache-structures`.
-- **La DB es MariaDB**, aunque la guía global hable de PostgreSQL. Escribe migraciones para MySQL.
-- Los contenedores de worker llevan la imagen horneada, sin mount del código: para probar un
-  cambio hay que `docker cp` + `horizon:terminate`.
-- Reintentar un video no basta con `status = pending`: hay que borrar antes su fila de
-  `job_batches` (los chunks sobreviven, así que el reintento reaprovecha).
+- **`config:clear` before the tests.** `TestCase::setUp` drops and re-migrates the database; with a
+  cached config it reads the development connection and **wipes the real database**. There is a
+  guard that aborts, but clear the config anyway.
+- **Spatie Data structure cache**: after editing a class in `app/Data`, new properties vanish from
+  the JSON. It lives in the `file` store, not Redis: `php artisan data:cache-structures`.
+- **The database is MariaDB**, whatever the global guide says about PostgreSQL. Write migrations
+  for MySQL.
+- Worker containers run a baked image with no code mount: testing a change there means
+  `docker cp` plus `horizon:terminate`.
+- Retrying a video takes more than `status = pending`: delete its `job_batches` row first (the
+  chunks survive, so the retry is a cache hit).
 
-## Reglas para Claude
+## Rules for Claude
 
-- Antes de crear un archivo, busca el equivalente que ya exista y sigue su patrón.
-- No agregues dependencias sin preguntar.
-- **Nunca edites archivos generados**: `front/src/types/generated.d.ts`, `front/src/components/ui/`.
-  Corrige la fuente y regenera.
-- No toques `.env` ni secretos; si falta una variable, dilo y agrégala a `.env.example`.
-- No modifiques infraestructura (`compose.yml`, `Dockerfile`, Traefik, nginx del `vod/`, CI) salvo
-  que se pida explícitamente.
-- Al terminar backend: Pint y los tests relevantes. Al terminar frontend: lint y type-check.
-- Si un cambio implica una migración destructiva de datos, detente y pregunta.
-- Commits en Conventional Commits, en inglés e imperativo. No hagas push salvo que te lo pidan.
-- **Código, nombres y comentarios en inglés. Respuestas y explicaciones en español.**
+- Before creating a file, look for the equivalent that already exists and follow its pattern.
+- Do not add dependencies without asking.
+- **Never edit generated files**: `front/src/types/generated.d.ts`, `front/src/components/ui/`.
+  Fix the source and regenerate.
+- Do not touch `.env` or secrets; if a variable is missing, say so and add it to `.env.example`.
+- Do not modify infrastructure (`compose.yml`, `Dockerfile`, Traefik, the `vod/` nginx, CI) unless
+  explicitly asked.
+- When you finish backend work: Pint and the relevant tests. Frontend: lint and type-check.
+- If a change implies a destructive data migration, stop and ask.
+- Conventional Commits, in English, imperative mood. Do not push unless asked.
+- **This is an open-source project: everything in the repository is written in English** — code,
+  names, comments, docblocks, commit messages, documentation and this file included.
