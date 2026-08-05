@@ -89,6 +89,21 @@ trait ResolvesRateControl
     }
 
     /**
+     * The one combination nothing bounds: an encoder that honours no VBV, in quality mode, over a
+     * source whose rate could not be read. Every other path ends at a ceiling — the encoder's own,
+     * a pinned average, or the measured one. Worth saying out loud; it stayed silent through a
+     * 1080p rendition that spent 5.9 Mbps.
+     */
+    public function encodesUncapped(): bool
+    {
+        $params = $this->stream->input_params ?? [];
+
+        return in_array($params['video_codec'] ?? null, self::VBV_BLIND_CODECS, true)
+            && empty($params['constant_bitrate'])
+            && $this->sourceBitrateCap() === null;
+    }
+
+    /**
      * AV1 on QSV honours no VBV: `-maxrate` silently selects CQP at the driver's default QP and
      * `-global_quality` stops being read with it, and there is no QVBR either (Arc B580 / iHD 1.22).
      * Its ceiling can only be chosen up front, from what the quality mode was measured to cost

@@ -9,6 +9,7 @@
 
 use App\Services\ChunkTranscodeService;
 use App\Services\QualityBitrateProbe;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
 
 function rateArgs(array $params, array $meta = LIGHT_SOURCE, int $width = 1920, int $height = 1080): string
@@ -97,6 +98,39 @@ describe('av1_qsv, blind to a VBV', function () {
         'no source bitrate' => [['source_codec' => 'h264', 'source_width' => 1920, 'source_height' => 1080]],
         'no source resolution' => [['source_codec' => 'h264', 'source_bit_rate' => 1_263_599]],
         'a bitrate too low to be real' => [[...LIGHT_SOURCE, 'source_bit_rate' => 40_000]],
+    ]);
+
+    it('says so out loud rather than encoding uncapped in silence', function () {
+        Process::fake();
+        Log::spy();
+        config(['ffmpeg.node_accel' => 'intel']);
+
+        $meta = ['source_codec' => 'h264', 'source_width' => 1920, 'source_height' => 1080];
+        $stream = matrixStream(qualityTemplate('av1_qsv'), meta: $meta, width: 1920, height: 1080);
+
+        expect((new ChunkTranscodeService($stream))->encodesUncapped())->toBeTrue();
+
+        (new QualityBitrateProbe($stream))->measure('/tmp/src.mkv', 6800.0);
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(fn (string $message) => str_contains($message, 'uncapped'))
+            ->once();
+    });
+});
+
+describe('encodesUncapped', function () {
+    it('is true only for a VBV-blind quality mode with no source rate behind it', function (string $codec, array $meta, array $extra, bool $expected) {
+        $stream = matrixStream(qualityTemplate($codec, $extra), meta: $meta, width: 1920, height: 1080);
+
+        expect((new ChunkTranscodeService($stream))->encodesUncapped())->toBe($expected);
+    })->with([
+        // The prod case: av1_qsv in ICQ over a source whose rate never got read.
+        'av1_qsv, no source rate' => ['av1_qsv', ['source_codec' => 'h264', 'source_width' => 1920, 'source_height' => 1080], [], true],
+        'av1_qsv, source rate known' => ['av1_qsv', LIGHT_SOURCE, [], false],
+        'av1_qsv, pinned average' => ['av1_qsv', ['source_codec' => 'h264'], ['constant_bitrate' => '2500k'], false],
+        // Everything else carries its own VBV, so an unknown source costs precision, not the ceiling.
+        'libsvtav1, no source rate' => ['libsvtav1', ['source_codec' => 'h264'], ['maxrate' => '4000k'], false],
+        'h264_qsv, no source rate' => ['h264_qsv', ['source_codec' => 'h264'], [], false],
     ]);
 });
 
