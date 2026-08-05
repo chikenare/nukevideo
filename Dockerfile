@@ -42,6 +42,7 @@ RUN apk add --no-cache curl tar xz && \
 # --- PHP base with common user setup ---
 FROM ${PHP_FPM_IMAGE} AS php-base
 
+# Force UTF-8 so mkvmerge -J doesn't truncate its JSON on accented track names.
 ENV LANG=C.UTF-8
 
 USER root
@@ -60,8 +61,8 @@ RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
 
 
 
-# --- API dev ---
-FROM php-base AS api-dev
+# --- PHP runtime: php-base + system packages + extensions, shared by api-dev and api-prod ---
+FROM php-base AS php-runtime
 
 ARG TARGETARCH
 
@@ -77,6 +78,9 @@ RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /
     fi && \
     rm -rf /var/lib/apt/lists/*
 RUN install-php-extensions redis intl
+
+# --- API dev ---
+FROM php-runtime AS api-dev
 
 USER www-data
 
@@ -113,41 +117,9 @@ RUN mkdir -p bootstrap/cache \
 RUN php artisan package:discover
 
 # --- API prod ---
-FROM ${PHP_FPM_IMAGE} AS api-prod
+FROM php-runtime AS api-prod
 
 ENV PHP_OPCACHE_ENABLE=true
-
-# See php-base: force UTF-8 so mkvmerge -J doesn't truncate its JSON on accented track names.
-ENV LANG=C.UTF-8
-
-USER root
-
-COPY --from=ffmpeg-builder /usr/local/bin/ffprobe /usr/local/bin/ffmpeg /usr/local/bin/
-
-COPY --from=shaka-builder /usr/local/bin/packager /usr/local/bin/packager
-
-COPY --from=s5cmd /s5cmd /usr/local/bin/s5cmd
-
-ARG USER_ID=1000
-ARG GROUP_ID=1000
-
-RUN docker-php-serversideup-set-id www-data $USER_ID:$GROUP_ID && \
-    docker-php-serversideup-set-file-permissions --owner $USER_ID:$GROUP_ID
-
-ARG TARGETARCH
-
-# media-types: /etc/mime.types drives s5cmd Content-Type guessing — VOD edge secure_token needs exact manifest types
-# Intel QSV runtime for GPU nodes (amd64 only — no arm64 builds of the Intel stack): libvpl
-# dispatcher -> libmfx-gen -> iHD VA-API driver; the iHD encode entrypoints only ship in the non-free build.
-RUN sed -i 's/^Components: main$/Components: main non-free non-free-firmware/' /etc/apt/sources.list.d/*.sources && \
-    apt-get update && apt-get install -y --no-install-recommends \
-      openssh-client media-types mkvtoolnix && \
-    if [ "$TARGETARCH" = "amd64" ]; then \
-      apt-get install -y --no-install-recommends \
-        intel-media-va-driver-non-free libvpl2 libmfx-gen1.2 libva-drm2; \
-    fi && \
-    rm -rf /var/lib/apt/lists/*
-RUN install-php-extensions redis intl
 
 WORKDIR /var/www/html
 
@@ -193,7 +165,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then CC_OPT="-O3 -mpopcnt"; else CC_OPT="-O3
     --with-http_secure_link_module \
     --with-http_realip_module \
     --with-cc-opt="$CC_OPT" && \
-    make && make install
+    make -j"$(nproc)" && make install
 
 FROM alpine:3.20 AS proxy-prod
 
