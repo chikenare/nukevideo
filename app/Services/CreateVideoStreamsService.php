@@ -705,7 +705,7 @@ class CreateVideoStreamsService
     /**
      * The stored file extension for a rendition. Subtitles are always WebVTT; audio/video take
      * the container of their target codec (config/ffmpeg.php `format`) so the stored key matches
-     * the muxed bytes — nginx-vod identifies the file by content, not extension.
+     * the muxed bytes.
      */
     private function getStreamExtension(string $codecType, ?array $inputParams): string
     {

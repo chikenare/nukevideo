@@ -100,7 +100,7 @@ return [
             'label' => 'AAC',
 
             'format' => 'mp4',
-            // nginx-vod-module: AAC is packaged for both HLS and DASH.
+            // AAC decodes everywhere, so it's packaged for both HLS and DASH.
             'protocols' => ['hls', 'dash'],
             'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
@@ -110,7 +110,7 @@ return [
             'label' => 'FDK-AAC',
 
             'format' => 'mp4',
-            // nginx-vod-module: AAC is packaged for both HLS and DASH.
+            // AAC decodes everywhere, so it's packaged for both HLS and DASH.
             'protocols' => ['hls', 'dash'],
             'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
@@ -119,11 +119,11 @@ return [
             'type' => 'audio',
             'label' => 'Opus',
 
-            // nginx-vod reads MP4 input only (it can't identify a WebM container), but it
-            // does support the Opus *codec* for DASH — so mux Opus into MP4 (ISO-BMFF `dOps`),
-            // not WebM. ffmpeg's mp4 muxer writes the Opus sample entry natively.
+            // Opus muxes into MP4 (ISO-BMFF `dOps`), not WebM: the whole pipeline — chunk concat,
+            // shaka's CMAF input — runs on ISO-BMFF. ffmpeg's mp4 muxer writes the sample entry natively.
             'format' => 'mp4',
-            // nginx-vod-module only supports Opus in DASH, not HLS.
+            // DASH only: Safari (the main HLS consumer) doesn't decode Opus, so an HLS manifest
+            // listing it would just advertise audio the player can't play.
             'protocols' => ['dash'],
             'available_for' => ['libx264', 'libx265', 'libsvtav1', 'h264_qsv', 'hevc_qsv', 'av1_qsv', 'h264_nvenc', 'hevc_nvenc', 'av1_nvenc'],
         ],
@@ -279,7 +279,7 @@ return [
             'available_for' => ['libx264', 'libx265', 'libsvtav1'],
         ],
 
-        // --- ABR alignment (nginx-vod) ---
+        // --- ABR alignment (CMAF packaging) ---
         // -keyint_min is only honoured by libx264; x265/av1 use their own *-params
         // families, so it's scoped to libx264 to avoid a silent no-op.
         // NOTE: scene-cut suppression and closed GOP are NOT template params — they're
