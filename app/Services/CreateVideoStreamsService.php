@@ -284,40 +284,68 @@ class CreateVideoStreamsService
         return $streamIds;
     }
 
+    /**
+     * One audio rendition per (source track × distinct resolved channel count). The template's
+     * `channels` list is a LADDER, not a lookup: each entry resolves against the track — clamped
+     * to the track's own channels, never upmixed, mirroring {@see filterVariants} — and entries
+     * that resolve to the same count collapse into the nominally smallest, whose bitrate was tuned
+     * for that layout. A 5.1 source with a [stereo, 5.1] template yields both (the stereo one a
+     * downmix, `-ac 2`); a stereo source yields only its stereo. The old semantics matched entries
+     * to tracks by exact channel count, so a 5.1-only source silently produced no stereo at all.
+     */
     private function getOrCreateAudioStreams(Video $video, StreamCollection $streamCollection, array $audioConfig): array
     {
-        $channelConfigsList = $audioConfig['channels'] ?? [];
-        $channelConfigs = collect($channelConfigsList)->keyBy('channels');
-        $singleConfig = count($channelConfigsList) === 1 ? $channelConfigsList[0] : null;
+        $ladder = collect($audioConfig['channels'] ?? [])
+            ->sortBy(fn (array $config) => (int) ($config['channels'] ?? PHP_INT_MAX))
+            ->values();
         $sharedAudioParams = collect($audioConfig)->except('channels')->toArray();
 
         $streamIds = [];
 
         foreach ($streamCollection->audios() as $stream) {
-            $sourceChannels = (string) $stream->get('channels');
-            $channelConfig = $singleConfig ?? $channelConfigs->get($sourceChannels);
+            $sourceChannels = max(1, (int) $stream->get('channels'));
 
-            if (! $channelConfig) {
-                continue;
+            // Keyed by resolved count: the first (nominally smallest) entry wins each rung.
+            $rungs = [];
+            foreach ($ladder as $config) {
+                $channels = min((int) ($config['channels'] ?? 0) ?: $sourceChannels, $sourceChannels);
+                $rungs[$channels] ??= $config;
             }
 
-            $inputParams = array_merge($sharedAudioParams, $channelConfig);
-            $key = $stream->get('index').':'.$this->streamSignature($inputParams);
+            foreach ($rungs as $channels => $config) {
+                $inputParams = array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]);
+                $key = $stream->get('index').':'.$this->streamSignature($inputParams);
 
-            if (! isset($this->audioStreamCache[$key])) {
-                $created = $this->createStream(
-                    video: $video,
-                    stream: $stream,
-                    codecType: $stream->get('codec_type'),
-                    inputParams: $inputParams,
-                );
-                $this->audioStreamCache[$key] = $created->id;
+                if (! isset($this->audioStreamCache[$key])) {
+                    $created = $this->createStream(
+                        video: $video,
+                        stream: $stream,
+                        codecType: $stream->get('codec_type'),
+                        inputParams: $inputParams,
+                        // Only when the track splits into several rungs: the layout is what tells
+                        // "Español" apart from "Español" in every player menu (and keeps the
+                        // packager from merging same-language same-label sets).
+                        nameSuffix: count($rungs) > 1 ? ' ('.self::channelLayoutLabel($channels).')' : '',
+                    );
+                    $this->audioStreamCache[$key] = $created->id;
+                }
+
+                $streamIds[] = $this->audioStreamCache[$key];
             }
-
-            $streamIds[] = $this->audioStreamCache[$key];
         }
 
         return $streamIds;
+    }
+
+    private static function channelLayoutLabel(int $channels): string
+    {
+        return match ($channels) {
+            1 => 'Mono',
+            2 => 'Stereo',
+            6 => '5.1',
+            8 => '7.1',
+            default => "{$channels}ch",
+        };
     }
 
     private function streamSignature(array $params): string
@@ -536,6 +564,7 @@ class CreateVideoStreamsService
         FFStream $stream,
         string $codecType,
         ?array $inputParams = null,
+        string $nameSuffix = '',
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType, $inputParams);
@@ -574,7 +603,7 @@ class CreateVideoStreamsService
             ],
             // A rendition carries no label anywhere — not in a manifest, not in the panel (which
             // shows its height) — so storing the source title on it only made "name" look load-bearing.
-            'name' => $codecType === 'video' ? null : $this->uniqueName($this->baseName($stream, $codecType), $codecType),
+            'name' => $codecType === 'video' ? null : $this->uniqueName($this->baseName($stream, $codecType).$nameSuffix, $codecType),
             'input_params' => $inputParams,
             'width' => $width,
             'height' => $height,
