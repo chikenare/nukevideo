@@ -5,25 +5,9 @@ namespace App\Observers;
 use App\Jobs\DeleteResourceWithPath;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
-use Illuminate\Support\Str;
 
 class VideoObserver
 {
-    public function creating($video)
-    {
-        $video->ulid = Str::ulid();
-    }
-
-    public function created(Video $video): void
-    {
-        //
-    }
-
-    public function updated(Video $video): void
-    {
-        //
-    }
-
     public function deleting(Video $video): void
     {
         // Relations are gone by the time `deleted` fires, so snapshot them for the webhook payload.

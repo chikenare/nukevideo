@@ -32,8 +32,9 @@ class ChunkTranscodeService
 
     /**
      * The container a codec is packaged into (config/ffmpeg.php `format`), doubling as the stored
-     * file extension and the ffmpeg `-f` muxer so the two can never disagree. nginx-vod reads MP4
-     * only, so everything we serve (incl. Opus, via ISO-BMFF) maps to mp4.
+     * file extension and the ffmpeg `-f` muxer so the two can never disagree. Everything we serve
+     * maps to mp4 (incl. Opus, via ISO-BMFF): shaka-packager repackages ISO-BMFF into CMAF, and
+     * the concat step needs every chunk in the same container anyway.
      */
     public static function formatForCodec(?string $codec): string
     {

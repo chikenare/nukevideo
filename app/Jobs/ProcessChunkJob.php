@@ -237,6 +237,9 @@ class ProcessChunkJob implements ShouldQueue
         $this->batch()?->cancel();
 
         $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
-        $video->markAsFailed("Rendition {$stream->name} failed on chunk {$this->chunkIndex}: {$e->getMessage()}");
+
+        // Video renditions carry no name (only sidecar tracks do); label them by height.
+        $label = $stream->name ?? "{$stream->height}p";
+        $video->markAsFailed("Rendition {$label} failed on chunk {$this->chunkIndex}: {$e->getMessage()}");
     }
 }

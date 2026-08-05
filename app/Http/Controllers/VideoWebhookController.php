@@ -31,9 +31,13 @@ class VideoWebhookController extends Controller
                     continue;
                 }
 
+                // Same folder the upload endpoints write to — hardcoding it here would silently
+                // drop every ingestion the day the config changes.
+                $folder = (string) config('uppy-s3-multipart-upload.s3.bucket.folder');
+
                 $key = urldecode($key);
-                if (! str_contains($key, 'tmp-videos')) {
-                    Log::debug('Webhook skipped non-tmp key', ['key' => $key]);
+                if (! str_starts_with($key, "{$folder}/")) {
+                    Log::debug('Webhook skipped non-upload key', ['key' => $key]);
 
                     continue;
                 }

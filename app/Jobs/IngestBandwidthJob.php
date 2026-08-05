@@ -61,8 +61,10 @@ class IngestBandwidthJob implements ShouldQueue
         }
 
         try {
+            // ClickHouse is behind TLS everywhere but local dev — staging included. Keep this
+            // rule in lockstep with UsageService.
             app(Client::class)
-                ->https(app()->isProduction())
+                ->https(! app()->isLocal())
                 ->insert('video_usage', $rows, $columns);
         } catch (\Throwable $e) {
             Log::warning('Failed to ingest bandwidth batch: '.$e->getMessage());
