@@ -30,6 +30,12 @@ apiClient.interceptors.response.use(
     const message = data?.message || error.message || 'Unknown Error'
     const rawError = data?.error || error.code || 'Error'
 
+    // Expired session: send the user back to login instead of leaving every view broken.
+    // A hard navigation (not the router) keeps this module free of circular imports.
+    if (status === 401 && !window.location.pathname.startsWith('/login')) {
+      window.location.assign('/login')
+    }
+
     if (status === 422) {
       return Promise.reject(new ValidationException(message, data.errors, rawError))
     }

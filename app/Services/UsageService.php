@@ -10,6 +10,8 @@ class UsageService
     public static function record(int $userId, string $metric, float $value, string $externalUserId = ''): void
     {
         try {
+            // ClickHouse is behind TLS everywhere but local dev — staging included. Keep this
+            // rule in lockstep with IngestBandwidthJob.
             app(Client::class)
                 ->https(! app()->isLocal())
                 ->insert('usage', [[
