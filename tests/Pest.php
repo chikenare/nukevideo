@@ -129,3 +129,61 @@ function matrixAllowedFlags(string $codec, string $type): array
 
     return array_merge($fromConfig, $forced, $type === 'audio' ? [] : ['-c:v', '-vf', '-map', '-an']);
 }
+
+/**
+ * Manifest fixtures are trimmed copies of real shaka-packager v3.7.2 output — the attribute set,
+ * spelling and nesting are what the packager actually emits, since that is exactly what the editor
+ * has to match. `{audio}`/`{sub}`/`{video}` stand in for the stream ULIDs the segment paths are
+ * keyed by ({@see \App\Models\Stream::segmentsPath}).
+ */
+function dashFixture(array $ulids): string
+{
+    return strtr(<<<'XML'
+        <?xml version="1.0" encoding="UTF-8"?>
+        <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" profiles="urn:mpeg:dash:profile:isoff-live:2011" minBufferTime="PT2S" type="static" mediaPresentationDuration="PT10S">
+          <Period id="0">
+            <AdaptationSet id="0" contentType="video" maxWidth="1920" maxHeight="800" segmentAlignment="true">
+              <Representation id="0" bandwidth="7679580" codecs="av01.0.08M.10.0.110.01.01.01.0" mimeType="video/mp4" width="1920" height="800">
+                <SegmentTemplate timescale="24000" initialization="{video}/init.mp4" media="{video}/$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S t="0" d="240240"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+            <AdaptationSet id="1" contentType="audio" lang="es-419" segmentAlignment="true">
+              <Label>Espanol</Label>
+              <Representation id="1" bandwidth="146973" codecs="opus" mimeType="audio/mp4" audioSamplingRate="48000">
+                <AudioChannelConfiguration schemeIdUri="urn:mpeg:dash:23003:3:audio_channel_configuration:2011" value="2"/>
+                <SegmentTemplate timescale="48000" initialization="{audio}/init.mp4" media="{audio}/$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S t="0" d="480000"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+            <AdaptationSet id="2" contentType="text" lang="en" segmentAlignment="true">
+              <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+              <Label>English</Label>
+              <Representation id="2" bandwidth="82" codecs="wvtt" mimeType="application/mp4">
+                <SegmentTemplate timescale="1000" initialization="{sub}/init.mp4" media="{sub}/$Number$.m4s" startNumber="1">
+                  <SegmentTimeline><S t="0" d="7490000"/></SegmentTimeline>
+                </SegmentTemplate>
+              </Representation>
+            </AdaptationSet>
+          </Period>
+        </MPD>
+        XML, $ulids);
+}
+
+function hlsFixture(array $ulids): string
+{
+    return strtr(<<<'M3U8'
+        #EXTM3U
+        ## Generated with https://github.com/shaka-project/shaka-packager version v3.7.2-64a6a6c-release
+
+        #EXT-X-INDEPENDENT-SEGMENTS
+
+        #EXT-X-MEDIA:TYPE=AUDIO,URI="{audio}/index.m3u8",GROUP-ID="audio",LANGUAGE="es-419",NAME="Espanol",DEFAULT=NO,AUTOSELECT=YES,CHANNELS="2"
+        #EXT-X-MEDIA:TYPE=SUBTITLES,URI="{sub}/index.m3u8",GROUP-ID="subs",LANGUAGE="en",NAME="English",DEFAULT=NO,AUTOSELECT=YES
+
+        #EXT-X-STREAM-INF:BANDWIDTH=3050279,AVERAGE-BANDWIDTH=3050279,CODECS="av01.0.08M.08",RESOLUTION=1920x800,FRAME-RATE=24.000,AUDIO="audio",SUBTITLES="subs",CLOSED-CAPTIONS=NONE
+        {video}/index.m3u8
+        M3U8, $ulids);
+}

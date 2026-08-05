@@ -127,8 +127,17 @@ class StreamManagementService
                 throw ValidationException::withMessages(['message' => 'You cannot delete any stream until the video is processed.'])->status(400);
             }
 
-            if ($stream->type === 'video' && $video->streams()->where('type', 'video')->count() <= 1) {
-                throw ValidationException::withMessages(['message' => 'You cannot delete the last video rendition.'])->status(400);
+            // Per output, not video-wide: renditions attach to outputs, so with A={1080p} and
+            // B={480p,1080p} a video-wide count of 2 would still strip A's only variant and
+            // leave its published manifests with no video at all.
+            if ($stream->type === 'video') {
+                $strandsOutput = $stream->outputs->contains(
+                    fn ($output) => $output->streams()->where('type', 'video')->count() <= 1
+                );
+
+                if ($strandsOutput) {
+                    throw ValidationException::withMessages(['message' => 'You cannot delete the last video rendition of an output.'])->status(400);
+                }
             }
 
             // A FAILED video has no packaged manifests; only COMPLETED ones need S3 surgery.

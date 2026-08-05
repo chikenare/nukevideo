@@ -10,6 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 /**
  * Writes a batch of aggregated bandwidth events (video_ulid + ip + bytes, already
@@ -37,7 +38,9 @@ class IngestBandwidthJob implements ShouldQueue
             $videoUlid = (string) ($event['video_ulid'] ?? '');
             $bytes = (int) ($event['bytes'] ?? 0);
 
-            if ($videoUlid === '' || $bytes <= 0) {
+            // The ulid is parsed out of a public request path, so it is attacker-controlled text
+            // until it matches the shape: anything else must never reach a stored column.
+            if (! Str::isUlid($videoUlid) || $bytes <= 0) {
                 continue;
             }
 

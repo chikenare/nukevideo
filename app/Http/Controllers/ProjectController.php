@@ -5,10 +5,15 @@ namespace App\Http\Controllers;
 use App\Data\Project\StoreProjectData;
 use App\Data\Project\UpdateProjectData;
 use App\Data\ProjectData;
+use App\Services\ProjectService;
 use Illuminate\Http\Request;
 
 class ProjectController extends Controller
 {
+    public function __construct(
+        private ProjectService $projects,
+    ) {}
+
     public function index(Request $request)
     {
         $projects = $request->user()->projects()->with('tokens')->latest()->get();
@@ -58,11 +63,7 @@ class ProjectController extends Controller
             ], 409);
         }
 
-        $project->videos->each->delete();
-        $project->templates->each->delete();
-        $project->tokens()->delete();
-
-        $project->delete();
+        $this->projects->delete($project);
 
         return response()->json(['message' => 'Project deleted successfully']);
     }

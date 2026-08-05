@@ -87,34 +87,27 @@ class AnalyticsService
 
     public function bandwidthByVideo(string $from, string $to, int $limit = 5): array
     {
-        $topVideos = $this->client->select(<<<'SQL'
-            SELECT video_ulid
-            FROM video_usage
-            WHERE date >= {from:Date} AND date <= {to:Date} AND video_ulid != ''
-            GROUP BY video_ulid
-            ORDER BY sum(bytes) DESC
-            LIMIT {limit:UInt8}
-        SQL, ['from' => $from, 'to' => $to, 'limit' => $limit]);
-
-        $videoIds = array_column($topVideos->rows(), 'video_ulid');
-
-        if (empty($videoIds)) {
-            return [];
-        }
-
-        $placeholders = implode(',', array_map(fn ($v) => "'{$v}'", $videoIds));
-
-        $result = $this->client->select(<<<SQL
+        // The top-N stays a subquery rather than a round-trip: video_ulid is written from the edge
+        // logs unvalidated, so feeding those values back into a second statement would mean
+        // interpolating attacker-controlled text into SQL.
+        $result = $this->client->select(<<<'SQL'
             SELECT
                 date,
                 video_ulid AS video,
                 sum(bytes) AS bytes
             FROM video_usage
-            WHERE date >= '{$from}' AND date <= '{$to}'
-              AND video_ulid IN ({$placeholders})
+            WHERE date >= {from:Date} AND date <= {to:Date}
+              AND video_ulid IN (
+                  SELECT video_ulid
+                  FROM video_usage
+                  WHERE date >= {from:Date} AND date <= {to:Date} AND video_ulid != ''
+                  GROUP BY video_ulid
+                  ORDER BY sum(bytes) DESC
+                  LIMIT {limit:UInt8}
+              )
             GROUP BY date, video
             ORDER BY date, video
-        SQL);
+        SQL, ['from' => $from, 'to' => $to, 'limit' => $limit]);
 
         return $result->rows();
     }

@@ -608,7 +608,26 @@ class ManifestEditor
             $out[] = $line;
         }
 
-        return $hit ? implode("\n", $out) : null;
+        if (! $hit) {
+            return null;
+        }
+
+        // Dropping the last audio track would otherwise leave every variant pointing at an
+        // AUDIO group with no members, which demuxed CMAF variants cannot fall back from.
+        $hasAudio = collect($out)->contains(
+            fn ($l) => str_starts_with($l, '#EXT-X-MEDIA') && str_contains($l, 'TYPE=AUDIO')
+        );
+
+        if (! $hasAudio) {
+            $out = array_map(
+                fn ($l) => str_starts_with($l, '#EXT-X-STREAM-INF')
+                    ? preg_replace('/,AUDIO="[^"]*"/', '', $l)
+                    : $l,
+                $out,
+            );
+        }
+
+        return implode("\n", $out);
     }
 
     /**
