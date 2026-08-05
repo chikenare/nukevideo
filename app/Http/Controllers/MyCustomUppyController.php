@@ -4,17 +4,27 @@ namespace App\Http\Controllers;
 
 use App\Models\Project;
 use App\Services\UppyS3Service;
+use Aws\S3\S3Client;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
-use Tapp\LaravelUppyS3MultipartUpload\Http\Controllers\UppyS3MultipartController;
 use Throwable;
 
-class MyCustomUppyController extends UppyS3MultipartController
+/*
+ * Formerly extended tapp/laravel-uppy-s3-multipart-upload's controller; the package stopped at
+ * Laravel 12 support, so the S3 multipart plumbing it provided lives inline here now.
+ */
+class MyCustomUppyController extends Controller
 {
+    protected S3Client $client;
+
+    protected string $bucket;
+
     public function __construct(protected UppyS3Service $uppyService)
     {
-        parent::__construct();
+        $this->client = Storage::disk('s3')->getClient();
+        $this->bucket = config('filesystems.disks.s3.bucket');
     }
 
     public function createMultipartUpload(Request $request)
@@ -93,28 +103,82 @@ class MyCustomUppyController extends UppyS3MultipartController
     {
         $this->authorizeUploadKey($request);
 
-        return parent::getUploadedParts($request, $uploadId);
+        return response()->json(
+            $this->listParts($request->input('key'), $uploadId)
+        );
     }
 
     public function completeMultipartUpload(Request $request, string $uploadId)
     {
         $this->authorizeUploadKey($request);
 
-        return parent::completeMultipartUpload($request, $uploadId);
+        $result = $this->client->completeMultipartUpload([
+            'Bucket' => $this->bucket,
+            'Key' => $request->input('key'),
+            'UploadId' => $uploadId,
+            'MultipartUpload' => [
+                'Parts' => $request->input('parts'),
+            ],
+        ]);
+
+        return response()->json([
+            'location' => $result['Location'],
+        ]);
     }
 
     public function abortMultipartUpload(Request $request, string $uploadId)
     {
         $this->authorizeUploadKey($request);
 
-        return parent::abortMultipartUpload($request, $uploadId);
+        $this->client->abortMultipartUpload([
+            'Bucket' => $this->bucket,
+            'Key' => $request->input('key'),
+            'UploadId' => $uploadId,
+        ]);
+
+        return response()->json([]);
     }
 
     public function signPartUpload(Request $request)
     {
         $this->authorizeUploadKey($request);
 
-        return parent::signPartUpload($request);
+        $command = $this->client->getCommand('UploadPart', [
+            'Bucket' => $this->bucket,
+            'Key' => $request->input('key'),
+            'UploadId' => $request->route('uploadId'),
+            'PartNumber' => (int) $request->route('partNumber'),
+        ]);
+
+        $result = $this->client->createPresignedRequest(
+            $command,
+            config('uppy-s3-multipart-upload.s3.presigned_url.expiry_time'),
+        );
+
+        return response()->json([
+            'url' => (string) $result->getUri(),
+        ]);
+    }
+
+    /** S3 caps ListParts pages at 1000; follow the marker so huge files list completely. */
+    private function listParts(string $key, string $uploadId): array
+    {
+        $parts = [];
+        $marker = 0;
+
+        do {
+            $page = $this->client->listParts([
+                'Bucket' => $this->bucket,
+                'Key' => $key,
+                'UploadId' => $uploadId,
+                'PartNumberMarker' => $marker,
+            ]);
+
+            $parts = array_merge($parts, $page['Parts'] ?? []);
+            $marker = $page['NextPartNumberMarker'] ?? 0;
+        } while (! empty($page['IsTruncated']));
+
+        return $parts;
     }
 
     /** Runs once per signed part, so it stays a string compare against the cached meta — no queries. */

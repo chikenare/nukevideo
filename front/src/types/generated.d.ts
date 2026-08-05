@@ -323,10 +323,10 @@ externalResourceId?: string | null,
 }
 }
 namespace Enums {
-export type CdnDriver = "self_hosted" | "bunny";
-export type NodeAccel = "intel" | "nvidia";
-export type NodeType = "worker" | "proxy";
-export type VideoStatus = "pending" | "failed" | "running" | "completed" | "uploading" | "downloading";
+export type CdnDriver = 'self_hosted' | 'bunny';
+export type NodeAccel = 'intel' | 'nvidia';
+export type NodeType = 'worker' | 'proxy';
+export type VideoStatus = 'pending' | 'failed' | 'running' | 'completed' | 'uploading' | 'downloading';
 }
 }
 declare namespace Illuminate {

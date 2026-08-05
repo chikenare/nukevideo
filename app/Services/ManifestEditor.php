@@ -47,7 +47,7 @@ class ManifestEditor
 
     /**
      * Drop a stream from every manifest that references it and delete its packaged segment tree.
-     * Manifests are scoped per output ({@see \App\Models\Output::manifestFile}) and a stream can be
+     * Manifests are scoped per output ({@see Output::manifestFile}) and a stream can be
      * attached to more than one output (the same rendition reused across outputs that share a
      * config), so the relevant manifest set is gathered per output the stream actually belongs to —
      * never deleted outright as a file, only edited in place, or a cap still serving another
@@ -109,7 +109,7 @@ class ManifestEditor
      * Rewrite one stream's presentation — label, language, forced flag — in every manifest that
      * lists it, the counterpart to {@see removeStream}. Only audio and text tracks carry any of
      * this in a manifest; a video rendition has no label, language or role
-     * ({@see \App\Services\PackagerCommandBuilder::streamDescriptor}).
+     * ({@see PackagerCommandBuilder::streamDescriptor}).
      *
      * `$fields` narrows the write to what the user actually edited, because the packager normalizes
      * languages to their shortest form: a source tagged `eng` is emitted as `lang="en"`, so
@@ -154,7 +154,7 @@ class ManifestEditor
     /**
      * Graft the packager-generated text AdaptationSet(s) from a throwaway subtitles MPD into a real
      * manifest's `<Period>`. Subtitles are packaged in a separate single-segment run
-     * ({@see \App\Services\PackagerCommandBuilder::buildText}), so the imported set is *fragmented*
+     * ({@see PackagerCommandBuilder::buildText}), so the imported set is *fragmented*
      * text (`SegmentTemplate`) that dashjs plays — a raw `<BaseURL>` VTT would make it deref null and
      * crash. Renumbers ids so they don't collide with the video/audio sets. Idempotent (skips a track
      * already present). Returns null if nothing changed. Labels come from the DB, not the manifest.
@@ -461,7 +461,7 @@ class ManifestEditor
 
     /**
      * Keep exactly one managed `<Role>` on a text set, mirroring the single role
-     * {@see \App\Services\PackagerCommandBuilder::textDescriptor} emits for the same flags. The
+     * {@see PackagerCommandBuilder::textDescriptor} emits for the same flags. The
      * first managed role is edited in place so it keeps its document position; roles outside the
      * managed set aren't ours and stay.
      */
@@ -516,7 +516,7 @@ class ManifestEditor
         $set->appendChild($node);
     }
 
-    /** @see \App\Services\PackagerCommandBuilder::textDescriptor — a forced track wins over SDH. */
+    /** @see PackagerCommandBuilder::textDescriptor — a forced track wins over SDH. */
     private function textRole(Stream $stream): string
     {
         if ($stream->forced) {
@@ -729,7 +729,7 @@ class ManifestEditor
 
     /**
      * Merge the `#EXT-X-MEDIA:TYPE=SUBTITLES` lines from a throwaway subtitles master (the separate
-     * subtitle run, {@see \App\Services\PackagerCommandBuilder::buildText}) into the real master, and
+     * subtitle run, {@see PackagerCommandBuilder::buildText}) into the real master, and
      * tag every variant with the subtitle group. The lines are shaka's own (URI points at the kept
      * `{ulid}/index.m3u8`). Idempotent via the TYPE=SUBTITLES guard. Null if nothing merged.
      */

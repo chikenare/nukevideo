@@ -9,12 +9,12 @@ transcodes it in parallel by spreading keyframe-aligned windows across remote wo
 GPU), packages it as CMAF (HLS + DASH over the same segments) and serves it through a CDN. The
 admin panel is a first-party SPA, and there is a public API for external consumers.
 
-Monorepo: **Laravel 12 backend at the root**, **Vue 3 SPA in `front/`**, **VitePress docs in `docs/`**.
+Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **VitePress docs in `docs/`**.
 
 ## Layout
 
 ```
-.                       # Laravel 12 (PHP ^8.2) at the root
+.                       # Laravel 13 (PHP ^8.4) at the root
 ├── app/
 │   ├── Console/Commands/   # videos:dispatch, videos:reap, videos:prune, videos:retry
 │   ├── Data/               # Spatie Data — request and response DTOs (there are NO FormRequests)
@@ -85,14 +85,14 @@ Docs (`docs/`, pnpm as well): the `nukevideo-docs` container serves `docs:dev` a
 
 ## Stack
 
-**Backend:** Laravel 12, PHP ^8.2 (CI builds on 8.5) · Sanctum (session for the SPA, plus personal
+**Backend:** Laravel 13, PHP ^8.4 (CI builds on 8.5) · Sanctum (session for the SPA, plus personal
 and project tokens) · Spatie Laravel Data (DTOs and validation) ·
 spatie/laravel-typescript-transformer (generates the frontend types) · Horizon on Redis ·
-Telescope (local only — it is in `dont-discover` and registered conditionally) · Pest 4 · Pint ·
+Telescope (local only — it is in `dont-discover` and registered conditionally) · Pest 5 · Pint ·
 spatie/laravel-activitylog · spatie/laravel-settings · Sentry · phpseclib (SSH to the nodes) ·
 ClickHouse through cybercog/laravel-clickhouse.
 
-**Frontend:** Vue 3 `<script setup lang="ts">` · Vite 7 · Pinia (setup stores) · Vue Router ·
+**Frontend:** Vue 3 `<script setup lang="ts">` · Vite 8 · Pinia (setup stores) · Vue Router ·
 Tailwind v4 (no `tailwind.config.js`; the config lives in CSS) · shadcn-vue on top of reka-ui ·
 axios · shaka-player / hls.js / dashjs · Uppy.
 

@@ -7,6 +7,7 @@ use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Concerns\EmitsHeartbeat;
+use App\Services\CreateVideoStreamsService;
 use App\Services\EncodeCommandBuilder;
 use App\Support\MediaDuration;
 use Illuminate\Bus\Queueable;
@@ -81,7 +82,7 @@ class EncodeSidecarTracksJob implements ShouldQueue
     }
 
     /**
-     * @param  Collection<int,\App\Models\Stream>  $streams
+     * @param  Collection<int,Stream>  $streams
      */
     private function encodeAndUpload(Video $video, Collection $streams): void
     {
@@ -163,7 +164,7 @@ class EncodeSidecarTracksJob implements ShouldQueue
 
     /**
      * Seconds this track's encode has to cover: the end of the track itself, probed at ingestion
-     * ({@see \App\Services\CreateVideoStreamsService}). The video's duration is the CONTAINER's,
+     * ({@see CreateVideoStreamsService}). The video's duration is the CONTAINER's,
      * i.e. its longest track, so it only stands in for sources probed before per-track ends were
      * recorded — where a shorter audio track still reads as truncated.
      */

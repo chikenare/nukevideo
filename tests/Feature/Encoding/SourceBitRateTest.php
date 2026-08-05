@@ -3,12 +3,13 @@
 /**
  * The chain behind `meta.source_bit_rate`, exercised on real muxed files rather than hand-written
  * probe data — the bug it covers was entirely about what a given container reports. It is the only
- * input to a rendition's ceiling ({@see App\Services\Concerns\ResolvesRateControl}), and a zero
+ * input to a rendition's ceiling ({@see ResolvesRateControl}), and a zero
  * there is not a conservative default: it removes the ceiling altogether.
  */
 
 use App\Models\Video;
 use App\Services\ChunkTranscodeService;
+use App\Services\Concerns\ResolvesRateControl;
 use App\Services\CreateVideoStreamsService;
 use Illuminate\Support\Facades\Process;
 

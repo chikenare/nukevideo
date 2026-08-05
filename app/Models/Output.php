@@ -3,6 +3,10 @@
 namespace App\Models;
 
 use App\Enums\VideoStatus;
+use App\Http\Controllers\VodController;
+use App\Jobs\PackageVideoJob;
+use App\Services\ManifestEditor;
+use App\Services\PackagerCommandBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -54,7 +58,7 @@ class Output extends Model
      * ulid (not a fixed `master`/`manifest` name) so two outputs of the same video — which can land
      * on the same cap if their video renditions share a height — never collide on the same S3 key;
      * segments stay shared at `{videoUlid}/{streamUlid}/…` regardless, only the manifest is scoped
-     * per output. Shared with {@see \App\Services\PackagerCommandBuilder} so the packager output and
+     * per output. Shared with {@see PackagerCommandBuilder} so the packager output and
      * the served path can never diverge.
      */
     public function manifestFile(string $format, ?int $cap = null): string
@@ -101,11 +105,11 @@ class Output extends Model
     /**
      * Streaming formats this output actually serves. Frozen in `packaged_formats` at package time
      * ({@see recordFormats}) rather than recomputed live: a later stream deletion edits manifests in
-     * place but never deletes the file ({@see \App\Services\ManifestEditor::removeStream}), so a live
+     * place but never deletes the file ({@see ManifestEditor::removeStream}), so a live
      * recomputation from the currently-attached streams' codecs could silently drift from what's
      * really packaged on S3 — e.g. deleting the only Opus (DASH-only) audio stream from an output
      * would make a live computation claim HLS too, even though no `.m3u8` was ever packaged, breaking
-     * {@see \App\Http\Controllers\VodController::buildLink}. Falls back to the live computation only
+     * {@see VodController::buildLink}. Falls back to the live computation only
      * before packaging has run (`packaged_formats` is still null).
      *
      * @return list<string>
@@ -119,7 +123,7 @@ class Output extends Model
      * Live computation from this output's streams' codecs: the intersection of each codec's
      * supported protocols (config/ffmpeg.php). One CMAF package emits a manifest per format over
      * shared segments, so e.g. H.264+AAC yields both HLS and DASH, Opus only DASH. Authoritative only
-     * at package time ({@see \App\Jobs\PackageVideoJob::packageOutput}, which freezes the result via
+     * at package time ({@see PackageVideoJob::packageOutput}, which freezes the result via
      * {@see recordFormats}); use {@see formats()} everywhere else.
      *
      * @return list<string>

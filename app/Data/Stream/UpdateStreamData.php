@@ -3,6 +3,9 @@
 namespace App\Data\Stream;
 
 use App\Data\RequestData;
+use App\Services\CreateVideoStreamsService;
+use App\Services\ManifestEditor;
+use App\Services\PackagerCommandBuilder;
 use Closure;
 use Spatie\LaravelData\Attributes\Validation\Max;
 use Spatie\LaravelData\Attributes\Validation\Regex;
@@ -15,7 +18,7 @@ class UpdateStreamData extends RequestData
          * A comma would break the shaka stream descriptor this is interpolated into, and a quote or
          * a newline would break out of the HLS `#EXT-X-MEDIA` line it is written into — the master
          * playlist is edited as text, so a newline here would inject arbitrary tags for every viewer
-         * ({@see \App\Services\PackagerCommandBuilder}, {@see \App\Services\ManifestEditor}).
+         * ({@see PackagerCommandBuilder}, {@see ManifestEditor}).
          */
         #[Max(255), Regex('/^[^",\r\n]+\z/u')]
         public string $name,
@@ -25,7 +28,7 @@ class UpdateStreamData extends RequestData
         public ?bool $hearingImpaired = null,
     ) {}
 
-    /** Same BCP-47 criterion the ingest applies ({@see \App\Services\CreateVideoStreamsService::sourceLanguage}). */
+    /** Same BCP-47 criterion the ingest applies ({@see CreateVideoStreamsService::sourceLanguage}). */
     public static function rules(): array
     {
         return [

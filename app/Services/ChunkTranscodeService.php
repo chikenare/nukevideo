@@ -49,7 +49,7 @@ class ChunkTranscodeService
 
     /**
      * Whether this stream's encoder can run on the node executing right now. Chunk jobs are routed
-     * to matching hardware by {@see \App\Models\Stream::encodeQueue}, but the orchestration jobs that
+     * to matching hardware by {@see Stream::encodeQueue}, but the orchestration jobs that
      * encode a sample themselves ({@see SampleEncode}) run wherever they land — and `av1_qsv` on a
      * node with no QSV device fails for want of hardware, not of parameters.
      */

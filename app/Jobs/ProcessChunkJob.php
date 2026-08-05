@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Exceptions\EncodeInterruptedException;
+use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\ChunkProgressReporter;
@@ -133,7 +134,7 @@ class ProcessChunkJob implements ShouldQueue
      * Encode this rendition's chunk, beating the heartbeat and reporting per-chunk progress off
      * ffmpeg's `time=` output to every output the stream belongs to.
      *
-     * @param  \Illuminate\Support\Collection<int,\App\Models\Output>  $outputs
+     * @param  \Illuminate\Support\Collection<int,Output>  $outputs
      */
     private function encode(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration): void
     {
@@ -204,7 +205,7 @@ class ProcessChunkJob implements ShouldQueue
         @unlink($localPath);
     }
 
-    /** @param  \Illuminate\Support\Collection<int,\App\Models\Output>  $outputs */
+    /** @param  \Illuminate\Support\Collection<int,Output>  $outputs */
     private function reportDone($outputs): void
     {
         foreach ($outputs as $output) {

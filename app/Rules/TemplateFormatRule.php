@@ -5,6 +5,8 @@ namespace App\Rules;
 use Closure;
 use Illuminate\Contracts\Validation\DataAwareRule;
 use Illuminate\Contracts\Validation\ValidationRule;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Translation\PotentiallyTranslatedString;
 
 class TemplateFormatRule implements DataAwareRule, ValidationRule
 {
@@ -19,7 +21,7 @@ class TemplateFormatRule implements DataAwareRule, ValidationRule
     }
 
     /**
-     * @param  \Closure(string, ?string=): \Illuminate\Translation\PotentiallyTranslatedString  $fail
+     * @param  Closure(string, ?string=): PotentiallyTranslatedString  $fail
      */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
@@ -66,7 +68,7 @@ class TemplateFormatRule implements DataAwareRule, ValidationRule
             }
         }
 
-        $validator = \Illuminate\Support\Facades\Validator::make($data, $rules, [], $attributes);
+        $validator = Validator::make($data, $rules, [], $attributes);
 
         if ($validator->fails()) {
             foreach ($validator->errors()->all() as $message) {

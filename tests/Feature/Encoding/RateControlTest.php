@@ -1,13 +1,14 @@
 <?php
 
 /**
- * Rate control is resolved in exactly one place ({@see App\Services\Concerns\ResolvesRateControl}),
+ * Rate control is resolved in exactly one place ({@see ResolvesRateControl}),
  * so this covers every mode it can pick, per codec: quality mode capped by the encoder's own VBV,
  * quality mode on an encoder blind to one, QSV's QVBR steering, and pinned ABR — each asserted on
  * the command that actually reaches ffmpeg.
  */
 
 use App\Services\ChunkTranscodeService;
+use App\Services\Concerns\ResolvesRateControl;
 use App\Services\QualityBitrateProbe;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;

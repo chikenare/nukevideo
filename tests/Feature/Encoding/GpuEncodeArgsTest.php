@@ -2,6 +2,8 @@
 
 use App\Models\Stream;
 use App\Services\ChunkTranscodeService;
+use App\Services\EncodeCommandBuilder;
+use App\Support\Gpu;
 
 function gpuStream(array $inputParams, array $meta = []): Stream
 {
@@ -184,23 +186,23 @@ it('builds the full hwaccel command for a windowed chunk and leaves sidecars alo
     $video = gpuStream(['video_codec' => 'av1_qsv'], HW_SOURCE);
     $video->id = 1;
 
-    $cmd = \App\Services\EncodeCommandBuilder::build(collect([$video]), 'http://src', [1 => '/out.part'], 0.0, 10.0);
+    $cmd = EncodeCommandBuilder::build(collect([$video]), 'http://src', [1 => '/out.part'], 0.0, 10.0);
 
     expect($cmd)->toContain('-hwaccel qsv -hwaccel_output_format qsv -ss 0.0000 -to 10.0000 -i "http://src"');
 
     $audio = (new Stream)->forceFill(['type' => 'audio', 'input_params' => ['audio_codec' => 'aac'], 'meta' => []]);
     $audio->id = 2;
 
-    expect(\App\Services\EncodeCommandBuilder::build(collect([$audio]), 'http://src', [2 => '/a.part']))
+    expect(EncodeCommandBuilder::build(collect([$audio]), 'http://src', [2 => '/a.part']))
         ->not->toContain('-hwaccel');
 });
 
 it('sizes GPU workers from the hardware and honors the env override', function () {
     putenv('GPU_WORKER_PROCESSES=5');
-    expect(\App\Support\Gpu::videoWorkerProcesses())->toBe(5);
+    expect(Gpu::videoWorkerProcesses())->toBe(5);
 
     putenv('GPU_WORKER_PROCESSES');
-    expect(\App\Support\Gpu::videoWorkerProcesses())->toBeGreaterThanOrEqual(2)->toBeLessThanOrEqual(6);
+    expect(Gpu::videoWorkerProcesses())->toBeGreaterThanOrEqual(2)->toBeLessThanOrEqual(6);
 });
 
 it('maps codecs to their hardware family', function () {

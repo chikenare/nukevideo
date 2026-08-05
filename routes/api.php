@@ -26,6 +26,7 @@ use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
+use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
 
 Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('logout', [AuthController::class, 'logout']);
@@ -125,5 +126,5 @@ Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg')
-    ->withoutMiddleware(\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class)
+    ->withoutMiddleware(EnsureFrontendRequestsAreStateful::class)
     ->middleware('cache.headers:public;max_age=604800;s_maxage=604800;etag');

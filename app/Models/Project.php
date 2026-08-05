@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Http\Middleware\ResolveProject;
+use Database\Factories\ProjectFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,11 +14,11 @@ use Laravel\Sanctum\HasApiTokens;
 
 /**
  * A project is tokenable: its API key authenticates as the project itself, and
- * {@see \App\Http\Middleware\ResolveProject} hands the request back to the owning user.
+ * {@see ResolveProject} hands the request back to the owning user.
  */
 class Project extends Model
 {
-    /** @use HasFactory<\Database\Factories\ProjectFactory> */
+    /** @use HasFactory<ProjectFactory> */
     use HasApiTokens, HasFactory, SoftDeletes;
 
     protected $fillable = [

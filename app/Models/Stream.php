@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Observers\StreamObserver;
 use App\Services\ChunkTranscodeService;
+use App\Services\PackagerCommandBuilder;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -80,7 +81,7 @@ class Stream extends Model
     }
 
     /** This stream's packaged CMAF segment directory on primary S3: `{videoUlid}/{streamUlid}`.
-     *  Matches the layout the packager writes into ({@see \App\Services\PackagerCommandBuilder}). */
+     *  Matches the layout the packager writes into ({@see PackagerCommandBuilder}). */
     public function segmentsPath(Video $video): string
     {
         return "{$video->ulid}/{$this->ulid}";

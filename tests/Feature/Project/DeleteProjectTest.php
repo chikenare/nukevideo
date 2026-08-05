@@ -7,6 +7,7 @@
  * and neither will delete a project whose videos are still mid-encode.
  */
 
+use App\Jobs\DeleteResourceWithPath;
 use App\Models\Project;
 use App\Models\Template;
 use App\Models\User;
@@ -55,7 +56,7 @@ it('deletes a project through Eloquent so the video observer runs', function () 
     $this->deleteJson("/api/projects/{$this->project->ulid}")->assertOk();
 
     expect(Video::find($video->id))->toBeNull();
-    Queue::assertPushed(App\Jobs\DeleteResourceWithPath::class);
+    Queue::assertPushed(DeleteResourceWithPath::class);
 });
 
 it('refuses to delete a project while a video is still encoding', function () {
@@ -76,5 +77,5 @@ it('cleans up every video when a user is deleted', function () {
 
     expect(User::find($this->user->id))->toBeNull()
         ->and(Video::find($video->id))->toBeNull();
-    Queue::assertPushed(App\Jobs\DeleteResourceWithPath::class);
+    Queue::assertPushed(DeleteResourceWithPath::class);
 });

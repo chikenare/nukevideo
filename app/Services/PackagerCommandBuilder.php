@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Jobs\PackageVideoJob;
 use App\Models\Output;
+use App\Models\Stream;
 
 /**
  * Builds the shaka-packager argv for one output: every rendition becomes a CMAF stream sharing
@@ -12,8 +14,8 @@ use App\Models\Output;
 class PackagerCommandBuilder
 {
     /** Throwaway subtitle-only manifest names ({@see buildText}); never a real output's filename
-     *  ({@see \App\Models\Output::manifestFile} always names a real one after the output's own ulid),
-     *  so {@see \App\Jobs\PackageVideoJob::packageSubtitles} can glob for "every manifest but these". */
+     *  ({@see Output::manifestFile} always names a real one after the output's own ulid),
+     *  so {@see PackageVideoJob::packageSubtitles} can glob for "every manifest but these". */
     public const SUBS_DASH_MANIFEST = '_subs.mpd';
 
     public const SUBS_HLS_MANIFEST = '_subs.m3u8';
@@ -27,7 +29,7 @@ class PackagerCommandBuilder
      * Build one packager run. `$cap` names the manifest set: null is the full master, a height
      * (e.g. 720) yields a capped manifest listing only the renditions passed in. Every run writes
      * the same per-stream segment tree, so all manifests of this output share the segments. The
-     * manifest filename is keyed by `$output`'s own ulid ({@see \App\Models\Output::manifestFile})
+     * manifest filename is keyed by `$output`'s own ulid ({@see Output::manifestFile})
      * so it never collides with another output of the same video.
      *
      * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,hearing_impaired?:bool,visual_impaired?:bool,name?:?string}>  $inputs
@@ -62,7 +64,7 @@ class PackagerCommandBuilder
     }
 
     /** Where one stream's CMAF segments are written, relative to the run's output dir — matches
-     *  {@see \App\Models\Stream::segmentsPath} (which builds the same shape for deletion). */
+     *  {@see Stream::segmentsPath} (which builds the same shape for deletion). */
     private function segmentDir(string $outputDir, string $ulid): string
     {
         return "{$outputDir}/{$ulid}";

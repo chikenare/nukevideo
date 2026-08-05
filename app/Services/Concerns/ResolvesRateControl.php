@@ -2,6 +2,8 @@
 
 namespace App\Services\Concerns;
 
+use App\Services\QualityBitrateProbe;
+
 /**
  * Every decision about how many bits a rendition may spend. One question throughout — never spend
  * more than the source did ({@see sourceBitrateCap}) — and one entry point ({@see resolveRateControl});
@@ -107,7 +109,7 @@ trait ResolvesRateControl
      * AV1 on QSV honours no VBV: `-maxrate` silently selects CQP at the driver's default QP and
      * `-global_quality` stops being read with it, and there is no QVBR either (Arc B580 / iHD 1.22).
      * Its ceiling can only be chosen up front, from what the quality mode was measured to cost
-     * ({@see \App\Services\QualityBitrateProbe}) — an overshoot is re-issued as capped VBR.
+     * ({@see QualityBitrateProbe}) — an overshoot is re-issued as capped VBR.
      */
     private function capBlindQualityMode(array $params, ?int $cap): array
     {

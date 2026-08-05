@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Enums\VideoStatus;
+use App\Http\Controllers\Api\ActivityLogController;
 use App\Observers\VideoObserver;
 use App\Services\WebhookDispatcher;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -197,7 +198,7 @@ class Video extends Model
      *                               stream owns (a stalled worker, a source that never arrived),
      *                               which otherwise leave a failed video explainable only by log
      *                               forensics. Rides the activity entry, read back through
-     *                               {@see \App\Http\Controllers\Api\ActivityLogController}.
+     *                               {@see ActivityLogController}.
      */
     public function markAsFailed(?string $reason = null): void
     {

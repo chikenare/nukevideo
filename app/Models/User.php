@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Observers\UserObserver;
+use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -14,7 +15,7 @@ use Laravel\Sanctum\HasApiTokens;
 #[ObservedBy(UserObserver::class)]
 class User extends Authenticatable
 {
-    /** @use HasFactory<\Database\Factories\UserFactory> */
+    /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable;
 
     /** @var list<string> */

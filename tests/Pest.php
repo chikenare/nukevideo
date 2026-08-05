@@ -1,5 +1,8 @@
 <?php
 
+use App\Models\Stream;
+use Tests\TestCase;
+
 /*
 |--------------------------------------------------------------------------
 | Test Case
@@ -11,7 +14,7 @@
 |
 */
 
-pest()->extend(Tests\TestCase::class)
+pest()->extend(TestCase::class)
  // ->use(Illuminate\Foundation\Testing\RefreshDatabase::class)
     ->in('Feature');
 
@@ -53,9 +56,9 @@ const MATRIX_SOURCE = [
 ];
 
 /** A video/audio stream with no database behind it, for the argument builders. */
-function matrixStream(array $inputParams, string $type = 'video', array $meta = MATRIX_SOURCE, ?int $width = null, ?int $height = null): App\Models\Stream
+function matrixStream(array $inputParams, string $type = 'video', array $meta = MATRIX_SOURCE, ?int $width = null, ?int $height = null): Stream
 {
-    $stream = (new App\Models\Stream)->forceFill([
+    $stream = (new Stream)->forceFill([
         'type' => $type,
         'width' => $width ?? $inputParams['width'] ?? 1280,
         'height' => $height ?? $inputParams['height'] ?? 720,
@@ -134,7 +137,7 @@ function matrixAllowedFlags(string $codec, string $type): array
  * Manifest fixtures are trimmed copies of real shaka-packager v3.7.2 output — the attribute set,
  * spelling and nesting are what the packager actually emits, since that is exactly what the editor
  * has to match. `{audio}`/`{sub}`/`{video}` stand in for the stream ULIDs the segment paths are
- * keyed by ({@see \App\Models\Stream::segmentsPath}).
+ * keyed by ({@see Stream::segmentsPath}).
  */
 function dashFixture(array $ulids): string
 {
