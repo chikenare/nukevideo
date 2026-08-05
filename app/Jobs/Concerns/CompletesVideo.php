@@ -4,6 +4,7 @@ namespace App\Jobs\Concerns;
 
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
+use App\Jobs\PrepareVideoJob;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
@@ -101,7 +102,7 @@ trait CompletesVideo
     /**
      * Stop the encode batches of a video that can no longer complete, so their jobs don't keep
      * burning encode slots (or die confusingly against artifacts the failure path removed).
-     * Matches how {@see \App\Jobs\PrepareVideoJob::fanOut()} names them: one batch per hardware
+     * Matches how {@see PrepareVideoJob::fanOut()} names them: one batch per hardware
      * queue, "encode video {id} {queue}".
      */
     private function cancelEncodeBatches(Video $video): void

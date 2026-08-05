@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Stream;
 use App\Services\RenditionPreflight;
 use Illuminate\Support\Facades\Process;
 
@@ -7,7 +8,7 @@ use Illuminate\Support\Facades\Process;
  * The preflight is the only rendition check that can fail a video, so both answers matter: it must
  * catch a parameter set the encoder refuses, and it must not fail one that encodes fine.
  */
-function preflightStream(array $params, ?string $name = '1080p'): App\Models\Stream
+function preflightStream(array $params, ?string $name = '1080p'): Stream
 {
     $stream = matrixStream($params, meta: LIGHT_SOURCE, width: 1920, height: 1080);
     $stream->name = $name;

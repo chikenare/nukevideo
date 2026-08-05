@@ -4,6 +4,7 @@ namespace App\Rules;
 
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
+use Illuminate\Translation\PotentiallyTranslatedString;
 
 /**
  * Validates the output-level video codec: it must be a known video codec. Mirrors
@@ -13,7 +14,7 @@ use Illuminate\Contracts\Validation\ValidationRule;
 class TemplateVideoCodecRule implements ValidationRule
 {
     /**
-     * @param  \Closure(string, ?string=): \Illuminate\Translation\PotentiallyTranslatedString  $fail
+     * @param  Closure(string, ?string=): PotentiallyTranslatedString  $fail
      */
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {

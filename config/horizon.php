@@ -1,5 +1,8 @@
 <?php
 
+use App\Support\Cpu;
+use App\Support\Gpu;
+
 // Role-gated provisioning. Horizon merges `defaults` into EVERY environment via
 // array_replace_recursive, so a supervisor listed in `defaults` is provisioned even
 // when it's absent from `environments`. To truly keep a role's supervisor off a node
@@ -22,7 +25,7 @@ $videoWorker = [
     'connection' => 'redis',
     'queue' => ['video-processing'],
     'balance' => 'none',
-    'maxProcesses' => \App\Support\Cpu::videoWorkerProcesses(),
+    'maxProcesses' => Cpu::videoWorkerProcesses(),
     'maxTime' => 0,
     'maxJobs' => 0,
     'memory' => 1024,
@@ -85,7 +88,7 @@ $gpuWorker = [
     'connection' => 'redis',
     'queue' => ["video-processing-{$accel}"],
     'balance' => 'none',
-    'maxProcesses' => \App\Support\Gpu::videoWorkerProcesses(),
+    'maxProcesses' => Gpu::videoWorkerProcesses(),
     'maxTime' => 0,
     'maxJobs' => 0,
     'memory' => 1024,

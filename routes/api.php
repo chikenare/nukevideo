@@ -26,6 +26,7 @@ use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
 use Illuminate\Support\Facades\Route;
+use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
 
 Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('logout', [AuthController::class, 'logout']);
@@ -76,7 +77,8 @@ Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
         // Activity log (scoped to the project's videos)
         Route::get('activity-log', [ActivityLogController::class, 'index']);
 
-        // Upload (S3) — project viene por metadata (Uppy no pasa por nuestro axios interceptor)
+        // Upload (S3) — the project arrives in the metadata: Uppy does not go through our axios
+        // interceptor, so it never sends the X-Project-Ulid header.
         Route::get('s3/params', [MyCustomUppyController::class, 'getUploadParameters']);
         Route::post('s3/multipart', [MyCustomUppyController::class, 'createMultipartUpload']);
         Route::get('s3/multipart/{uploadId}', [MyCustomUppyController::class, 'getUploadedParts']);
@@ -124,5 +126,5 @@ Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg')
-    ->withoutMiddleware(\Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class)
+    ->withoutMiddleware(EnsureFrontendRequestsAreStateful::class)
     ->middleware('cache.headers:public;max_age=604800;s_maxage=604800;etag');

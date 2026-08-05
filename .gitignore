@@ -22,3 +22,7 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Claude Code — personal overrides stay local, shared config is versioned
+/.claude/settings.local.json
+/.claude/worktrees

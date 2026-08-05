@@ -24,7 +24,9 @@ class SSHService
         try {
             $sshFlags = '-o StrictHostKeyChecking=no -o ConnectTimeout=5 -o BatchMode=yes -i '.escapeshellarg($keyFile);
 
-            $fullCommand = "ssh {$sshFlags} $user@{$ip} ".escapeshellarg($command);
+            // The target is escaped like the command: the node's user field is admin-supplied
+            // text, and unescaped it would run on THIS host, not the node.
+            $fullCommand = "ssh {$sshFlags} ".escapeshellarg("{$user}@{$ip}").' '.escapeshellarg($command);
 
             $result = Process::timeout($timeout)
                 ->when($input !== null, function ($p) use ($input) {

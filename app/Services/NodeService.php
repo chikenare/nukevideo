@@ -196,7 +196,9 @@ class NodeService
         $vectorImage = 'timberio/vector:0.56.0-alpine';
         $nodeType = $node->type->value;
         $nodeId = $node->id;
-        $nodeName = $node->name;
+        // The name is free text and lands on a `#` comment line, which a newline would end —
+        // everything after it would run on the node as part of the script.
+        $nodeName = preg_replace('/[^\w .\-]/u', '', $node->name);
 
         $nodeSection = match ($nodeType) {
             'worker' => $this->workerScript($node),

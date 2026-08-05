@@ -2,7 +2,10 @@
 
 namespace App\Services;
 
+use App\Jobs\PrepareVideoJob;
 use App\Models\Video;
+use App\Services\Concerns\DetectsStreamCopy;
+use App\Services\Concerns\ResolvesRateControl;
 use Exception;
 use FFMpeg\FFProbe;
 use FFMpeg\FFProbe\DataMapping\Format;
@@ -15,7 +18,7 @@ use Illuminate\Support\Str;
 use Symfony\Component\Intl\Languages;
 
 /**
- * Probes the local source file (downloaded by {@see \App\Jobs\PrepareVideoJob}, never main S3) and
+ * Probes the local source file (downloaded by {@see PrepareVideoJob}, never main S3) and
  * creates the video's rendition, audio and subtitle streams, filling the probe-derived fields left
  * empty at ingestion.
  */
@@ -469,9 +472,9 @@ class CreateVideoStreamsService
      * ({@see containerVideoBitRate}). Zero only when the file states no rate anywhere.
      *
      * The container used to be rejected here as too coarse — it sums every track — which was true of
-     * the only reader at the time ({@see \App\Services\Concerns\DetectsStreamCopy}, whose fast-path is
+     * the only reader at the time ({@see DetectsStreamCopy}, whose fast-path is
      * unreachable anyway: video is always window-cut). It stopped being the whole story once
-     * {@see \App\Services\Concerns\ResolvesRateControl} began reading it, because there a coarse
+     * {@see ResolvesRateControl} began reading it, because there a coarse
      * number is a ceiling and zero is *no* ceiling: every MKV re-encoded uncapped.
      */
     private function sourceBitRate(FFStream $stream): int
@@ -614,7 +617,7 @@ class CreateVideoStreamsService
 
     /**
      * Track label: the source title, else its language, else the media type. Commas are stripped
-     * because they delimit shaka descriptor fields ({@see \App\Services\PackagerCommandBuilder}).
+     * because they delimit shaka descriptor fields ({@see PackagerCommandBuilder}).
      */
     private function baseName(FFStream $stream, string $codecType): string
     {

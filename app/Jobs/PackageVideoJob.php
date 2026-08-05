@@ -2,12 +2,14 @@
 
 namespace App\Jobs;
 
+use App\Data\VideoData;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use Illuminate\Bus\Queueable;
@@ -256,7 +258,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * One packager run per supported resolution (the distinct video heights), all sharing the same
      * segment tree. The tallest is the full master; each lower height yields a capped manifest
      * listing only the renditions at or below it, plus every audio track. Filenames are keyed by
-     * `$output`'s own ulid ({@see \App\Models\Output::manifestFile}), so a second output of the same
+     * `$output`'s own ulid ({@see Output::manifestFile}), so a second output of the same
      * video landing on the same height never overwrites this one.
      *
      * @param  list<array{path:string,type:string,ulid:string,height:?int}>  $inputs
@@ -324,7 +326,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * Subtitle packager inputs for the video (shared across outputs). Invalid tracks (bitmap, empty
-     * source) are already dropped at stream creation ({@see \App\Services\CreateVideoStreamsService}); here we
+     * source) are already dropped at stream creation ({@see CreateVideoStreamsService}); here we
      * additionally skip any VTT that didn't reach the gather tree or carries no cue (`-->`), since a
      * cue-less VTT makes shaka fail the whole run with PARSER_FAILURE.
      *
@@ -474,7 +476,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * (its own `{ulid}/` dir, always synced); `file_size` = the raw processed rendition
      * ({@see localRenditionPath}), present only when the template keeps processed files (pruning removed
      * it otherwise, so it stays null). The two are never summed here; the video total lives in
-     * {@see \App\Data\VideoData}. The `original` isn't packaged and keeps its uploaded `file_size`.
+     * {@see VideoData}. The `original` isn't packaged and keeps its uploaded `file_size`.
      */
     private function recordStoredSizes(Video $video, string $gatherDir): void
     {
@@ -519,7 +521,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     /** Forced on upload: s5cmd sniffs content instead of trusting the extension, and types `.mpd` as
      *  `text/xml` and `.m3u8` as `audio/x-mpegurl`. Neither is in the VOD edge's `secure_token_types`,
      *  so it never signs the segment URLs a manifest lists and players 403. Manifest values match
-     *  {@see \App\Services\ManifestEditor}'s.
+     *  {@see ManifestEditor}'s.
      *
      *  Order is load-bearing: {@see syncToPrimary} runs one pass per entry and each pass lists the
      *  destination, so the bulk extension goes last and the others list a near-empty prefix. */

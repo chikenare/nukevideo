@@ -7,6 +7,7 @@ use App\Services\Concerns\BuildsArguments;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
 
 class Template extends Model
@@ -51,6 +52,11 @@ class Template extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function videos(): HasMany
+    {
+        return $this->hasMany(Video::class);
     }
 
     public function scopeFindOrFailByUlid(Builder $query, $ulid)

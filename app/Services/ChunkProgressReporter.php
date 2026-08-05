@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Models\Output;
+
 /**
  * Parses ffmpeg's `time=` output and reports per-chunk progress, throttled to flush only when
  * the percent climbs and at most once every 5s (100% always flushes), since each report is a
@@ -14,7 +16,7 @@ class ChunkProgressReporter
     private ?float $lastProgressAt = null;
 
     /**
-     * @param  iterable<\App\Models\Output>  $outputs
+     * @param  iterable<Output>  $outputs
      */
     public function __construct(
         private iterable $outputs,

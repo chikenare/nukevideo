@@ -7,6 +7,10 @@ use App\Models\User;
 
 class UserService
 {
+    public function __construct(
+        private ProjectService $projects,
+    ) {}
+
     public function index()
     {
         $users = User::latest()->get();
@@ -42,8 +46,15 @@ class UserService
         return $user->fresh();
     }
 
+    /**
+     * `users -> projects -> videos` cascades in the schema, so a bare delete would drop every
+     * video row without ever running VideoObserver — leaving each package, source and thumbnail
+     * on S3 forever, since nothing sweeps primary storage. Go down through the projects instead.
+     */
     public function delete(User $user): void
     {
+        $user->projects()->cursor()->each(fn ($project) => $this->projects->delete($project));
+
         $user->delete();
     }
 }

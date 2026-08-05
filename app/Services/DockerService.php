@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Node;
-use Illuminate\Support\Facades\Log;
 
 class DockerService
 {
@@ -20,57 +19,6 @@ class DockerService
             command: "docker {$command}",
             timeout: $timeout,
         ));
-    }
-
-    public function deployContainer(Node $node, string $name, string $image, array $options = []): void
-    {
-        if (! app()->isLocal()) {
-            $this->run($node, "pull {$image}", 120);
-        }
-
-        $this->run($node, "rm -f {$name}");
-
-        $cmd = "run -d --name {$name} --restart unless-stopped";
-
-        foreach ($options['env'] ?? [] as $env) {
-            $cmd .= ' -e '.escapeshellarg($env);
-        }
-
-        foreach ($options['volumes'] ?? [] as $volume) {
-            $cmd .= ' -v '.escapeshellarg($volume);
-        }
-
-        foreach ($options['ports'] ?? [] as $port) {
-            $cmd .= " -p {$port}";
-        }
-
-        foreach ($options['labels'] ?? [] as $label) {
-            $cmd .= ' -l '.escapeshellarg($label);
-        }
-
-        if (isset($options['network'])) {
-            $cmd .= " --network {$options['network']}";
-        }
-
-        if (isset($options['cpuset'])) {
-            $cmd .= " --cpuset-cpus={$options['cpuset']}";
-        }
-
-        if (isset($options['memory'])) {
-            $cmd .= " --memory={$options['memory']}";
-        }
-
-        if (isset($options['healthcheck'])) {
-            $cmd .= ' --health-cmd '.escapeshellarg($options['healthcheck']);
-        }
-
-        if (isset($options['command'])) {
-            $cmd .= " {$image} {$options['command']}";
-        } else {
-            $cmd .= " {$image}";
-        }
-
-        $this->run($node, $cmd, 60);
     }
 
     public function removeContainer(Node $node, string $name): void
@@ -99,43 +47,5 @@ class DockerService
         }
 
         return $containers;
-    }
-
-    /** Containers status grouped by node ID. */
-    public function getServicesStatus(): array
-    {
-        $nodes = Node::with('sshKey')->get();
-        $result = [];
-
-        foreach ($nodes as $node) {
-            try {
-                $containers = $this->listContainers($node);
-            } catch (\Throwable $e) {
-                Log::warning("Failed to list containers on node {$node->name}", ['node' => $node->id, 'error' => $e->getMessage()]);
-
-                continue;
-            }
-
-            $prefix = 'nukevideo_';
-
-            foreach ($containers as $container) {
-                $name = $container['Names'] ?? '';
-                if (! str_starts_with($name, $prefix)) {
-                    continue;
-                }
-
-                $state = $container['State'] ?? 'unknown';
-                $running = $state === 'running' ? 1 : 0;
-
-                $result[$node->id][] = [
-                    'name' => $name,
-                    'running' => $running,
-                    'desired' => null,
-                    'state' => $running ? 'running' : 'down',
-                ];
-            }
-        }
-
-        return $result;
     }
 }
