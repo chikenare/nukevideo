@@ -567,6 +567,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             ->whereNotIn('status', [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])
             ->update(['status' => VideoStatus::FAILED->value]);
 
-        $this->finalizeVideoIfReady($video);
+        $this->cancelEncodeBatches($video);
+        $this->finalizeVideoIfReady($video, $e->getMessage());
     }
 }

@@ -49,7 +49,7 @@ class DispatchPendingVideosCommand extends Command
                 $originalPath = $video->streams()->where('type', 'original')->value('path');
 
                 if (! $originalPath) {
-                    $video->markAsFailed();
+                    $video->markAsFailed('The uploaded source is missing: this video has no original stream to encode from.');
 
                     return;
                 }
