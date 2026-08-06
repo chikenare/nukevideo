@@ -159,6 +159,17 @@ onMounted(fetchSettings)
             <Input id="bunny_token_window" type="number" v-model.number="form.bunny.tokenWindow" />
             <p v-if="errors['bunny.tokenWindow']" class="text-sm text-destructive">{{ errors['bunny.tokenWindow'][0] }}</p>
           </div>
+          <div class="grid gap-2">
+            <Label for="bunny_api_key">API key</Label>
+            <Input id="bunny_api_key" v-model="form.bunny.apiKey" class="font-mono" />
+            <p class="text-sm text-muted-foreground">Account API key, used to pull request logs into bandwidth analytics.</p>
+            <p v-if="errors['bunny.apiKey']" class="text-sm text-destructive">{{ errors['bunny.apiKey'][0] }}</p>
+          </div>
+          <div class="grid gap-2">
+            <Label for="bunny_pull_zone_id">Pull zone ID</Label>
+            <Input id="bunny_pull_zone_id" v-model="form.bunny.pullZoneId" />
+            <p v-if="errors['bunny.pullZoneId']" class="text-sm text-destructive">{{ errors['bunny.pullZoneId'][0] }}</p>
+          </div>
         </CardContent>
       </Card>
 

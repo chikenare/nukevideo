@@ -40,6 +40,8 @@ class CdnSettingsController extends Controller
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
             'bunny.tokenKey' => ['nullable', 'string'],
             'bunny.tokenWindow' => [Rule::requiredIf($bunnyActive), 'integer', 'min:1'],
+            'bunny.apiKey' => ['nullable', 'string'],
+            'bunny.pullZoneId' => ['nullable', 'string'],
         ]);
 
         $providers = $settings->providers;
@@ -61,6 +63,8 @@ class CdnSettingsController extends Controller
                 'host' => $validated['bunny']['host'] ?? null,
                 'token_key' => $validated['bunny']['tokenKey'] ?? null,
                 'token_window' => isset($validated['bunny']['tokenWindow']) ? (int) $validated['bunny']['tokenWindow'] : null,
+                'api_key' => $validated['bunny']['apiKey'] ?? null,
+                'pull_zone_id' => $validated['bunny']['pullZoneId'] ?? null,
             ], fn ($v) => $v !== null));
         }
 
