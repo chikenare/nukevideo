@@ -35,8 +35,12 @@ Configure it in the admin panel under **CDN Settings** with the `bunny` provider
 | **Host** | The Bunny pull-zone hostname that fronts your S3 origin |
 | **Token key** | The pull-zone's URL-signing key, used to sign the HMAC token |
 | **Token window** | Token validity window, in seconds |
+| **API key** | Account API key, used to pull request logs for bandwidth analytics (optional) |
+| **Pull zone ID** | The pull zone's numeric id, for the same log ingestion (optional) |
 
 Bunny is configured entirely from the panel (stored in the database); it does not use `.env` variables.
+
+With the API key and pull zone ID set, the scheduler polls Bunny's [Logging API](https://bunny.net/docs/cdn/logging) every five minutes (`bunny:ingest-logs`) and feeds per-video bandwidth into the same ClickHouse analytics the self-hosted edges use.
 
 **Choose Bunny when** you want a global CDN without operating proxy nodes, need to scale delivery quickly, or prefer to offload edge caching and bandwidth entirely to a managed provider.
 
@@ -49,6 +53,6 @@ Bunny is configured entirely from the panel (stored in the database); it does no
 | Token scheme | Akamai-style HMAC | HMAC-SHA256, directory mode |
 | IP binding | Cloudflare real-IP aware | Not IP-bound |
 | Edge caching | Local nginx cache per node | Bunny global edge |
-| Bandwidth analytics | Built-in (Vector → ClickHouse) | Via Bunny's own reporting |
+| Bandwidth analytics | Built-in (Vector → ClickHouse) | Built-in (Logging API poll → ClickHouse) |
 
 Both serve identical CMAF, so you can start with one and switch by changing the CDN Settings provider — no re-packaging required.

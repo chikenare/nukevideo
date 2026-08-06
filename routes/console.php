@@ -7,6 +7,9 @@ Schedule::command('videos:dispatch')->everyFiveSeconds()->withoutOverlapping(1);
 Schedule::command('videos:reap')->everyMinute()->withoutOverlapping(10);
 Schedule::command('videos:prune')->everyThirtyMinutes();
 
+// No-op unless the Bunny CDN driver is active and its Logging API credentials are set.
+Schedule::command('bunny:ingest-logs')->everyFiveMinutes()->withoutOverlapping(10);
+
 // job_batches rows otherwise grow forever. Keep a week so PrepareVideoJob's redelivery guard
 // (batch looked up by name) comfortably outlives any retry window.
 Schedule::command('queue:prune-batches --hours=168 --unfinished=168 --cancelled=168')->daily();

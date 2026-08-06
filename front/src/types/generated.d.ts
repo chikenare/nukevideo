@@ -26,6 +26,8 @@ export type BunnyConfigData = {
 host: string,
 tokenKey: string,
 tokenWindow: number,
+apiKey: string,
+pullZoneId: string,
 };
 export type CdnSettingsData = {
 provider: App.Enums.CdnDriver,
