@@ -39,13 +39,6 @@ class AppServiceProvider extends ServiceProvider
             return $project;
         });
 
-        // Generous enough for the panel's polling; the point is bounding abuse, not shaping traffic.
-        RateLimiter::for('api', function (Request $request) {
-            $actor = $request->user();
-
-            return Limit::perMinute(240)->by($actor ? get_class($actor).':'.$actor->getKey() : $request->ip());
-        });
-
         RateLimiter::for('login', fn (Request $request) => Limit::perMinute(10)->by($request->ip()));
     }
 }
