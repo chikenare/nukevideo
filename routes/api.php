@@ -31,7 +31,7 @@ use Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful;
 Route::post('login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('logout', [AuthController::class, 'logout']);
 
-Route::middleware(['auth:sanctum', 'throttle:api'])->group(function () {
+Route::middleware(['auth:sanctum'])->group(function () {
     // Account-wide: these span every project (or the whole instance), so a project API key has no
     // business here — usage and analytics are keyed by user in ClickHouse, not by project.
     // No resolve.project either: a stale X-Project-Ulid header must not 404 account endpoints.
@@ -122,7 +122,7 @@ Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
 
 // VOD — playback link, scoped to the caller's project like every other resource route.
 Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])
-    ->middleware(['auth:sanctum', 'throttle:api', 'resolve.project']);
+    ->middleware(['auth:sanctum', 'resolve.project']);
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg')
