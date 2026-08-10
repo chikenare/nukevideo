@@ -12,6 +12,7 @@ use App\Models\Video;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
+use App\Support\WebVtt;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -330,6 +331,10 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * additionally skip any VTT that didn't reach the gather tree or carries no cue (`-->`), since a
      * cue-less VTT makes shaka fail the whole run with PARSER_FAILURE.
      *
+     * Tracks staged by an older build (or by a retry that predates the fix) can still carry the
+     * malformed cues {@see WebVtt} repairs, so they are patched here too rather than only at encode
+     * time — the gather copy is what the packager reads.
+     *
      * @return list<array{path:string,type:string,ulid:string,height:?int,language:?string,forced:bool,hearing_impaired:bool,name:?string}>
      */
     private function subtitleInputs(Video $video, string $gatherDir): array
@@ -339,10 +344,15 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         foreach ($video->streams->where('type', 'subtitle') as $sub) {
             $local = $this->localRenditionPath($sub, $gatherDir);
 
-            if (! is_file($local) || ! str_contains((string) file_get_contents($local), '-->')) {
+            if (! is_file($local) || ! str_contains($vtt = (string) file_get_contents($local), '-->')) {
                 Log::warning('Skipping subtitle with missing/cue-less VTT', ['video' => $video->id, 'stream' => $sub->id]);
 
                 continue;
+            }
+
+            if (($repaired = WebVtt::sanitize($vtt)) !== $vtt) {
+                file_put_contents($local, $repaired);
+                Log::info('Repaired malformed WebVTT before packaging', ['video' => $video->id, 'stream' => $sub->id]);
             }
 
             $inputs[] = [
@@ -415,59 +425,143 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         // Manifests are named after each output's own ulid now ({@see \App\Models\Output::manifestFile}),
         // so they're matched by extension and the `_subs.*` throwaway is excluded by its leading
         // underscore — a real output ulid never starts with one.
-        if (glob("{$gatherDir}/[!_]*.mpd") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'dash')) {
-            $subsXml = file_get_contents("{$gatherDir}/".PackagerCommandBuilder::SUBS_DASH_MANIFEST);
+        foreach (['dash' => '[!_]*.mpd', 'hls' => '[!_]*.m3u8'] as $format => $pattern) {
+            $targets = glob("{$gatherDir}/{$pattern}") ?: [];
 
-            foreach (glob("{$gatherDir}/[!_]*.mpd") ?: [] as $mpd) {
-                $original = file_get_contents($mpd);
-                $edited = $manifests->importDashSubtitles($original, $subsXml);
-
-                if ($edited !== null && $edited !== $original) {
-                    file_put_contents($mpd, $edited);
-                }
+            if ($targets === []) {
+                continue;
             }
 
-            @unlink("{$gatherDir}/".PackagerCommandBuilder::SUBS_DASH_MANIFEST); // throwaway master; the grafted text set references the kept segments
-        }
+            $packaged = $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, $format);
 
-        if (glob("{$gatherDir}/[!_]*.m3u8") && $this->runTextPackager($video, $builder, $subs, $gatherDir, $segmentDuration, 'hls')) {
-            $subsContent = file_get_contents("{$gatherDir}/".PackagerCommandBuilder::SUBS_HLS_MANIFEST);
-
-            foreach (glob("{$gatherDir}/[!_]*.m3u8") ?: [] as $m3u8) {
-                $original = file_get_contents($m3u8);
-                $edited = $manifests->hlsAddSubtitles($original, $subsContent);
-
-                if ($edited !== null && $edited !== $original) {
-                    file_put_contents($m3u8, $edited);
-                }
+            if ($packaged === []) {
+                continue;
             }
 
-            @unlink("{$gatherDir}/".PackagerCommandBuilder::SUBS_HLS_MANIFEST);
+            foreach ($targets as $target) {
+                $this->graftSubtitles($manifests, $target, $format, $packaged);
+            }
         }
     }
 
     /**
-     * Run the subtitle packager for one format ('dash'|'hls'); returns false (logged, non-fatal) when
-     * the run fails or wrote no throwaway manifest, so the caller skips grafting that format.
+     * Graft the packaged text entries into one manifest in place.
+     *
+     * A track-by-track retry ({@see runTextPackager}) yields one throwaway manifest per track, and
+     * the two formats take them differently: the DASH import is additive and skips text sets already
+     * present, so it chains; `hlsAddSubtitles` bails out as soon as the master carries subtitles, so
+     * every track's `#EXT-X-MEDIA` lines have to reach it in a single call.
+     *
+     * @param  list<string>  $packaged
+     */
+    private function graftSubtitles(ManifestEditor $manifests, string $path, string $format, array $packaged): void
+    {
+        $original = (string) file_get_contents($path);
+        $edited = $original;
+
+        if ($format === 'dash') {
+            foreach ($packaged as $subsXml) {
+                $edited = $manifests->importDashSubtitles($edited, $subsXml) ?? $edited;
+            }
+        } else {
+            $edited = $manifests->hlsAddSubtitles($edited, implode("\n", $packaged)) ?? $edited;
+        }
+
+        if ($edited !== $original) {
+            file_put_contents($path, $edited);
+        }
+    }
+
+    /**
+     * Package the subtitles for one format ('dash'|'hls') and return each throwaway manifest's
+     * contents for the caller to graft: one document for the joint run, or one per surviving track
+     * when that run failed.
+     *
+     * Shaka fails the ENTIRE run over a single unparseable input, so one malformed track used to
+     * strip every subtitle from the video — seven tracks lost over one stray blank line. Retrying
+     * track by track keeps the ones that parse and costs extra processes only on that path.
      *
      * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $subs
+     * @return list<string>
      */
-    private function runTextPackager(Video $video, PackagerCommandBuilder $builder, array $subs, string $gatherDir, int $segmentDuration, string $format): bool
+    private function runTextPackager(Video $video, PackagerCommandBuilder $builder, array $subs, string $gatherDir, int $segmentDuration, string $format): array
+    {
+        if ($this->runTextPackagerOnce($video, $builder, $subs, $gatherDir, $segmentDuration, $format)) {
+            $manifest = $this->takeSubsManifest($gatherDir, $format);
+
+            return $manifest === null ? [] : [$manifest];
+        }
+
+        // Nothing left to isolate: the single track we ran is the one that fails.
+        if (count($subs) === 1) {
+            return [];
+        }
+
+        Log::warning('Subtitle packaging failed; retrying one track at a time', [
+            'video' => $video->id, 'format' => $format, 'tracks' => count($subs),
+        ]);
+
+        $manifests = [];
+
+        // A track that fails leaves a half-written segment dir behind, which syncs to S3 referenced by
+        // nothing. Deleting it here is not safe: both formats share the dir, so dropping it on an HLS
+        // failure would take the DASH segments the manifest already points at with it.
+        foreach ($subs as $sub) {
+            if (! $this->runTextPackagerOnce($video, $builder, [$sub], $gatherDir, $segmentDuration, $format)) {
+                continue;
+            }
+
+            if (($manifest = $this->takeSubsManifest($gatherDir, $format)) !== null) {
+                $manifests[] = $manifest;
+            }
+        }
+
+        return $manifests;
+    }
+
+    /**
+     * @param  list<array{path:string,type:string,ulid:string,language?:?string,forced?:bool,name?:?string}>  $subs
+     */
+    private function runTextPackagerOnce(Video $video, PackagerCommandBuilder $builder, array $subs, string $gatherDir, int $segmentDuration, string $format): bool
     {
         $result = Process::timeout($this->timeout - 120)->run(
             $builder->buildText($subs, $gatherDir, $segmentDuration, $format),
             fn () => $this->heartbeat($video),
         );
 
-        if (! $result->successful()) {
-            Log::warning('Subtitle packaging failed; leaving the video without subtitles for this format', [
-                'video' => $video->id, 'format' => $format, 'error' => $result->errorOutput(),
-            ]);
-
-            return false;
+        if ($result->successful()) {
+            return true;
         }
 
-        return is_file("{$gatherDir}/".($format === 'dash' ? PackagerCommandBuilder::SUBS_DASH_MANIFEST : PackagerCommandBuilder::SUBS_HLS_MANIFEST));
+        Log::warning('Subtitle packager run failed', [
+            'video' => $video->id,
+            'format' => $format,
+            'tracks' => array_column($subs, 'ulid'),
+            'error' => $result->errorOutput(),
+        ]);
+
+        return false;
+    }
+
+    /**
+     * Read the throwaway manifest a text run writes and remove it, so it can neither be mistaken for
+     * a real output during the sync nor be re-read by the next run in a track-by-track retry. The
+     * grafted text sets reference the segment dirs, which stay.
+     */
+    private function takeSubsManifest(string $gatherDir, string $format): ?string
+    {
+        $path = "{$gatherDir}/".($format === 'dash'
+            ? PackagerCommandBuilder::SUBS_DASH_MANIFEST
+            : PackagerCommandBuilder::SUBS_HLS_MANIFEST);
+
+        if (! is_file($path)) {
+            return null;
+        }
+
+        $contents = file_get_contents($path);
+        @unlink($path);
+
+        return $contents === false ? null : $contents;
     }
 
     /**

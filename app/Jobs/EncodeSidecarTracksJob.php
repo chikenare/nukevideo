@@ -10,6 +10,7 @@ use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\CreateVideoStreamsService;
 use App\Services\EncodeCommandBuilder;
 use App\Support\MediaDuration;
+use App\Support\WebVtt;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Collection;
@@ -106,6 +107,7 @@ class EncodeSidecarTracksJob implements ShouldQueue
 
             foreach ($streams as $stream) {
                 $this->assertCoversSource($video, $stream, $outputPaths[$stream->id]);
+                $this->repairSubtitle($stream, $outputPaths[$stream->id]);
                 $this->uploadTrack($stream, $outputPaths[$stream->id]);
             }
         } finally {
@@ -173,6 +175,28 @@ class EncodeSidecarTracksJob implements ShouldQueue
         $end = $stream->meta['source_end'] ?? null;
 
         return is_numeric($end) && (float) $end > 0.0 ? (float) $end : (float) $video->duration;
+    }
+
+    /**
+     * ffmpeg muxes an ASS payload with a double line break into a cue containing a blank line, which
+     * is invalid WebVTT and makes shaka fail the packager run later ({@see WebVtt}). Repair it before
+     * the upload so the copy that reaches S3 — the one every retry and repackage reads back — is valid.
+     */
+    private function repairSubtitle(Stream $stream, string $localPath): void
+    {
+        if ($stream->type !== 'subtitle') {
+            return;
+        }
+
+        $vtt = (string) file_get_contents($localPath);
+        $repaired = WebVtt::sanitize($vtt);
+
+        if ($repaired === $vtt) {
+            return;
+        }
+
+        file_put_contents($localPath, $repaired);
+        Log::info('Repaired malformed WebVTT', ['stream' => $stream->id]);
     }
 
     private function uploadTrack(Stream $stream, string $localPath): void
