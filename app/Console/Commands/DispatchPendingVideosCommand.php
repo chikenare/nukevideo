@@ -13,7 +13,7 @@ class DispatchPendingVideosCommand extends Command
 {
     protected $signature = 'videos:dispatch';
 
-    protected $description = 'Dispatch pending videos into the chunk-based encoding pipeline, up to the number of available worker slots';
+    protected $description = 'Dispatch pending videos into the chunk-based encoding pipeline, up to the configured concurrency';
 
     // Light orchestration queue every worker drains, so prep runs even on a GPU-only fleet.
     private const QUEUE = 'orchestration';
@@ -27,15 +27,17 @@ class DispatchPendingVideosCommand extends Command
 
     public function handle(): void
     {
-        // Each worker node processes one video at a time; only dispatch as many as free slots.
-        $workerCount = Node::worker()->active()->count();
-
-        if ($workerCount === 0) {
+        if (Node::worker()->active()->doesntExist()) {
             return;
         }
 
-        $inFlight = Video::whereIn('status', self::IN_FLIGHT)->count();
-        $available = $workerCount - $inFlight;
+        // Bounded by a configured concurrency, not by the node count. The old cap assumed "each
+        // worker node processes one video at a time", which chunking makes false in both
+        // directions: one video already spreads across every node, and N videos dispatched
+        // together all pile onto the same FIFO queue — so the shortest one waits out the longest
+        // one's entire fan-out, unheartbeaten, until the reaper mistakes the wait for a dead
+        // worker and fails it.
+        $available = (int) config('nuke.video.concurrent') - Video::whereIn('status', self::IN_FLIGHT)->count();
 
         if ($available <= 0) {
             return;

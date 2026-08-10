@@ -84,6 +84,9 @@ class Video extends Model
 
     public const SIDECAR_DIR = 'sidecar';
 
+    /** Sub-dir holding the raw processed renditions a template chose to keep. */
+    public const PROCESSED_DIR = 'processed';
+
     /** Filename of every video's thumbnail/storyboard assets, shared by the jobs that produce them
      *  and the controller/DTOs that serve/link them. */
     public const THUMBNAIL_FILENAME = 'thumbnail.jpg';
@@ -186,6 +189,25 @@ class Video extends Model
     public static function assetPath(string $ulid, string $filename): string
     {
         return "{$ulid}/{$filename}";
+    }
+
+    /** Local scratch dir where retained renditions wait for their own sync: `{ulid}/processed`. */
+    public function processedDir(): string
+    {
+        return "{$this->ulid}/".self::PROCESSED_DIR;
+    }
+
+    /**
+     * Primary-S3 prefix for the retained raw renditions: `processed/{ulid}` — deliberately OUTSIDE
+     * the video's own prefix. A playback token authorizes all of `{ulid}/*`, and every manifest
+     * names each rendition's stream ULID, so anything filed under there is one predictable GET
+     * away for anyone holding a legitimate link. The archived original gets away with living
+     * inside it only because no manifest ever names its ULID ({@see Stream::archivePath()}); a
+     * rendition has no such cover, so it lives where no issued token reaches.
+     */
+    public static function processedPrefixFor(string $ulid): string
+    {
+        return self::PROCESSED_DIR."/{$ulid}";
     }
 
     public function user(): BelongsTo

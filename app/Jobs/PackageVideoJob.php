@@ -9,6 +9,7 @@ use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\Cdn\SelfHostedProvider;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
@@ -109,11 +110,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
             $this->packageSubtitles($video, $gatherDir, $subtitles);
 
-            // After prune so each stream's size counts exactly what survives to S3 (CMAF always,
-            // the raw rendition only when the template keeps processed files).
-            $this->pruneProcessedRenditions($video);
-            $this->recordStoredSizes($video, $gatherDir);
-            $this->syncToPrimary($video, $gatherDir);
+            // After the relocation so each stream's size counts exactly what survives to S3 (CMAF
+            // always, the raw rendition only when the template keeps processed files).
+            $processedDir = $this->relocateProcessedRenditions($video, $gatherDir);
+            $this->recordStoredSizes($video, $gatherDir, $processedDir);
+            $this->syncToPrimary($video, $gatherDir, $processedDir);
 
             // Conditional: never overwrite an output a concurrent failure path already FAILED.
             $video->outputs()
@@ -123,6 +124,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         } finally {
             Storage::disk('local')->deleteDirectory($video->gatherDir());
             Storage::disk('local')->deleteDirectory($video->chunkstageDir());
+            Storage::disk('local')->deleteDirectory($video->processedDir());
         }
     }
 
@@ -458,14 +460,14 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     }
 
     /**
-     * Record each stream's stored footprint from disk after {@see pruneProcessedRenditions}, so what's
-     * measured equals what reaches S3 — no template lookup needed. `package_size` = the CMAF package
-     * (its own `{ulid}/` dir, always synced); `file_size` = the raw processed rendition
-     * ({@see localRenditionPath}), present only when the template keeps processed files (pruning removed
-     * it otherwise, so it stays null). The two are never summed here; the video total lives in
-     * {@see VideoData}. The `original` isn't packaged and keeps its uploaded `file_size`.
+     * Record each stream's stored footprint from disk after {@see relocateProcessedRenditions}, so
+     * what's measured equals what reaches S3 — no template lookup needed. `package_size` = the CMAF
+     * package (its own `{ulid}/` dir, always synced); `file_size` = the raw processed rendition,
+     * present only when the template keeps processed files (it was deleted otherwise, so it stays
+     * null). The two are never summed here; the video total lives in {@see VideoData}. The
+     * `original` isn't packaged and keeps its uploaded `file_size`.
      */
-    private function recordStoredSizes(Video $video, string $gatherDir): void
+    private function recordStoredSizes(Video $video, string $gatherDir, ?string $processedDir): void
     {
         foreach ($video->streams as $stream) {
             if ($stream->type === 'original') {
@@ -478,31 +480,65 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
                 $package += is_file($file) ? (int) filesize($file) : 0;
             }
 
-            $raw = "{$gatherDir}/{$stream->relativePath()}";
+            $raw = $processedDir ? "{$processedDir}/{$stream->relativePath()}" : null;
 
             $stream->update([
                 'package_size' => $package,
-                'file_size' => is_file($raw) ? (int) filesize($raw) : null,
+                'file_size' => $raw && is_file($raw) ? (int) filesize($raw) : null,
             ]);
         }
     }
 
+    /** Gather sub-dirs holding raw renditions: packager inputs, never what serves playback. */
+    private const PROCESSED_TYPES = ['video', 'audio'];
+
     /**
      * The raw video/audio renditions are only packager inputs — the CMAF segments serve playback.
-     * Drop them from the gather tree before the sync (so they never reach primary S3) unless the
-     * template opts to keep them. Subtitles, thumbnail and storyboard live elsewhere and are kept.
+     * A template that does not keep them has them dropped here, before the sync, so they never
+     * reach primary S3 at all. One that does keep them has them MOVED OUT of the gather tree, so
+     * they sync to their own prefix instead of the video's.
+     *
+     * That move is the point. A playback token authorizes all of `{videoUlid}/*`
+     * ({@see SelfHostedProvider}) and every manifest names each rendition's
+     * stream ULID, so a retained rendition sitting under the video's prefix was the full-quality
+     * progressive file, one predictable GET away for anyone holding a legitimate playback link —
+     * no segments, no ABR, no second signature. The panel offers the setting as a storage
+     * trade-off, which is all it should be.
+     *
+     * Returns the local dir the renditions were moved to, or null when they were dropped.
      */
-    private function pruneProcessedRenditions(Video $video): void
+    private function relocateProcessedRenditions(Video $video, string $gatherDir): ?string
     {
-        if ($video->template?->keep_processed_files ?? true) {
-            return;
+        $local = Storage::disk('local');
+
+        if (! ($video->template?->keep_processed_files ?? true)) {
+            foreach (self::PROCESSED_TYPES as $type) {
+                $local->deleteDirectory($video->gatherDir()."/{$type}");
+            }
+
+            Log::info('Pruned processed renditions before sync', ['video' => $video->id]);
+
+            return null;
         }
 
-        foreach (['video', 'audio'] as $type) {
-            Storage::disk('local')->deleteDirectory($video->gatherDir()."/{$type}");
+        // A redelivery rebuilds the gather tree from scratch; clear whatever a previous attempt
+        // left here so the move below never lands on an existing directory.
+        $local->deleteDirectory($video->processedDir());
+
+        $processedDir = $local->path($video->processedDir());
+        $moved = false;
+
+        foreach (self::PROCESSED_TYPES as $type) {
+            if (! is_dir("{$gatherDir}/{$type}")) {
+                continue;
+            }
+
+            Scratch::ensureDirectory($processedDir);
+            rename("{$gatherDir}/{$type}", "{$processedDir}/{$type}");
+            $moved = true;
         }
 
-        Log::info('Pruned processed renditions before sync', ['video' => $video->id]);
+        return $moved ? $processedDir : null;
     }
 
     /** Forced on upload: s5cmd sniffs content instead of trusting the extension, and types `.mpd` as
@@ -525,7 +561,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * known extension with its Content-Type forced, then a catch-all for the rest. A pass whose filter
      * matches nothing (an HLS-less output has no `.m3u8`) is a no-op, not an error.
      */
-    private function syncToPrimary(Video $video, string $gatherDir): void
+    private function syncToPrimary(Video $video, string $gatherDir, ?string $processedDir): void
     {
         $dest = $this->s3Uri('s3', "{$video->ulid}/");
         $timeout = $this->timeout - 120;
@@ -540,6 +576,18 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             ->flatMap(fn (string $ext) => ['--exclude', "*.{$ext}"])->all();
 
         $this->s5cmdSync('s3', "{$gatherDir}/", $dest, $video, $timeout, $excludes);
+
+        // Its own pass to its own prefix: these are retained bytes, not something a playback token
+        // should reach ({@see relocateProcessedRenditions}).
+        if ($processedDir !== null) {
+            $this->s5cmdSync(
+                's3',
+                "{$processedDir}/",
+                $this->s3Uri('s3', Video::processedPrefixFor($video->ulid).'/'),
+                $video,
+                $timeout,
+            );
+        }
 
         Log::info('Processed files and packages synced to primary S3', ['video' => $video->id]);
     }

@@ -6,6 +6,8 @@ use App\Models\User;
 use App\Models\Video;
 use App\Services\NodeService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
 
@@ -36,6 +38,24 @@ function stalledVideo(int $minutesSinceHeartbeat): Video
     return $video;
 }
 
+/** An encode batch row shaped the way `PrepareVideoJob::fanOut()` names and counts them. */
+function encodeBatch(Video $video, int $pendingJobs, bool $finished = false): void
+{
+    DB::table('job_batches')->insert([
+        'id' => (string) Str::ulid(),
+        'name' => "encode video {$video->id} video-processing",
+        'total_jobs' => 40,
+        'pending_jobs' => $pendingJobs,
+        'failed_jobs' => 0,
+        'failed_job_ids' => '[]',
+        // `markAsFailed` reconstructs the batch through Bus::findBatch to cancel it, and that
+        // unserializes this column — an empty row would blow up there rather than in the reaper.
+        'options' => serialize([]),
+        'created_at' => now()->subHours(2)->timestamp,
+        'finished_at' => $finished ? now()->subHour()->timestamp : null,
+    ]);
+}
+
 describe('videos:reap', function () {
     it('leaves a video alone while the queue can still re-deliver its lost job', function () {
         // A worker killed mid-chunk stops beating the heartbeat, but the queue hands that job to
@@ -61,6 +81,37 @@ describe('videos:reap', function () {
         $video = stalledVideo(30);
 
         $this->artisan('videos:reap', ['--minutes' => 20])->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('leaves a video alone while its chunks are still queued behind another video', function () {
+        // A stale heartbeat only says nothing is RUNNING for this video. Every CPU node drains one
+        // shared FIFO list, so a video dispatched behind a long one sits there silent for hours —
+        // healthy, just waiting its turn. Failing it deletes the user's source a day later.
+        $video = stalledVideo(120);
+        encodeBatch($video, pendingJobs: 40);
+
+        $this->artisan('videos:reap')->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('running');
+    });
+
+    it('fails it anyway once the work has been pending far too long to still be coming', function () {
+        $video = stalledVideo(13 * 60);
+        encodeBatch($video, pendingJobs: 40);
+
+        $this->artisan('videos:reap')->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('fails a video whose batch is finished but never transitioned', function () {
+        // Nothing left to deliver: this is the case the reaper genuinely owns.
+        $video = stalledVideo(120);
+        encodeBatch($video, pendingJobs: 0, finished: true);
+
+        $this->artisan('videos:reap')->assertSuccessful();
 
         expect($video->fresh()->status)->toBe('failed');
     });

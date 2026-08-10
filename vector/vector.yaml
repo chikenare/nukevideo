@@ -34,18 +34,28 @@ transforms:
       ip = string!(.ip)
       bytes = .bytes
 
+      # The day the traffic happened, taken from the log line's own timestamp. The batch below is
+      # flushed on a timer, so a batch that straddles midnight would otherwise be stamped at
+      # insert time and book the tail of one day to the next — permanently, since `date` is the
+      # partition key of a SummingMergeTree no later correction can take back.
+      date = format_timestamp!(.timestamp ?? now(), "%Y-%m-%d")
+
       . = {}
       .video_ulid = video
       .ip = ip
       .bytes = bytes
+      .date = date
 
   aggregate_bandwidth_logs:
     type: reduce
     inputs:
       - prep_bandwidth_logs
+    # `date` is part of the key, not just carried along: summing across a midnight boundary would
+    # collapse two days of traffic onto whichever one the reduce happened to see first.
     group_by:
       - video_ulid
       - ip
+      - date
     merge_strategies:
       bytes: sum
 

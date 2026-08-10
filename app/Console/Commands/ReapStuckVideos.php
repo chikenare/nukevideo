@@ -6,6 +6,7 @@ use App\Enums\VideoStatus;
 use App\Models\Video;
 use App\Services\NodeService;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Recovery backstop for video status: Horizon recovers the queue, but a worker killed
@@ -28,6 +29,9 @@ class ReapStuckVideos extends Command
     // The queue is the first line of recovery; this floor only applies if it reports no window.
     private const MIN_STALE_MINUTES = 20;
 
+    /** Past this, queued work is not "waiting its turn" any more — nothing is going to deliver it. */
+    private const ABANDONED_MINUTES = 720;
+
     public function handle(): int
     {
         $minutes = $this->staleMinutes();
@@ -49,16 +53,54 @@ class ReapStuckVideos extends Command
         }
 
         $failed = 0;
+        $waiting = 0;
 
         foreach ($stuck as $video) {
+            if ($this->isWaitingOnTheQueue($video)) {
+                $waiting++;
+                $this->line("Video {$video->id} has queued work outstanding; leaving it alone.");
+
+                continue;
+            }
+
             $video->markAsFailed("No worker reported progress for over {$minutes} minutes; the video was left mid-processing.");
             $failed++;
             $this->warn("Video {$video->id} failed (no heartbeat for >{$minutes} minutes).");
         }
 
-        $this->info("Reap complete: {$failed} failed.");
+        $this->info("Reap complete: {$failed} failed, {$waiting} still queued.");
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Whether the queue still owes this video work it has simply not reached yet.
+     *
+     * A stale heartbeat means nothing is RUNNING for the video — it does not say why. Chunk jobs
+     * only beat the heartbeat while they execute, and every CPU node drains one shared FIFO list,
+     * so a video dispatched behind a long one has its jobs sitting in the queue, untouched and
+     * silent, for as long as the one ahead takes. That is a healthy video waiting its turn, and
+     * failing it deletes the user's source 24h later ({@see PruneStaleVideos}).
+     *
+     * An unfinished batch with pending jobs is the difference: the queue owns the recovery there,
+     * including redelivering whatever a dead worker dropped. The reaper's real job is the case the
+     * queue cannot fix — no batch at all (preparation died), or every batch finished with the
+     * video never transitioning (packaging died).
+     *
+     * The ceiling is the escape hatch: if the jobs are still pending long after any queue could
+     * plausibly deliver them (a flushed Redis, a fleet that never came back), they are not coming.
+     */
+    private function isWaitingOnTheQueue(Video $video): bool
+    {
+        if ($video->last_heartbeat_at?->lt(now()->subMinutes(self::ABANDONED_MINUTES))) {
+            return false;
+        }
+
+        return DB::table('job_batches')
+            ->where('name', 'like', "encode video {$video->id} %")
+            ->whereNull('finished_at')
+            ->where('pending_jobs', '>', 0)
+            ->exists();
     }
 
     /**
