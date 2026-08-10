@@ -61,8 +61,27 @@ const outputCodecs = (output: Output): string[] => {
   return Array.from(codecs)
 }
 
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+
 const show = async () => {
   video.value = await VideoService.show(route.params.id!.toString())
+}
+
+/** The initial load and the Retry button: the only places allowed to paint an error screen. */
+const load = async () => {
+  loading.value = true
+  loadError.value = null
+
+  try {
+    await show()
+  } catch (error) {
+    // Without this the page rendered nothing at all — a deleted video, a video of another
+    // project or a momentary API hiccup all looked identical to a blank screen.
+    loadError.value = error instanceof ApiException ? error.message : 'Could not load this video.'
+  } finally {
+    loading.value = false
+  }
 }
 
 const formatDate = (dateString: string | null): string => {
@@ -213,21 +232,73 @@ const isStillProcessing = computed(() => {
 
 let refreshInterval: number | null = null
 
+/** Consecutive poll failures tolerated before giving up, so a deleted video or a restarting API
+ *  stops the loop instead of being hammered every 5s for as long as the tab stays open. */
+const MAX_POLL_FAILURES = 3
+
+let pollFailures = 0
+
+const stopPolling = () => {
+  if (refreshInterval) {
+    clearInterval(refreshInterval)
+    refreshInterval = null
+  }
+}
+
+/**
+ * Re-evaluates the condition on every tick. It used to be checked once at mount, so a video that
+ * finished kept being refetched for the lifetime of the tab, and a failing request produced an
+ * unhandled rejection every 5 seconds.
+ */
+const poll = async () => {
+  try {
+    await show()
+    pollFailures = 0
+
+    if (!isStillProcessing.value) stopPolling()
+  } catch {
+    pollFailures++
+
+    if (pollFailures >= MAX_POLL_FAILURES) stopPolling()
+  }
+}
+
+/** Idempotent, so it can be called from the initial mount and from a Retry alike. */
+const startPolling = () => {
+  stopPolling()
+  pollFailures = 0
+
+  if (video.value && isStillProcessing.value) {
+    refreshInterval = setInterval(poll, 5000)
+  }
+}
+
+/** Retry from the error screen: load again and re-arm the poll if the video is still working. */
+const reload = async () => {
+  await load()
+  startPolling()
+}
+
 onMounted(async () => {
   fetchCodecConfig()
-  await show()
-  if (video.value && isStillProcessing.value) {
-    refreshInterval = setInterval(() => show(), 5000)
-  }
+  await load()
+  startPolling()
 })
 
-onUnmounted(() => {
-  if (refreshInterval) clearInterval(refreshInterval)
-})
+onUnmounted(stopPolling)
 </script>
 
 <template>
-  <div v-if="video" class="container mx-auto p-6 space-y-6">
+  <div v-if="loading" class="container mx-auto p-6">
+    <p class="text-sm text-muted-foreground">Loading video…</p>
+  </div>
+
+  <div v-else-if="loadError" class="container mx-auto p-6 space-y-3">
+    <p class="text-sm text-destructive">{{ loadError }}</p>
+    <Button variant="outline" size="sm" @click="reload">Retry</Button>
+  </div>
+
+  <div v-else-if="video" class="container mx-auto p-6 space-y-6">
 
     <!-- Video Information -->
     <Card>
@@ -333,7 +404,11 @@ onUnmounted(() => {
           </div>
         </DialogHeader>
         <div class="px-6 pb-6">
-          <ShakaVideoPlayer v-if="playerOutput" :video="video" :output-ulid="playerOutput.ulid" />
+          <!-- Keyed on the output: the dialog is non-modal, so another output's play button is
+               reachable while it is open, and without a key the player instance was reused and
+               kept playing the first output under the new title. -->
+          <ShakaVideoPlayer v-if="playerOutput" :key="playerOutput.ulid" :video="video"
+            :output-ulid="playerOutput.ulid" />
         </div>
       </DialogContent>
     </Dialog>

@@ -207,10 +207,18 @@ class Output extends Model
      */
     public function progress(): int
     {
+        // A completed output has already had its hash cleared ({@see CompletesVideo}), so the
+        // round-trip below could only ever return the fallback anyway. Skipping it matters
+        // because the panel polls the video list: this is one Redis call per output per tick,
+        // on pages that are almost entirely finished videos.
+        if ($this->status === VideoStatus::COMPLETED) {
+            return 100;
+        }
+
         $values = Redis::hvals(self::chunkProgressKey($this->id));
 
         if ($values === []) {
-            return $this->status === VideoStatus::COMPLETED ? 100 : 0;
+            return 0;
         }
 
         return (int) min(100, round(array_sum(array_map('intval', $values)) / count($values)));

@@ -34,7 +34,8 @@ class UpdateNodeData extends RequestData
 
         return [
             'name' => 'sometimes|string|max:255|unique:nodes,name,'.$node->id,
-            'user' => 'nullable|string|max:32',
+            // A POSIX login name; see StoreNodeData for why free text cannot be accepted here.
+            'user' => ['nullable', 'string', 'max:32', 'regex:/^[a-z_][a-z0-9_-]*$/'],
             'ipAddress' => 'sometimes|ip',
             'hostname' => 'nullable|max:255',
             'isActive' => 'sometimes|boolean',

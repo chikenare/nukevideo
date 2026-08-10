@@ -15,32 +15,39 @@ GET /api/videos
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `page` | integer | Page number |
-| `per_page` | integer | Items per page |
+| `per_page` | integer | Items per page (default 15, maximum 100) |
+| `search` | string | Matches against the video name |
+| `external_user_id` | string | Exact match on the id supplied at upload |
+| `external_resource_id` | string | Exact match on the id supplied at upload |
 
 **Response:**
+
+The pagination fields sit alongside `data`, not inside a `meta` object, and — as everywhere in
+this API — the payload is camelCase.
 
 ```json
 {
   "data": [
     {
-      "id": 1,
       "ulid": "01HX...",
       "name": "my-video.mp4",
       "status": "completed",
       "duration": 120.5,
-      "aspect_ratio": "16:9",
-      "thumbnail_path": "videos/01HX.../thumbnail.jpg",
-      "template_id": 1,
-      "streams": [...],
-      "created_at": "2025-01-15T10:30:00Z"
+      "aspectRatio": "16:9",
+      "createdAt": "2025-01-15T10:30:00+00:00",
+      "externalUserId": "user-42",
+      "externalResourceId": "movie-7",
+      "thumbnailUrl": "https://api.example.com/api/videos/01HX.../thumbnail.jpg",
+      "storyboardUrl": "https://api.example.com/api/videos/01HX.../storyboard.vtt",
+      "outputs": [],
+      "streams": [],
+      "size": 812739584,
+      "servedSize": 734003200
     }
   ],
-  "meta": {
-    "current_page": 1,
-    "last_page": 5,
-    "per_page": 15,
-    "total": 72
-  }
+  "currentPage": 1,
+  "perPage": 15,
+  "total": 72
 }
 ```
 

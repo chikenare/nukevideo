@@ -7,8 +7,10 @@ use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use Closure;
+use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\Validation\Max;
 use Spatie\LaravelData\Attributes\Validation\Regex;
+use Spatie\LaravelData\Mappers\CamelCaseMapper;
 use Symfony\Component\Intl\Languages;
 
 class UpdateStreamData extends RequestData
@@ -24,7 +26,14 @@ class UpdateStreamData extends RequestData
         public string $name,
         public ?string $language,
         public bool $forced,
-        /** Null means "not sent" — the flag keeps whatever the probe (or a previous edit) set. */
+        /**
+         * Null means "not sent" — the flag keeps whatever the probe (or a previous edit) set.
+         * The mapper is mandatory: rules are keyed on the *input* name, so without it the
+         * inferred `boolean` rule lands under `hearing_impaired` and never runs against the
+         * `hearingImpaired` key the panel sends — the value still reaches the constructor and
+         * a non-bool blows up there as a 500 instead of a 422.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
         public ?bool $hearingImpaired = null,
     ) {}
 

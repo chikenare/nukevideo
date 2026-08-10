@@ -41,11 +41,28 @@ class DispatchPendingVideosCommand extends Command
             return;
         }
 
+        $dispatched = 0;
+
         Video::where('status', VideoStatus::PENDING->value)
+            ->with('template')
             ->oldest('created_at')
-            ->limit($available)
-            ->get()
-            ->each(function (Video $video) {
+            ->cursor()
+            ->each(function (Video $video) use (&$dispatched, $available) {
+                if ($dispatched >= $available) {
+                    return false;
+                }
+
+                // Never claim a video the fleet cannot encode: its chunks would land on a hardware
+                // queue nobody drains and it would hang until the reaper. Skipping leaves it
+                // PENDING at no cost, and the next tick offers it again the moment the node is
+                // back — where failing it would hand it to `videos:prune`, which deletes the video
+                // and the user's only copy 24h later, over what is usually a reboot. Skipped
+                // rather than returned early so one waiting GPU video cannot block the CPU queue
+                // behind it.
+                if ($video->template?->missingCapacity()) {
+                    return;
+                }
+
                 $originalPath = $video->streams()->where('type', 'original')->value('path');
 
                 if (! $originalPath) {
@@ -70,6 +87,8 @@ class DispatchPendingVideosCommand extends Command
                 try {
                     PrepareVideoJob::dispatch($video->id, $originalPath)
                         ->onQueue(self::QUEUE);
+
+                    $dispatched++;
                 } catch (\Throwable $e) {
                     Log::error('Failed to dispatch segment job; reverting to pending', ['video' => $video->id, 'error' => $e->getMessage()]);
 

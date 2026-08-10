@@ -48,6 +48,19 @@ class Node extends Model
         return $this->hasMany(Video::class);
     }
 
+    /**
+     * The container that makes this node do its job — the Horizon worker on a worker node, Traefik's
+     * companion on a proxy. Built from the type and the id only, so it can never be confused with
+     * the containers that serve the whole fleet from this host: `nukevideo_storage_{id}` is the
+     * chunk store every other node reads and writes through, and `nukevideo_vector` ships the edge
+     * logs. Stopping the node's own service takes it out of rotation; stopping the others takes the
+     * cluster down with it.
+     */
+    public function serviceContainerName(): string
+    {
+        return "nukevideo_{$this->type->value}_{$this->id}";
+    }
+
     public function scopeActive($query)
     {
         return $query->where('is_active', true);

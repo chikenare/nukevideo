@@ -64,7 +64,15 @@ describe('deriveGopSize', function () {
 
     it('leaves the encoder its own default when the rate is unreadable', function (string $rate) {
         expect(derivedGop($rate))->toBeNull();
-    })->with(['no rate' => '0/0', 'malformed' => 'N/A']);
+    })->with([
+        'no rate' => '0/0',
+        'malformed' => 'N/A',
+        // A VFR container reports a nominal tick rate, not a picture rate. Believed, it pins a
+        // 2000-frame GOP, and since the packager can only cut on a keyframe every segment would
+        // stretch to over a minute.
+        'VFR container reporting a tick rate' => '1000/1',
+        'absurd rate' => '600/1',
+    ]);
 });
 
 describe('what the variant ends up with', function () {

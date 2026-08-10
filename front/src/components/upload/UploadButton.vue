@@ -85,8 +85,13 @@ onMounted(getTemplates)
         </Select>
       </div>
 
-      <DialogFooter v-if="pendingCount > 0" class="mt-4">
-        <Button type="button" @click="handleUpload">
+      <DialogFooter v-if="pendingCount > 0" class="mt-4 sm:items-center">
+        <!-- The template is required server-side. Blocking the click here is the difference
+             between a hint and every file flipping to "Error" after the request. -->
+        <p v-if="!selectedTemplate" class="text-xs text-muted-foreground mr-auto">
+          Select a template to start uploading.
+        </p>
+        <Button type="button" :disabled="!selectedTemplate" @click="handleUpload">
           {{ isUploading ? 'Upload more' : 'Upload' }} ({{ pendingCount }})
         </Button>
       </DialogFooter>

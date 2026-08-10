@@ -100,7 +100,13 @@ export const useUploadStore = defineStore('upload', () => {
   })
 
   const hasFiles = computed(() => files.value.length > 0)
-  const isUploading = computed(() => files.value.some(f => f.progress > 0 && f.progress < 100))
+
+  // Terminal files are excluded deliberately: an errored file keeps its last progress value, so
+  // testing progress alone left the floating widget pinned on every page — and the 1s speed timer
+  // running — for the rest of the session, with no way to dismiss it.
+  const isUploading = computed(() =>
+    files.value.some(f => f.status !== 'error' && f.status !== 'success' && f.progress > 0 && f.progress < 100),
+  )
 
   function addFiles(newFiles: FileUpload[]) {
     files.value.push(...newFiles)
@@ -124,6 +130,8 @@ export const useUploadStore = defineStore('upload', () => {
   function startUpload() {
     const projectsStore = useProjectsStore()
 
+    refreshCsrfHeader()
+
     files.value.forEach(file => {
       if (!file.uppyFileId && file.status === 'pending') {
         const uppyFileId = uppy.addFile({
@@ -143,6 +151,47 @@ export const useUploadStore = defineStore('upload', () => {
     uppy.upload()
   }
 
+  /**
+   * The header is read at upload time, never snapshotted. The store is constructed when the app
+   * mounts — before any request has run, so on a first visit there is no XSRF cookie yet — and
+   * logging in regenerates the session token anyway. A frozen header meant every multipart
+   * upload (the >100 MB path, the only one CSRF applies to) failed with a token mismatch until
+   * the user reloaded the whole page.
+   */
+  function refreshCsrfHeader() {
+    uppy.getPlugin<AwsS3Multipart<Meta, AwsBody>>('AwsS3Multipart')?.setOptions({ headers: getXsrfToken() })
+  }
+
+  /**
+   * Retries a failed transfer without making the user find the file on disk again.
+   *
+   * It restarts from zero, not from where it stopped: on a non-abort error Uppy's aws-s3 plugin
+   * aborts the multipart upload server-side and clears the file's `key`/`uploadId`, so there is
+   * no part list left to resume against and the backend mints a new key.
+   *
+   * A file the user cancelled is gone from Uppy's own state even though the row still carries its
+   * id, and `retryUpload` on an unknown id throws — hence the lookup before anything is mutated,
+   * so a failed retry can never leave the row in a state with no buttons at all.
+   */
+  function retryUpload(fileIndex: number) {
+    const file = files.value[fileIndex]
+
+    if (!file || file.status !== 'error' || !file.uppyFileId) {
+      return
+    }
+
+    if (!uppy.getFile(file.uppyFileId)) {
+      return
+    }
+
+    refreshCsrfHeader()
+
+    uppy.retryUpload(file.uppyFileId)
+
+    file.status = 'pending'
+    file.logError = undefined
+  }
+
   function setTemplate(templateId: string) {
     selectedTemplate.value = templateId
   }
@@ -155,6 +204,9 @@ export const useUploadStore = defineStore('upload', () => {
       file.logError = 'Cancelled by user'
       file.progress = 0
       fileBytes.delete(file.uppyFileId)
+      // Uppy no longer knows this file, so the id is a dangling reference: keeping it made the
+      // row look retryable and left it queued-but-not-queued, with every action disabled.
+      file.uppyFileId = undefined
     }
   }
 
@@ -190,6 +242,7 @@ export const useUploadStore = defineStore('upload', () => {
     removeFile,
     clearFiles,
     startUpload,
+    retryUpload,
     setTemplate,
     cancelUpload,
     pauseUpload,

@@ -12,13 +12,32 @@ POST /webhooks/video-uploaded
 
 ### Authentication
 
-The webhook must include a valid signature. The signature is verified using the `WEBHOOK_SECRET` environment variable.
+Every request is authenticated against the `WEBHOOK_SECRET` environment variable, in one of two
+forms. If `WEBHOOK_SECRET` is unset, both forms are rejected.
+
+**Bearer token** — the generic form, and the one to use for any bucket that lets you set an
+arbitrary header:
+
+```
+Authorization: Bearer <WEBHOOK_SECRET>
+```
+
+**HMAC signature** — for object stores that sign their notifications themselves. The value is the
+base64-encoded SHA-256 HMAC of the raw request body, keyed with `WEBHOOK_SECRET`:
+
+```
+x-e2-notification-signature: <base64(hmac_sha256(body, WEBHOOK_SECRET))>
+```
+
+When the signature header is present it is the one checked, and a bad signature is rejected
+outright rather than falling back to the bearer token.
 
 ### Request Headers
 
 | Header | Description |
 |--------|-------------|
-| `X-Webhook-Signature` | HMAC signature for request verification |
+| `Authorization` | `Bearer <WEBHOOK_SECRET>` — the generic form |
+| `x-e2-notification-signature` | base64 HMAC-SHA256 of the body; takes precedence when sent |
 
 ### Request Body
 

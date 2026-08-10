@@ -4,12 +4,15 @@ namespace App\Models;
 
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Api\ActivityLogController;
+use App\Jobs\PrepareVideoJob;
 use App\Observers\VideoObserver;
 use App\Services\WebhookDispatcher;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Bus;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 #[ObservedBy(VideoObserver::class)]
@@ -100,10 +103,41 @@ class Video extends Model
      *  staged chunks rather than address one by index. */
     public const CHUNK_FILENAME_GLOB = 'chunk_*.mp4';
 
-    /** Internal-mirror key of one encoded chunk: `{ulid}/chunks/{streamUlid}/chunk_NNN.mp4` (built in two jobs). */
+    /**
+     * Zero-padding of the chunk index. Wide enough that it never overflows: the planner floors a
+     * window at 8s, so even a 24h source stays under 11k chunks. It used to be 3, which a long
+     * 4K source overruns — and past the padding, lexicographic order stops matching numeric
+     * order, so anything that concatenated by sorted name spliced the timeline out of order.
+     */
+    private const CHUNK_INDEX_PAD = 6;
+
+    /** Legacy 3-wide padding; still resolved when reading so a video staged by an older build
+     *  (or mid-flight across a deploy) still packages on retry. */
+    private const LEGACY_CHUNK_INDEX_PAD = 3;
+
+    /** Internal-mirror key of one encoded chunk: `{ulid}/chunks/{streamUlid}/chunk_NNNNNN.mp4` (built in two jobs). */
     public function chunkKey(Stream $stream, int $index): string
     {
-        return sprintf('%s/%s/chunk_%03d.mp4', $this->chunksDir(), $stream->ulid, $index);
+        return sprintf('%s/%s/%s', $this->chunksDir(), $stream->ulid, self::chunkFilename($index));
+    }
+
+    public static function chunkFilename(int $index): string
+    {
+        return sprintf('chunk_%0'.self::CHUNK_INDEX_PAD.'d.mp4', $index);
+    }
+
+    /**
+     * Every filename one index may legitimately carry on disk, newest padding first. Readers must
+     * try them all; writers only ever produce the first.
+     *
+     * @return array<int, string>
+     */
+    public static function chunkFilenameCandidates(int $index): array
+    {
+        return array_values(array_unique([
+            self::chunkFilename($index),
+            sprintf('chunk_%0'.self::LEGACY_CHUNK_INDEX_PAD.'d.mp4', $index),
+        ]));
     }
 
     /** Internal-mirror dir holding every stream's staged chunks: `{ulid}/chunks` (synced/pruned by several jobs). */
@@ -219,6 +253,12 @@ class Video extends Model
             ->whereNotIn('status', [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])
             ->update(['status' => VideoStatus::FAILED->value]);
 
+        // Every terminal-failure path funnels through here, so this is the one place that can
+        // guarantee the fleet stops. Without it a reaped video keeps its queued chunks running
+        // while `videos:dispatch` hands the freed slot to a new video, and a mixed CPU+GPU
+        // template leaves the sibling hardware batch encoding a video already declared dead.
+        $this->cancelEncodeBatches();
+
         activity('video')
             ->performedOn($this)
             ->causedBy($this->user)
@@ -227,6 +267,25 @@ class Video extends Model
             ->log("Video processing failed: {$this->name}");
 
         WebhookDispatcher::forVideo('video.error', $this);
+    }
+
+    /**
+     * Stops the encode batches of a video that can no longer complete, so their jobs don't keep
+     * burning encode slots (or die confusingly against artifacts the failure path removed).
+     * Matches how {@see PrepareVideoJob::fanOut()} names them: one batch per hardware queue,
+     * "encode video {id} {queue}" — so a mixed CPU+GPU video cancels both, not only the queue
+     * whose chunk happened to fail.
+     */
+    public function cancelEncodeBatches(): void
+    {
+        $ids = DB::table('job_batches')
+            ->where('name', 'like', "encode video {$this->id} %")
+            ->whereNull('finished_at')
+            ->pluck('id');
+
+        foreach ($ids as $id) {
+            Bus::findBatch($id)?->cancel();
+        }
     }
 
     /** ffmpeg pours its whole stderr into an exception; keep the head, where the cause is. */

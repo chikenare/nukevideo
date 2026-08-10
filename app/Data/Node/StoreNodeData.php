@@ -31,7 +31,10 @@ class StoreNodeData extends RequestData
         return [
             'hostname' => 'nullable|max:255',
             'name' => 'required|string|max:255|unique:nodes,name',
-            'user' => 'string|max:32',
+            // A POSIX login name. It is interpolated into the paths of the SSH deploy script, so
+            // free text here is a shell injection on the node — and even an honest value carrying
+            // a quote or a `$` breaks the deploy with an unreadable bash error.
+            'user' => ['string', 'max:32', 'regex:/^[a-z_][a-z0-9_-]*$/'],
             'ipAddress' => 'required|ip',
             'type' => 'required|string|in:worker,proxy',
             'accel' => 'nullable|string|in:intel,nvidia',

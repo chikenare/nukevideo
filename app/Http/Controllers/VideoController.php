@@ -31,7 +31,12 @@ class VideoController extends Controller
             $query->where('external_resource_id', $externalResourceId);
         }
 
-        $videos = $query->paginate();
+        // `paginate()` never reads the request, so the documented `per_page` was silently ignored
+        // and every page came back at 15. Capped: the payload embeds each video's outputs and
+        // streams, so an unbounded page is a heavy query and a heavy response.
+        $perPage = min(max((int) $request->input('per_page', 15), 1), 100);
+
+        $videos = $query->paginate($perPage);
 
         return [
             'data' => array_map(fn ($v) => VideoData::fromModel($v), $videos->items()),

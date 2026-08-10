@@ -621,13 +621,28 @@ class ManifestEditor
         if (! $hasAudio) {
             $out = array_map(
                 fn ($l) => str_starts_with($l, '#EXT-X-STREAM-INF')
-                    ? preg_replace('/,AUDIO="[^"]*"/', '', $l)
+                    ? $this->hlsDropAudioFromVariant($l)
                     : $l,
                 $out,
             );
         }
 
         return implode("\n", $out);
+    }
+
+    /**
+     * Strips every trace of audio from one `#EXT-X-STREAM-INF` line: the group reference AND the
+     * audio entry in CODECS. The packager writes `CODECS="avc1.64001f,mp4a.40.2"` whenever the
+     * output had an audio track, and RFC 8216 §4.3.4.2 requires CODECS to list what is actually
+     * present — leaving `mp4a.40.2` on a package with no audio left makes AVFoundation (Safari,
+     * iOS, tvOS) stall or refuse the variant outright. The video codec is always the first entry
+     * shaka emits, so keeping it and dropping the rest restores a truthful list.
+     */
+    private function hlsDropAudioFromVariant(string $line): string
+    {
+        $line = (string) preg_replace('/,AUDIO="[^"]*"/', '', $line);
+
+        return (string) preg_replace('/(CODECS=")([^",]+)[^"]*(")/', '$1$2$3', $line);
     }
 
     /**

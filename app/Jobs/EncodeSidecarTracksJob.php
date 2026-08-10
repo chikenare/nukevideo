@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Enums\VideoStatus;
 use App\Exceptions\EncodeInterruptedException;
 use App\Jobs\Concerns\CompletesVideo;
 use App\Models\Stream;
@@ -10,8 +11,10 @@ use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\CreateVideoStreamsService;
 use App\Services\EncodeCommandBuilder;
 use App\Support\MediaDuration;
+use App\Support\Scratch;
 use App\Support\WebVtt;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -32,9 +35,17 @@ use Throwable;
  * Runs in parallel with the video batch and settles its own outputs via {@see CompletesVideo};
  * the lock there resolves the race over which job finalizes the video.
  */
-class EncodeSidecarTracksJob implements ShouldQueue
+class EncodeSidecarTracksJob implements ShouldBeUnique, ShouldQueue
 {
     use CompletesVideo, Dispatchable, EmitsHeartbeat, InteractsWithQueue, Queueable, SerializesModels;
+
+    /**
+     * Bounds the unique lock, so a worker dying mid-pass cannot wedge the video's sidecar tracks.
+     * Sized well past the worst legitimate run — the lock is taken once at dispatch and never
+     * renewed, so anything near `$timeout` would expire while the job is still encoding and admit
+     * the duplicate this exists to prevent.
+     */
+    public int $uniqueFor = 10800;
 
     // tries absorbs redeliveries after a dead worker (OOM/restart/network); real errors stop at maxExceptions.
     public $tries = 5;
@@ -49,6 +60,16 @@ class EncodeSidecarTracksJob implements ShouldQueue
         public int $videoId,
         public string $mirrorPath,
     ) {}
+
+    /**
+     * {@see PrepareVideoJob} dispatches this before it spends minutes probing, so a retry of the
+     * preparation dispatches it again while the first copy is still encoding — and both passes
+     * write the same scratch path, so one truncates the track the other is about to verify.
+     */
+    public function uniqueId(): string
+    {
+        return (string) $this->videoId;
+    }
 
     public function handle(): void
     {
@@ -91,24 +112,27 @@ class EncodeSidecarTracksJob implements ShouldQueue
         foreach ($streams as $stream) {
             $ext = $stream->type === 'subtitle' ? 'vtt' : 'mp4';
             $local = Storage::disk('local')->path($video->sidecarPath($stream, $ext));
-            $dir = dirname($local);
-            if (! is_dir($dir)) {
-                mkdir($dir, 0755, true);
-            }
+            Scratch::ensureDirectory(dirname($local));
             $outputPaths[$stream->id] = $local;
         }
+
+        $startedAt = microtime(true);
 
         try {
             $sourceUrl = PrepareVideoJob::sourceUrl($this->mirrorPath);
 
             foreach ($streams->groupBy('type') as $pass) {
-                $this->runPass($video, EncodeCommandBuilder::build($pass, $sourceUrl, $outputPaths));
-            }
+                $this->runPass($video, EncodeCommandBuilder::build($pass, $sourceUrl, $outputPaths), $startedAt);
 
-            foreach ($streams as $stream) {
-                $this->assertCoversSource($video, $stream, $outputPaths[$stream->id]);
-                $this->repairSubtitle($stream, $outputPaths[$stream->id]);
-                $this->uploadTrack($stream, $outputPaths[$stream->id]);
+                // Staged pass by pass, not all at the end. `$pending` in handle() reads the
+                // mirror, so a track that is already up there is work a retry never repeats —
+                // holding every upload until the last pass finished meant a timeout during the
+                // second pass threw away the first one too, on every attempt.
+                foreach ($pass as $stream) {
+                    $this->assertCoversSource($video, $stream, $outputPaths[$stream->id]);
+                    $this->repairSubtitle($stream, $outputPaths[$stream->id]);
+                    $this->uploadTrack($stream, $outputPaths[$stream->id]);
+                }
             }
         } finally {
             foreach ($outputPaths as $path) {
@@ -122,11 +146,17 @@ class EncodeSidecarTracksJob implements ShouldQueue
      * sparse subtitle output runs dry ffmpeg ends the whole session with exit 0, cutting every
      * audio output minutes into the source without a single line on stderr.
      */
-    private function runPass(Video $video, string $command): void
+    private function runPass(Video $video, string $command, float $startedAt): void
     {
         Log::debug($command);
 
-        $process = Process::timeout($this->timeout - 120)->run($command, function () use ($video) {
+        // Every pass shares ONE job timeout. Handing each the full budget let a two-pass job
+        // (audio plus subtitles) ask for twice the wall clock the worker allows, so the kill
+        // landed mid-pass instead of on a pass boundary. The floor keeps a nearly-exhausted
+        // budget from starting a pass that is certain to be cut off.
+        $remaining = (int) ($this->timeout - 120 - (microtime(true) - $startedAt));
+
+        $process = Process::timeout(max(60, $remaining))->run($command, function () use ($video) {
             $this->heartbeat($video);
         });
 
@@ -234,15 +264,27 @@ class EncodeSidecarTracksJob implements ShouldQueue
         // finalize below, or their in-flight chunks race it and die against a source it removed.
         $this->cancelEncodeBatches($video);
 
-        foreach ($video->streams as $stream) {
-            $this->markOutputsFailedForStream($stream);
+        // Video-wide, not per stream: subtitles are never attached to an output
+        // ({@see CreateVideoStreamsService::createRenditionOutput}), and an output whose template
+        // declares no audio has no sidecar stream either — walking the streams would settle
+        // nothing, and finalizeVideoIfReady would then leave the video hanging until the reaper
+        // fails it with a message that has nothing to do with the real error. Mirrors
+        // {@see PackageVideoJob::failed()}.
+        $video->outputs()
+            ->whereNotIn('status', [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])
+            ->update(['status' => VideoStatus::FAILED->value]);
 
+        foreach ($video->streams as $stream) {
             // The pass encodes every track in one go, so the ones that never reached the mirror are
             // the ones it died on. Same field the panel already renders for a failed chunk.
             if (! Storage::disk('chunks')->exists($stream->stagingPath())) {
                 $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
             }
         }
+
+        // The in-memory `outputs` relation still holds the pre-update statuses; the gate below
+        // re-queries, but refresh keeps the model honest for anything reading it afterwards.
+        $video->load('outputs');
 
         $this->finalizeVideoIfReady($video, $e->getMessage());
     }

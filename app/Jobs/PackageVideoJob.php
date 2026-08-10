@@ -13,6 +13,7 @@ use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use App\Services\SubtitlePackager;
+use App\Support\Scratch;
 use App\Support\WebVtt;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -168,29 +169,16 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     private function concatStream(Video $video, Stream $stream, string $stageDir, string $gatherDir): void
     {
-        $chunks = glob("{$stageDir}/{$stream->ulid}/".Video::CHUNK_FILENAME_GLOB) ?: [];
-        sort($chunks); // zero-padded names sort into concat order
+        $chunks = $this->orderedChunks($video, $stream, $stageDir);
 
         if (empty($chunks)) {
             throw new RuntimeException("No chunk segments staged for stream {$stream->id}");
         }
 
-        // Guard against publishing a short rendition: if the encode batch completed early (a
-        // redelivered chunk can double-decrement Laravel's batch counter and fire then() before
-        // every window is encoded), a chunk is missing here. Throwing fails this attempt; the
-        // job's retry re-runs once the late chunk has landed. Null skips pre-migration videos.
-        if ($video->chunk_count !== null && count($chunks) !== $video->chunk_count) {
-            throw new RuntimeException(
-                "Stream {$stream->id} staged ".count($chunks)." chunks, expected {$video->chunk_count}"
-            );
-        }
-
         $finalLocal = $this->localRenditionPath($stream, $gatherDir);
         $listLocal = "{$finalLocal}.concat.txt";
 
-        if (! is_dir(dirname($finalLocal))) {
-            mkdir(dirname($finalLocal), 0755, true);
-        }
+        Scratch::ensureDirectory(dirname($finalLocal));
 
         $list = '';
         foreach ($chunks as $abs) {
@@ -208,6 +196,55 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         }
 
         Log::info('Rendition concatenated', ['stream' => $stream->id]);
+    }
+
+    /**
+     * The staged chunks in encode order, resolved index by index rather than by sorting the glob:
+     * chunk names only sort into numeric order while the index fits the zero-padding, and a
+     * count-only check cannot tell a scrambled timeline from a correct one — the rendition would
+     * publish with its windows spliced in the wrong order and nothing would flag it.
+     *
+     * A missing index throws, which fails this attempt: if the encode batch completed early (a
+     * redelivered chunk can double-decrement Laravel's batch counter and fire then() before every
+     * window is encoded), the retry re-runs once the late chunk has landed.
+     *
+     * @return array<int, string>
+     */
+    private function orderedChunks(Video $video, Stream $stream, string $stageDir): array
+    {
+        $dir = "{$stageDir}/{$stream->ulid}";
+
+        // Pre-migration videos never recorded a count. They predate the wider padding too, so
+        // every index they hold is 3 digits and sorts correctly.
+        if ($video->chunk_count === null) {
+            $chunks = glob("{$dir}/".Video::CHUNK_FILENAME_GLOB) ?: [];
+            sort($chunks);
+
+            return $chunks;
+        }
+
+        $chunks = [];
+
+        for ($index = 0; $index < $video->chunk_count; $index++) {
+            $path = null;
+
+            foreach (Video::chunkFilenameCandidates($index) as $filename) {
+                if (is_file("{$dir}/{$filename}")) {
+                    $path = "{$dir}/{$filename}";
+                    break;
+                }
+            }
+
+            if ($path === null) {
+                throw new RuntimeException(
+                    "Stream {$stream->id} is missing chunk {$index} of {$video->chunk_count}"
+                );
+            }
+
+            $chunks[] = $path;
+        }
+
+        return $chunks;
     }
 
     private function runFfmpegConcat(Video $video, string $listLocal, string $finalLocal): void
@@ -246,9 +283,7 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             return;
         }
 
-        if (! is_dir($gatherDir)) {
-            mkdir($gatherDir, 0755, true);
-        }
+        Scratch::ensureDirectory($gatherDir);
 
         $this->packageManifests($video, $output, $inputs, $gatherDir, $formats);
         $output->recordFormats($formats);

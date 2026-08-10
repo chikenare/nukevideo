@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { Input } from '@/components/ui/input'
-import { CheckCircle2, XCircle, SquarePen, Pause, Play, X, Trash2, Plus } from '@lucide/vue'
+import { CheckCircle2, XCircle, SquarePen, Pause, Play, X, Trash2, Plus, RotateCcw } from '@lucide/vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useUploadStore } from '@/stores/upload'
@@ -29,23 +29,39 @@ const handleClick = () => {
   fileInputRef.value?.click()
 }
 
-const handleFileChange = async (event: Event) => {
+const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   const selectedFiles = target.files
 
+  // The row is queued first and the poster frame fills in afterwards. Awaiting the thumbnail
+  // here made a file the browser cannot decode block the whole selection: nothing appeared in
+  // the list, and every file after it in the loop was swallowed too.
   for (const file of Array.from(selectedFiles ?? [])) {
-    const thumbnail = await generateThumbnail(file)
     files.value.push({
       title: file.name,
       file: file,
-      thumbnail: thumbnail,
       progress: 0,
       status: 'pending'
+    })
+
+    // Write back through the array, never through the object that was pushed: Vue's array
+    // instrumentation stores the raw object, so `files.value[i]` hands out a different (reactive)
+    // proxy and mutating the local one renders nothing. The row is also located by identity
+    // rather than by a captured index — decoding takes up to 5s, and removing an earlier file
+    // in the meantime shifts every later row down one.
+    const row = files.value[files.value.length - 1]!
+
+    generateThumbnail(file).then(thumbnail => {
+      if (thumbnail && files.value.includes(row)) row.thumbnail = thumbnail
     })
   }
 
   // Reset so re-selecting the same file (e.g. after removing it) still fires @change.
   target.value = ''
+}
+
+const handleRetry = (index: number) => {
+  uploadStore.retryUpload(index)
 }
 
 const openEditDialog = (file: FileUpload) => {
@@ -85,6 +101,9 @@ const isTransferring = (file: FileUpload) => file.progress > 0 && file.progress 
 
 // Removable when it's done, failed, or still queued — for in-flight files use cancel instead.
 const canRemove = (file: FileUpload) => file.status === 'success' || file.status === 'error' || isQueued(file)
+
+// Only a file Uppy already knows about can be retried; a queued one has never been handed over.
+const canRetry = (file: FileUpload) => file.status === 'error' && !!file.uppyFileId
 </script>
 <template>
   <input ref="fileInputRef" type="file" accept=".mp4,.mkv" multiple class="hidden" @change="handleFileChange" />
@@ -140,6 +159,12 @@ const canRemove = (file: FileUpload) => file.status === 'success' || file.status
             <!-- Cancel button -->
             <Button v-if="isTransferring(file)" variant="ghost" size="icon" @click="handleCancel(i)">
               <X class="w-4 h-4" />
+            </Button>
+            <!-- Retry button. The transfer starts over: Uppy aborts the multipart upload when it
+                 gives up, so there is nothing left in the bucket to resume from. -->
+            <Button v-if="canRetry(file)" variant="ghost" size="icon" title="Retry upload from the start"
+              @click="handleRetry(i)">
+              <RotateCcw class="w-4 h-4" />
             </Button>
             <!-- Edit button -->
             <Button v-if="isQueued(file)" variant="ghost" size="icon" @click="openEditDialog(file)">

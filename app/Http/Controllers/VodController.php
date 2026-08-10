@@ -40,7 +40,10 @@ class VodController extends Controller
         $link = $this->buildLink(
             output: $output,
             video: $video,
-            ip: $request->ip(),
+            // The token is bound to the IP that will actually fetch the manifest. An integrator
+            // calling this from its own backend must name the end viewer, or the edge would
+            // compare the viewer's address against the integrator's server and refuse playback.
+            ip: $data->ip ?? $request->ip(),
             format: $format,
             cap: $output->resolveCap($data->resolution),
         );

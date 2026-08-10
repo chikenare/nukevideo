@@ -57,43 +57,82 @@ function videoWithRendition(string $codec): Video
     return $video;
 }
 
-function assertEncodeCapacity(Video $video): void
+/**
+ * Missing hardware defers a video, it does not fail it: a terminally-failed video is deleted by
+ * `videos:prune` 24h later along with its source — the user's only copy — and the usual cause is a
+ * node rebooting. Returning it to PENDING costs nothing, and `videos:dispatch` skips it (rather
+ * than claiming it) until the hardware is back, so it blocks nothing while it waits.
+ */
+function releasedForMissingCapacity(Video $video): bool
 {
     $job = new PrepareVideoJob($video->id, 'original.mp4');
-    (fn () => $this->assertEncodeCapacity($video))->call($job);
+
+    return (fn () => $this->releasedForMissingCapacity($video))->call($job);
 }
 
-it('fails fast when a GPU rendition has no matching active node', function () {
-    assertEncodeCapacity(videoWithRendition('av1_qsv'));
-})->throws(RuntimeException::class, 'intel worker');
+it('returns a GPU video to the queue when no matching node is active', function () {
+    $video = videoWithRendition('av1_qsv');
+
+    expect(releasedForMissingCapacity($video))->toBeTrue()
+        ->and($video->fresh()->status)->toBe('pending');
+});
 
 it('does not accept an inactive or wrong-hardware node as capacity', function () {
     Node::create(['name' => 'gpu-off', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel', 'is_active' => false]);
     Node::create(['name' => 'gpu-nv', 'ip_address' => '10.0.0.17', 'type' => 'worker', 'accel' => 'nvidia']);
 
-    assertEncodeCapacity(videoWithRendition('av1_qsv'));
-})->throws(RuntimeException::class, 'intel worker');
-
-it('passes when a matching GPU node is active', function () {
-    Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel']);
-
-    assertEncodeCapacity(videoWithRendition('av1_qsv'));
-
-    expect(true)->toBeTrue();
+    expect(releasedForMissingCapacity(videoWithRendition('av1_qsv')))->toBeTrue();
 });
 
-it('fails fast when a CPU rendition has no CPU node, GPU nodes included', function () {
+it('proceeds when a matching GPU node is active', function () {
     Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel']);
 
-    assertEncodeCapacity(videoWithRendition('libsvtav1'));
-})->throws(RuntimeException::class, 'cpu worker');
+    $video = videoWithRendition('av1_qsv');
 
-it('passes when a CPU node is active', function () {
+    expect(releasedForMissingCapacity($video))->toBeFalse()
+        ->and($video->fresh()->status)->toBe('running');
+});
+
+it('returns a CPU video to the queue when only GPU nodes are up', function () {
+    Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.16', 'type' => 'worker', 'accel' => 'intel']);
+
+    expect(releasedForMissingCapacity(videoWithRendition('libsvtav1')))->toBeTrue();
+});
+
+it('proceeds when a CPU node is active', function () {
     Node::create(['name' => 'cpu-01', 'ip_address' => '10.0.0.20', 'type' => 'worker']);
 
-    assertEncodeCapacity(videoWithRendition('libsvtav1'));
+    expect(releasedForMissingCapacity(videoWithRendition('libsvtav1')))->toBeFalse();
+});
 
-    expect(true)->toBeTrue();
+it('never claims a video whose hardware is missing, and does not let it block the queue', function () {
+    Node::create(['name' => 'cpu-01', 'ip_address' => '10.0.0.20', 'type' => 'worker']);
+
+    // The GPU video is older, so it is offered first — and has to be stepped over, not waited on.
+    $gpu = videoWithRendition('av1_qsv');
+    $cpu = videoWithRendition('libsvtav1');
+
+    foreach ([$gpu, $cpu] as $video) {
+        $video->update(['status' => 'pending']);
+        $video->streams()->create([
+            'path' => "{$video->ulid}/source/original.mp4",
+            'type' => 'original',
+            'name' => 'Original',
+            'meta' => [],
+        ]);
+    }
+
+    $gpu->update(['created_at' => now()->subHour()]);
+
+    Queue::fake();
+
+    $this->artisan('videos:dispatch')->assertSuccessful();
+
+    expect($gpu->fresh()->status)->toBe('pending')
+        ->and($cpu->fresh()->status)->toBe('running');
+
+    Queue::assertPushed(PrepareVideoJob::class, fn (PrepareVideoJob $job) => $job->videoId === $cpu->id);
+    Queue::assertNotPushed(PrepareVideoJob::class, fn (PrepareVideoJob $job) => $job->videoId === $gpu->id);
 });
 
 it('names the missing hardware straight from the template', function () {

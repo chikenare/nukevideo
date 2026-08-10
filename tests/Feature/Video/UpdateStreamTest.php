@@ -379,6 +379,22 @@ it('refuses to flip the flag on an audio track', function () {
     ])->assertStatus(422)->assertJsonValidationErrors('hearingImpaired');
 });
 
+it('validates the hearing-impaired flag instead of coercing whatever arrives', function (mixed $value) {
+    // Rules are keyed on the INPUT name, so without the property-level camelCase mapper the
+    // inferred boolean rule landed under `hearing_impaired` and never ran against the key the
+    // panel actually sends: a string sailed through as `true` and rewrote the published
+    // manifests, and an array reached the constructor as a 500 instead of a 422.
+    $this->putJson("/api/streams/{$this->subtitle->ulid}", [
+        'name' => 'English',
+        'language' => 'en',
+        'forced' => false,
+        'hearingImpaired' => $value,
+    ])->assertStatus(422)->assertJsonValidationErrors('hearingImpaired');
+})->with([
+    'a string' => 'yes-please',
+    'an array' => [[[]]],
+]);
+
 it('refuses to edit a video rendition', function () {
     $this->putJson("/api/streams/{$this->videoStream->ulid}", [
         'name' => 'Something',

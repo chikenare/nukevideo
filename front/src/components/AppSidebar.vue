@@ -27,11 +27,12 @@ const props = withDefaults(defineProps<SidebarProps>(), {
 const authStore = useAuthStore()
 
 const navMain = [
-  {
+  // Instance-wide analytics; the page and its API are both admin-only.
+  ...(authStore.isAdmin ? [{
     title: "Home",
     url: "/",
     icon: House,
-  },
+  }] : []),
   {
     title: "Videos",
     url: "#",

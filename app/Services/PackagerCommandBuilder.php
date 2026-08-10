@@ -88,7 +88,7 @@ class PackagerCommandBuilder
         if ($input['type'] === 'audio') {
             $parts[] = "lang={$input['language']}";
 
-            $label = $input['name'];
+            $label = self::descriptorLabel($input['name']);
             $parts[] = "dash_label={$label}";
 
             if (in_array('hls', $formats, true)) {
@@ -191,12 +191,12 @@ class PackagerCommandBuilder
         if ($format === 'dash') {
             $parts[] = "init_segment={$segmentDir}/init.mp4";
             $parts[] = 'segment_template='.$segmentDir.'/$Number$.m4s';
-            $parts[] = "dash_label={$input['name']}";
+            $parts[] = 'dash_label='.self::descriptorLabel($input['name']);
         } else {
             $parts[] = 'segment_template='.$segmentDir.'/$Number$.vtt';
             $parts[] = "playlist_name={$input['ulid']}/index.m3u8";
             $parts[] = 'hls_group_id=subs';
-            $parts[] = "hls_name={$input['name']}";
+            $parts[] = 'hls_name='.self::descriptorLabel($input['name']);
         }
 
         $parts[] = "lang={$input['language']}";
@@ -215,5 +215,20 @@ class PackagerCommandBuilder
         }
 
         return implode(',', $parts);
+    }
+
+    /**
+     * Last gate before a track name reaches the packager. A comma ends the descriptor field, and a
+     * quote or a newline breaks out of the `NAME="…"` attribute of the `#EXT-X-MEDIA` line that
+     * the HLS master is assembled from as plain text — a newline turns the rest of the name into a
+     * playlist tag of its own, for every viewer.
+     *
+     * Both writers of the column already refuse these characters ({@see UpdateStreamData} on the
+     * edit path, {@see CreateVideoStreamsService::baseName()} on ingest), so this changes nothing
+     * in practice. It is here so a third writer cannot reopen the hole quietly.
+     */
+    private static function descriptorLabel(?string $name): string
+    {
+        return trim((string) preg_replace('/["\r\n,]+/u', ' ', (string) $name));
     }
 }

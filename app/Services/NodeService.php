@@ -8,6 +8,7 @@ use App\Enums\NodeAccel;
 use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
+use App\Support\Cpu;
 
 class NodeService
 {
@@ -145,10 +146,22 @@ class NodeService
         ));
     }
 
+    /**
+     * Reads the same merged chain the environment does, node overriding settings. It used to look
+     * only at the node's own `env`, so a `DOCKER_MEMORY` set once in the global node environment
+     * was stripped out as a docker flag and then never recovered as one — the container ran with
+     * no `--memory` and no variable either, and {@see Cpu} sized the encode pool for
+     * the host's whole RAM. The two sides have to read from one place or the knob lies.
+     */
     private function extractDockerFlags(Node $node): array
     {
+        $merged = array_merge(
+            $this->parseEnvText(app(NodeSettings::class)->environment),
+            $this->parseEnvText($node->env ?? ''),
+        );
+
         $flags = [];
-        foreach ($this->parseEnvText($node->env ?? '') as $key => $line) {
+        foreach ($merged as $key => $line) {
             if (in_array($key, self::DOCKER_RUN_FLAGS)) {
                 $flags[$key] = explode('=', $line, 2)[1] ?? '';
             }
@@ -192,6 +205,11 @@ class NodeService
     public function buildDeployScript(Node $node): string
     {
         $workdir = self::workdir($node);
+        // The path embeds `$node->user`, which is validated as a POSIX login name — quoted here
+        // as well so a value that ever slipped past validation can only produce a bad path, not
+        // a second command. (Every other free-text value reaches the script through
+        // buildDockerRunArgs, which escapes it already.)
+        $workdirArg = escapeshellarg($workdir);
         $stopGrace = self::WORKER_STOP_GRACE;
         $vectorImage = 'timberio/vector:0.56.0-alpine';
         $nodeType = $node->type->value;
@@ -222,7 +240,7 @@ class NodeService
 
         # Nukevideo Node Deployment — {$nodeName} ({$nodeType}, ID: {$nodeId})
 
-        WORKDIR="{$workdir}"
+        WORKDIR={$workdirArg}
         SUDO=""
         [ "\$(id -u)" -ne 0 ] && SUDO="sudo"
 
