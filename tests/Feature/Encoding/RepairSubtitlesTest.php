@@ -64,7 +64,21 @@ function publishedWithoutSubtitles(): Video
     return $video;
 }
 
-beforeEach(fn () => Storage::fake('s3'));
+/** This suite drives the real binary; CI runners don't carry it, only the app image does. */
+function packagerInstalled(): bool
+{
+    $bin = (string) config('packager.bin');
+
+    return is_executable($bin) || trim((string) shell_exec('command -v '.escapeshellarg($bin).' 2>/dev/null')) !== '';
+}
+
+beforeEach(function () {
+    if (! packagerInstalled()) {
+        $this->markTestSkipped('shaka-packager is not installed here.');
+    }
+
+    Storage::fake('s3');
+});
 
 it('grafts the subtitles back into a manifest that lost them', function () {
     $video = publishedWithoutSubtitles();
