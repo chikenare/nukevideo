@@ -11,6 +11,7 @@ use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
 use App\Services\UsageService;
 use App\Support\MediaDuration;
+use App\Support\Scratch;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -76,7 +77,10 @@ class ProcessChunkJob implements ShouldQueue
         $localPath = $this->localPath($chunkKey);
 
         // Idempotent: a prior complete run already uploaded this chunk. Re-settle progress and bail.
-        if (Storage::disk('chunks')->exists($chunkKey)) {
+        // Every name the index may carry is checked, not just the one this build writes — a video
+        // staged before the padding widened would otherwise read as a miss and re-encode in full,
+        // losing the "a retry is a cache hit" property retries are built on.
+        if ($this->stagedChunkKey($video, $stream) !== null) {
             $this->reportDone($outputs);
             @unlink($localPath);
 
@@ -85,10 +89,7 @@ class ProcessChunkJob implements ShouldQueue
 
         $video->heartbeat();
 
-        $dir = dirname($localPath);
-        if (! is_dir($dir)) {
-            mkdir($dir, 0755, true);
-        }
+        Scratch::ensureDirectory(dirname($localPath));
 
         $startedAt = microtime(true);
         $windowDuration = max(0.0, $this->end - $this->start);
@@ -213,6 +214,20 @@ class ProcessChunkJob implements ShouldQueue
         }
     }
 
+    /** The key this chunk is already staged under, under any padding this codebase has written. */
+    private function stagedChunkKey(Video $video, Stream $stream): ?string
+    {
+        $dir = "{$video->chunksDir()}/{$stream->ulid}";
+
+        foreach (Video::chunkFilenameCandidates($this->chunkIndex) as $filename) {
+            if (Storage::disk('chunks')->exists("{$dir}/{$filename}")) {
+                return "{$dir}/{$filename}";
+            }
+        }
+
+        return null;
+    }
+
     private function localPath(string $chunkKey): string
     {
         return Storage::disk('local')->path($chunkKey).'.part';
@@ -234,8 +249,6 @@ class ProcessChunkJob implements ShouldQueue
         if (! in_array($video->status, Video::ACTIVE_STATUSES, true)) {
             return;
         }
-
-        $this->batch()?->cancel();
 
         $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
 

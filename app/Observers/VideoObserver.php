@@ -20,6 +20,9 @@ class VideoObserver
         $video->streams()->where('type', 'original')->get()->each->delete();
 
         DeleteResourceWithPath::dispatch($video->ulid);
+        // Retained renditions are filed outside the video's own prefix, so they need their own
+        // sweep — otherwise deleting a video would leave its heaviest files behind.
+        DeleteResourceWithPath::dispatch(Video::processedPrefixFor($video->ulid));
     }
 
     public function deleted(Video $video): void

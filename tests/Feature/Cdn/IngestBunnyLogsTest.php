@@ -28,6 +28,20 @@ function fakeBunnySettings(string $provider = 'bunny', string $apiKey = 'api-key
     ]);
 }
 
+/**
+ * The aggregated events with `date` dropped, so a case can assert the aggregation itself without
+ * pinning the clock. The date is covered separately, where it is the point of the assertion.
+ *
+ * @return array<int, array<string, mixed>>
+ */
+function eventsWithoutDate(IngestBandwidthJob $job): array
+{
+    return array_map(
+        fn (array $event) => collect($event)->except('date')->all(),
+        array_values($job->events),
+    );
+}
+
 function bunnyLogLine(string $ulid, string $ip, int $bytes): array
 {
     return [
@@ -91,7 +105,12 @@ it('aggregates log lines by video and ip and dispatches the ingest job', functio
         && $request['status'] === '2xx');
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        return $job->events === [
+        // Every event carries the day of the WINDOW it was read from, not the day it was ingested:
+        // the run just after midnight reads the tail of the previous day, and `date` is what
+        // partitions the ClickHouse table these land in.
+        expect($job->events)->each->toHaveKey('date');
+
+        return eventsWithoutDate($job) === [
             ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 1500],
             ['video_ulid' => ULID_A, 'ip' => '5.6.7.8', 'bytes' => 200],
             ['video_ulid' => ULID_B, 'ip' => '1.2.3.4', 'bytes' => 300],
@@ -107,7 +126,7 @@ it('walks pagination until the API reports no more entries', function () {
 
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
 
-    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => $job->events === [
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => eventsWithoutDate($job) === [
         ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 150],
     ]);
 });

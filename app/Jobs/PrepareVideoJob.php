@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Video;
@@ -38,6 +39,10 @@ class PrepareVideoJob implements ShouldQueue
 
     public $maxExceptions = 2;
 
+    // A transient failure here is almost always the source download or a probe hitting a busy
+    // store; retrying instantly just burns an attempt against the same congestion.
+    public $backoff = [60, 180];
+
     // Must stay under the queue's retry_after (NodeService exports REDIS_QUEUE_RETRY_AFTER=1850
     // to workers) or the job is re-delivered mid-run and two attempts race on the local scratch.
     public $timeout = 1800;
@@ -63,7 +68,9 @@ class PrepareVideoJob implements ShouldQueue
     private const DECODE_WEIGHT = 0.25;
 
     // Above this, `avg_frame_rate` is a VFR container lying (1000/1 and friends), not a real rate.
-    private const MAX_FPS = 120.0;
+    // Public because every consumer of a probed rate has to apply the same disbelief — see
+    // {@see \App\Services\CreateVideoStreamsService::deriveGopSize()}.
+    public const MAX_FPS = 120.0;
 
     // Held past the last video packet so `-to` keeps that frame whole, and short enough to stay
     // inside the truncation guard's tolerance.
@@ -89,7 +96,7 @@ class PrepareVideoJob implements ShouldQueue
      * This job runs on `orchestration`, which every worker drains — GPU or not — but it encodes
      * sample windows itself ({@see resolveRenditions}), and a hardware encoder needs its hardware.
      * So hand the video to a node that has it; the fleet is known to have one
-     * ({@see assertEncodeCapacity}) and GPU nodes drain this queue too. Bounded, because running
+     * ({@see releasedForMissingCapacity}) and GPU nodes drain this queue too. Bounded, because running
      * unmeasured beats failing a video over scheduling.
      */
     private function handedToCapableNode(Video $video): bool
@@ -180,7 +187,9 @@ class PrepareVideoJob implements ShouldQueue
         $localPath = Storage::disk('local')->path($mirrorPath);
 
         try {
-            $this->assertEncodeCapacity($video);
+            if ($this->releasedForMissingCapacity($video)) {
+                return;
+            }
 
             $this->ensureLocalSource($video, $mirrorPath, $localPath);
 
@@ -213,9 +222,9 @@ class PrepareVideoJob implements ShouldQueue
                 throw new RuntimeException("Segment planner produced no windows for video {$this->videoId}");
             }
 
-            $this->fanOut($video, $windows, $mirrorPath);
-
-            Log::info('Preparation planned', ['video' => $this->videoId, 'chunks' => count($windows)]);
+            if ($this->fanOut($video, $windows, $mirrorPath)) {
+                Log::info('Preparation planned', ['video' => $this->videoId, 'chunks' => count($windows)]);
+            }
         } finally {
             // Downstream jobs read the mirror, not this scratch file; drop it either way.
             @unlink($localPath);
@@ -402,15 +411,34 @@ class PrepareVideoJob implements ShouldQueue
     }
 
     /**
-     * Second line of defense (ingest already refused templates without capacity): a node
-     * deactivated since then would leave the chunks on a queue nobody consumes and the video
-     * hanging in RUNNING until the reaper — fail before fan-out with a message naming the gap.
+     * Second line of defense behind {@see DispatchPendingVideosCommand},
+     * which refuses to claim a video whose hardware is missing: the node can still go away in the
+     * window between that check and this one, and its chunks would then sit on a queue nobody
+     * drains until the reaper.
+     *
+     * Hands the video back to PENDING rather than failing it. A missing node is nearly always a
+     * reboot or a redeploy, and a terminally-failed video is deleted — with its source, the user's
+     * only copy — by `videos:prune` 24 hours later. Returned to the queue it simply waits, and the
+     * dispatcher skips it until the hardware is back, so it blocks nothing meanwhile.
      */
-    private function assertEncodeCapacity(Video $video): void
+    private function releasedForMissingCapacity(Video $video): bool
     {
-        if ($missing = $video->template->missingCapacity()) {
-            throw new RuntimeException("Template needs a {$missing} worker node, but none is active.");
+        $missing = $video->template?->missingCapacity();
+
+        if (! $missing) {
+            return false;
         }
+
+        Video::whereKey($video->id)
+            ->whereIn('status', Video::ACTIVE_STATUSES)
+            ->update(['status' => VideoStatus::PENDING->value]);
+
+        Log::info('Preparation deferred: no active worker for the template hardware', [
+            'video' => $this->videoId,
+            'missing' => $missing,
+        ]);
+
+        return true;
     }
 
     /**
@@ -421,12 +449,24 @@ class PrepareVideoJob implements ShouldQueue
      *
      * @param  list<array{0:float,1:float}>  $windows
      */
-    private function fanOut(Video $video, array $windows, string $mirrorPath): void
+    /** False when the video went terminal while this job was probing, so nothing was dispatched. */
+    private function fanOut(Video $video, array $windows, string $mirrorPath): bool
     {
         $streams = $video->streams()->where('type', 'video')->get();
 
         if ($streams->isEmpty()) {
             throw new RuntimeException("No video rendition streams found for video {$this->videoId}");
+        }
+
+        // Re-assert the claim taken in handle(): minutes of probing separate the two, and a sidecar
+        // job that failed meanwhile has already settled the video, told the consumer through
+        // `video.error` and cancelled the batches. Fanning out regardless would flip every output
+        // back to RUNNING and put the whole fleet to work on a video declared dead — the batch's
+        // own then() gate would then refuse to finish it, leaving the outputs stuck forever.
+        if (! Video::whereKey($video->id)->whereIn('status', Video::ACTIVE_STATUSES)->exists()) {
+            Log::info('Fan-out skipped: video no longer active', ['video' => $this->videoId]);
+
+            return false;
         }
 
         $chunkCount = count($windows);
@@ -489,6 +529,8 @@ class PrepareVideoJob implements ShouldQueue
                 })
                 ->dispatch();
         }
+
+        return true;
     }
 
     public function failed(Throwable $e): void

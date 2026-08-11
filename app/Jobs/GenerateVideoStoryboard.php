@@ -4,8 +4,10 @@ namespace App\Jobs;
 
 use App\Models\Video;
 use App\Services\ThumbnailService;
+use App\Support\Scratch;
 use Exception;
 use Illuminate\Bus\Batchable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
@@ -17,9 +19,13 @@ use Throwable;
  * pass emits every sheet; the VTT is then pure arithmetic since each cue's sheet and cell are
  * a fixed function of its index.
  */
-class GenerateVideoStoryboard implements ShouldQueue
+class GenerateVideoStoryboard implements ShouldBeUnique, ShouldQueue
 {
     use Batchable, Queueable;
+
+    /** Bounds the unique lock, so a worker dying mid-run cannot wedge the video's storyboard.
+     *  Taken once at dispatch and never renewed, so it has to outlast every retry of the job. */
+    public int $uniqueFor = 10800;
 
     /** Seconds between thumbnails (also the VTT cue length). */
     private const THUMBNAIL_INTERVAL = 10;
@@ -42,6 +48,16 @@ class GenerateVideoStoryboard implements ShouldQueue
         private string $mirrorPath,
     ) {}
 
+    /**
+     * {@see PrepareVideoJob} dispatches this before it spends minutes probing, so a retry of the
+     * preparation dispatches it again while the first copy is still running — and both write the
+     * same sprite sheets under the same scratch dir.
+     */
+    public function uniqueId(): string
+    {
+        return (string) $this->videoId;
+    }
+
     public function handle(): void
     {
         Log::info('GenerateStoryboard started', ['video' => $this->videoId]);
@@ -55,9 +71,7 @@ class GenerateVideoStoryboard implements ShouldQueue
             $totalThumbs = max(1, (int) ceil($video->duration / self::THUMBNAIL_INTERVAL));
 
             $tmpDir = Storage::disk('tmp')->path($video->ulid);
-            if (! is_dir($tmpDir)) {
-                mkdir($tmpDir, 0755, true);
-            }
+            Scratch::ensureDirectory($tmpDir);
 
             $video->heartbeat();
 
@@ -101,12 +115,18 @@ class GenerateVideoStoryboard implements ShouldQueue
         return $height + ($height % 2); // ffmpeg needs an even height
     }
 
+    /**
+     * Guards the ratio itself, not just the denominator: ffprobe reports `0:1` for a source with
+     * no display aspect ratio, and `aspect_ratio` is stored verbatim. A `0.0` here divides by zero
+     * in {@see thumbHeight}, and the resulting Error is swallowed by handle()'s catch — the video
+     * would silently ship without seek-bar previews.
+     */
     private function parseAspectRatio(?string $aspectRatio): float
     {
         if ($aspectRatio && str_contains($aspectRatio, ':')) {
             [$w, $h] = explode(':', $aspectRatio);
 
-            if ((float) $h > 0) {
+            if ((float) $h > 0 && (float) $w > 0) {
                 return (float) $w / (float) $h;
             }
         }

@@ -20,7 +20,9 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { name: 'Login', path: '/login', component: LoginPage, meta: { guest: true } },
-    { name: 'Home', path: '/', component: HomePage },
+    // Instance-wide analytics: bandwidth totals, viewer IPs and top videos across every tenant.
+    // The API backing it is admin-only, so the page is too.
+    { name: 'Home', path: '/', component: HomePage, meta: { admin: true } },
     { name: 'Videos', path: '/videos', component: VideosPage },
     { name: 'Video', path: '/videos/:id', component: VideoPage },
     { name: 'Templates', path: '/templates', component: TemplatesPage },
@@ -38,6 +40,10 @@ const router = createRouter({
   ],
 })
 
+/** Where a signed-in user belongs when they have no particular destination. Home is admin-only,
+ *  so it cannot double as the fallback — that would bounce a non-admin between the two forever. */
+const landingRoute = (isAdmin: boolean) => ({ name: isAdmin ? 'Home' : 'Videos' })
+
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
   if (!authStore.isAuthenticated && !authStore.loaded) {
@@ -47,7 +53,7 @@ router.beforeEach(async (to) => {
   const isGuest = to.meta.guest === true
 
   if (isGuest && authStore.isAuthenticated) {
-    return { name: 'Home' }
+    return landingRoute(authStore.isAdmin)
   }
 
   if (!isGuest && !authStore.isAuthenticated) {
@@ -55,7 +61,7 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.admin && !authStore.isAdmin) {
-    return { name: 'Home' }
+    return landingRoute(authStore.isAdmin)
   }
 })
 

@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Jobs\PackageVideoJob;
 use App\Models\Video;
 use App\Services\SubtitlePackager;
+use App\Support\Scratch;
 use App\Support\WebVtt;
 use Illuminate\Console\Command;
 use Illuminate\Support\Collection;
@@ -248,9 +249,7 @@ class RepairSubtitlesCommand extends Command
 
     private function write(string $path, string $contents): void
     {
-        if (! is_dir($dir = dirname($path))) {
-            mkdir($dir, 0755, true);
-        }
+        Scratch::ensureDirectory(dirname($path));
 
         file_put_contents($path, $contents);
     }

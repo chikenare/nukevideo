@@ -32,9 +32,9 @@ Route::post('login', [AuthController::class, 'login'])->middleware('throttle:log
 Route::post('logout', [AuthController::class, 'logout']);
 
 Route::middleware(['auth:sanctum'])->group(function () {
-    // Account-wide: these span every project (or the whole instance), so a project API key has no
-    // business here — usage and analytics are keyed by user in ClickHouse, not by project.
-    // No resolve.project either: a stale X-Project-Ulid header must not 404 account endpoints.
+    // Account-wide: these span every project, so a project API key has no business here — usage is
+    // keyed by user in ClickHouse, not by project. No resolve.project either: a stale
+    // X-Project-Ulid header must not 404 account endpoints.
     Route::middleware('no-project-key')->group(function () {
         Route::get('me', MeController::class);
         Route::put('profile', [ProfileController::class, 'update']);
@@ -48,8 +48,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::delete('tokens/{id}', [ApiTokenController::class, 'destroy']);
 
         Route::get('usage', [UsageController::class, 'index']);
-        Route::get('analytics', [AnalyticsController::class, 'index']);
-        Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
     });
 
     // Project-scoped: everything below works on the project named by the header/API key.
@@ -89,6 +87,11 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // Admin
     Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
+        // Instance-wide, not per-user: bandwidth totals, viewer IPs and the encoding queue span
+        // every tenant, and `user_id` selects whose usage to read. Admin-only, as the docs state.
+        Route::get('analytics', [AnalyticsController::class, 'index']);
+        Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
+
         Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
 
         Route::apiResource('nodes', NodeController::class);

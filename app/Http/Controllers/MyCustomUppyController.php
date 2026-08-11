@@ -72,9 +72,11 @@ class MyCustomUppyController extends Controller
                 'Key' => $key,
             ]);
 
+            // Same window as the multipart part signer; hardcoding it here meant changing the
+            // configured expiry only affected files large enough to go multipart.
             $signedRequest = $this->client->createPresignedRequest(
                 $cmd,
-                '+10 minutes'
+                config('uppy-s3-multipart-upload.s3.presigned_url.expiry_time'),
             );
         } catch (Throwable $exception) {
             Log::error('S3 presigned URL generation failed', ['error' => $exception->getMessage()]);

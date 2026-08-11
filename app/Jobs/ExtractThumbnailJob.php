@@ -7,6 +7,7 @@ use App\Services\ThumbnailService;
 use Exception;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
@@ -15,16 +16,30 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
-class ExtractThumbnailJob implements ShouldQueue
+class ExtractThumbnailJob implements ShouldBeUnique, ShouldQueue
 {
     use Batchable, Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
     private const POSITION_PERCENT = 30;
 
+    /** Bounds the unique lock, so a worker dying mid-extract cannot wedge the video's thumbnail.
+     *  Taken once at dispatch and never renewed, so it has to outlast every retry of the job. */
+    public int $uniqueFor = 10800;
+
     public function __construct(
         public int $videoId,
         public string $mirrorPath,
     ) {}
+
+    /**
+     * {@see PrepareVideoJob} dispatches this before it spends minutes probing, so a retry of the
+     * preparation dispatches it again while the first copy is still running — and both resolve the
+     * same scratch path, where one unlinks the file the other is streaming to S3.
+     */
+    public function uniqueId(): string
+    {
+        return (string) $this->videoId;
+    }
 
     public function handle(): void
     {

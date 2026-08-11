@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Support\MediaSource;
+use App\Support\Scratch;
 use Exception;
 use Illuminate\Support\Facades\Process;
 
@@ -21,10 +22,7 @@ class ThumbnailService
             throw new Exception("Input video file not found: $inputPath");
         }
 
-        $outputDir = dirname($outputPath);
-        if (! is_dir($outputDir)) {
-            mkdir($outputDir, 0755, true);
-        }
+        Scratch::ensureDirectory(dirname($outputPath));
 
         $process = Process::timeout(60)->run([
             'ffmpeg',
@@ -73,10 +71,7 @@ class ThumbnailService
             throw new Exception("Input video file not found: $inputPath");
         }
 
-        $outputDir = dirname($outputPattern);
-        if (! is_dir($outputDir)) {
-            mkdir($outputDir, 0755, true);
-        }
+        Scratch::ensureDirectory(dirname($outputPattern));
 
         // bilinear, not lanczos: at ~320px the quality gap is imperceptible and far cheaper.
         $filter = sprintf(

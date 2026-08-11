@@ -4,27 +4,13 @@ namespace App\Jobs\Concerns;
 
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
-use App\Jobs\PrepareVideoJob;
-use App\Models\Stream;
 use App\Models\Video;
 use App\Services\WebhookDispatcher;
-use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 trait CompletesVideo
 {
-    private function markOutputsFailedForStream(Stream $stream): void
-    {
-        foreach ($stream->outputs as $output) {
-            if (in_array($output->status->value, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {
-                continue;
-            }
-
-            $output->update(['status' => VideoStatus::FAILED->value]);
-        }
-    }
-
     /** Returns true only for the caller that won the lock and flipped the video to terminal. */
     private function completeVideoIfReady(Video $video, ?string $reason = null): bool
     {
@@ -100,20 +86,13 @@ trait CompletesVideo
     }
 
     /**
-     * Stop the encode batches of a video that can no longer complete, so their jobs don't keep
-     * burning encode slots (or die confusingly against artifacts the failure path removed).
-     * Matches how {@see PrepareVideoJob::fanOut()} names them: one batch per hardware
-     * queue, "encode video {id} {queue}".
+     * Stop the encode batches of a video that can no longer complete. Callers that need the
+     * batches stopped *before* they settle the video (so in-flight chunks can't race the
+     * finalize) reach for this; every path that goes through {@see Video::markAsFailed()} is
+     * already covered by it.
      */
     private function cancelEncodeBatches(Video $video): void
     {
-        $ids = DB::table('job_batches')
-            ->where('name', 'like', "encode video {$video->id} %")
-            ->whereNull('finished_at')
-            ->pluck('id');
-
-        foreach ($ids as $id) {
-            Bus::findBatch($id)?->cancel();
-        }
+        $video->cancelEncodeBatches();
     }
 }

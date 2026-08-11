@@ -16,13 +16,22 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useProjectsStore } from '@/stores/projects'
+import { useUploadStore } from '@/stores/upload'
 
 const projectsStore = useProjectsStore()
+const uploadStore = useUploadStore()
 const router = useRouter()
 const { isMobile } = useSidebar()
 
 const handleSwitch = (ulid: string) => {
   if (ulid === projectsStore.currentProject?.ulid) return
+
+  // Switching reloads the page, which kills every transfer in flight along with the queue that
+  // records them. Losing a multi-gigabyte upload deserves a question, not a surprise.
+  if (uploadStore.isUploading && !window.confirm('Uploads are still in progress and will be lost. Switch project anyway?')) {
+    return
+  }
+
   projectsStore.setCurrent(ulid)
   window.location.reload()
 }

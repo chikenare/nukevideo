@@ -47,15 +47,21 @@ class OnVideoUploadedService
 
         [$user, $project, $template] = $this->resolveUserProjectAndTemplate();
 
-        // The only template checks possible without probing; fail before creating a doomed video
-        // (and before a cluster downloads gigabytes it has no hardware to encode).
-        if (empty($template->query['outputs'] ?? [])) {
-            throw new Exception("No outputs configured for template {$this->meta->template}");
-        }
-
-        if ($missing = $template->missingCapacity()) {
-            throw new Exception("Template {$this->meta->template} needs an active {$missing} worker node.");
-        }
+        // A template with no outputs can never encode anything, whatever the fleet does. It does
+        // NOT throw: the upload already happened and this is the user's only copy, so throwing
+        // would burn the job's retries and leave the panel with no trace of it at all. The video
+        // is created and failed instead — visible, explained, recoverable with `videos:retry`.
+        //
+        // Missing worker capacity is deliberately NOT checked here. It is usually transient (a
+        // reboot, a redeploy), the video costs nothing while it waits, and `videos:dispatch`
+        // picks it up the moment a node returns. Failing it here would hand it to `videos:prune`,
+        // which deletes a terminally-failed video and its source after 24h — the user's only copy,
+        // thrown away over a node restart. A fleet that genuinely lacks the template's hardware is
+        // never claimed at all: DispatchPendingVideosCommand skips a video whose hardware is
+        // missing, so it waits in PENDING instead of failing.
+        $unencodable = empty($template->query['outputs'] ?? [])
+            ? "No outputs configured for template {$this->meta->template}"
+            : null;
 
         try {
             $video = DB::transaction(function () use ($user, $project, $template, $key, $size) {
@@ -100,6 +106,11 @@ class OnVideoUploadedService
         $this->uppyService->forgetUploadMeta($key);
 
         WebhookDispatcher::forVideo('video.created', $video);
+
+        // After `video.created`, so a consumer sees the video exist before it hears it failed.
+        if ($unencodable) {
+            $video->markAsFailed($unencodable);
+        }
     }
 
     private function resolveUserProjectAndTemplate(): array

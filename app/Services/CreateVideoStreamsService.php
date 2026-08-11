@@ -121,7 +121,10 @@ class CreateVideoStreamsService
         return [
             'streamCollection' => $streamCollection,
             'duration' => $duration,
-            'aspectRatio' => $videoStream->get('display_aspect_ratio', $this->calculateAspectRatio($videoStream->get('width'), $videoStream->get('height'))),
+            // ffprobe's display_aspect_ratio is computed from the coded frame and ignores the
+            // display matrix, so a rotated source reports 16:9 for a picture that shows 9:16.
+            // Derive it from the display dimensions whenever the frame is turned.
+            'aspectRatio' => $this->sourceAspectRatio($videoStream),
         ];
     }
 
@@ -272,8 +275,7 @@ class CreateVideoStreamsService
      */
     private function filterVariants(FFStream $sourceVideo, array $variants): array
     {
-        $sourceWidth = (int) $sourceVideo->get('width');
-        $sourceHeight = (int) $sourceVideo->get('height');
+        [$sourceWidth, $sourceHeight] = $this->displayDimensions($sourceVideo);
 
         $bySize = collect($variants)
             ->sortBy(fn (array $variant) => max($variant['width'] ?? 0, $variant['height'] ?? 0));
@@ -553,7 +555,11 @@ class CreateVideoStreamsService
      */
     private function deriveGopSize(float $fps): ?int
     {
-        if ($fps <= 0) {
+        // A VFR container reporting 1000/1 is not a real rate, and taken at face value it pins a
+        // GOP of thousands of frames — the packager can only cut on a keyframe, so segments would
+        // stretch to a minute or more and ABR switching would be gone. Treat it as unknown, the
+        // same disbelief the window planner already applies to the same number.
+        if ($fps <= 0 || $fps > PrepareVideoJob::MAX_FPS) {
             return null;
         }
 
@@ -616,8 +622,15 @@ class CreateVideoStreamsService
     }
 
     /**
-     * Track label: the source title, else its language, else the media type. Commas are stripped
-     * because they delimit shaka descriptor fields ({@see PackagerCommandBuilder}).
+     * Track label: the source title, else its language, else the media type.
+     *
+     * The title comes out of the uploaded container, so it is attacker-controlled text that ends
+     * up interpolated into a shaka descriptor and from there into the HLS master playlist, which
+     * is edited and written as plain text. A comma delimits descriptor fields; a quote closes the
+     * `NAME="…"` attribute; a newline ends the `#EXT-X-MEDIA` line, so everything after it becomes
+     * a tag of its own in the playlist every viewer downloads. {@see UpdateStreamData} already
+     * refuses all three on the edit path — ingestion has to hold the same line, or the database
+     * ends up with names the API itself would reject.
      */
     private function baseName(FFStream $stream, string $codecType): string
     {
@@ -626,7 +639,9 @@ class CreateVideoStreamsService
         $label = $this->trackMeta[$stream->get('index')]['name']
             ?? (! empty($tags['title']) ? $tags['title'] : $this->sourceLanguage($stream));
 
-        return ! empty($label) ? str_replace(',', ' ', $label) : ucfirst($codecType);
+        $label = trim((string) preg_replace('/["\r\n,]+/u', ' ', (string) $label));
+
+        return $label !== '' ? $label : ucfirst($codecType);
     }
 
     private function createStream(
@@ -648,9 +663,11 @@ class CreateVideoStreamsService
             'meta' => [
                 'index' => $stream->get('index'),
                 ...($codecType === 'video' ? [
-                    'source_height' => $stream->get('height'),
+                    // Display dimensions, not coded ones: every reader compares them against a
+                    // rendition size, and a rendition is sized against the picture as displayed.
+                    'source_height' => $this->displayDimensions($stream)[1],
                     // DetectsStreamCopy needs both dimensions for the copy fast-path.
-                    'source_width' => $stream->get('width'),
+                    'source_width' => $this->displayDimensions($stream)[0],
                     'source_codec' => $stream->get('codec_name'),
                     // GPU jobs hardware-decode only when codec AND pixel format are supported.
                     'source_pix_fmt' => $stream->get('pix_fmt'),
@@ -698,11 +715,9 @@ class CreateVideoStreamsService
             return [$stream->get('width'), $stream->get('height')];
         }
 
-        return $this->resolveOutputDimensions(
-            $inputParams ?? [],
-            $stream->get('width'),
-            $stream->get('height'),
-        );
+        [$sourceWidth, $sourceHeight] = $this->displayDimensions($stream);
+
+        return $this->resolveOutputDimensions($inputParams ?? [], $sourceWidth, $sourceHeight);
     }
 
     /**
@@ -721,6 +736,57 @@ class CreateVideoStreamsService
             : data_get($inputParams, 'audio_codec', 'aac');
 
         return ChunkTranscodeService::formatForCodec($codec);
+    }
+
+    /**
+     * The dimensions of the picture as it is displayed, which is what the ladder has to be sized
+     * against. A phone shoots portrait but codes the frame landscape with a 90° display matrix,
+     * and ffmpeg autorotates on decode — so the frame arriving at `-vf scale` is already portrait.
+     * Sizing off the coded dimensions pinned every rendition to a landscape box and shipped the
+     * whole title visibly squashed.
+     *
+     * @return array{0: int, 1: int}
+     */
+    private function displayDimensions(FFStream $stream): array
+    {
+        $width = (int) $stream->get('width');
+        $height = (int) $stream->get('height');
+
+        return $this->isSideways($stream) ? [$height, $width] : [$width, $height];
+    }
+
+    /**
+     * The aspect ratio to advertise for the source. ffprobe's own `display_aspect_ratio` already
+     * folds in a non-square sample aspect, so it is preferred — but it is blind to the display
+     * matrix, so a turned frame gets the ratio computed from its display dimensions instead.
+     */
+    private function sourceAspectRatio(FFStream $stream): string
+    {
+        [$width, $height] = $this->displayDimensions($stream);
+
+        if ($this->isSideways($stream)) {
+            return $this->calculateAspectRatio($width, $height);
+        }
+
+        return $stream->get('display_aspect_ratio', $this->calculateAspectRatio($width, $height));
+    }
+
+    /** Whether the display matrix turns the coded frame a quarter turn (either direction). */
+    private function isSideways(FFStream $stream): bool
+    {
+        $rotation = null;
+
+        foreach ($stream->get('side_data_list') ?? [] as $sideData) {
+            if (isset($sideData['rotation'])) {
+                $rotation = $sideData['rotation'];
+                break;
+            }
+        }
+
+        // Pre-5.0 ffmpeg carried it as a container tag instead.
+        $rotation ??= $stream->get('tags')['rotate'] ?? 0;
+
+        return abs((int) round(fmod((float) $rotation, 180.0))) === 90;
     }
 
     private function calculateAspectRatio(int $width, int $height): string

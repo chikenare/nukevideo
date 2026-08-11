@@ -128,8 +128,19 @@ class IngestBunnyLogs extends Command
                     continue;
                 }
 
+                // Dated by the window, not by the moment of ingestion. This sweep runs every five
+                // minutes over a window ending two minutes in the past, so the run just after
+                // midnight covers the tail of the previous day — and `date` is what the analytics
+                // group on, the partition key and the TTL key, inside a SummingMergeTree no later
+                // correction can take back. The window is minutes wide, so its start stands in
+                // unambiguously for every event within it.
                 $key = "{$match[1]}|{$ip}";
-                $events[$key] ??= ['video_ulid' => $match[1], 'ip' => $ip, 'bytes' => 0];
+                $events[$key] ??= [
+                    'video_ulid' => $match[1],
+                    'ip' => $ip,
+                    'bytes' => 0,
+                    'date' => $from->toDateString(),
+                ];
                 $events[$key]['bytes'] += $bytes;
             }
 
