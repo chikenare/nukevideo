@@ -49,7 +49,7 @@ class Output extends Model
 
     public function packagePrefix(): string
     {
-        return $this->video->ulid;
+        return $this->video->playPrefix();
     }
 
     /**

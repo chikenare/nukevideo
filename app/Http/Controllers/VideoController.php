@@ -74,9 +74,19 @@ class VideoController extends Controller
         ]);
     }
 
+    /**
+     * The URL keeps the flat `{ulid}/{filename}` shape ({@see Video::assetPath}) whatever layout the
+     * objects are in, so cached links and API consumers never break; the zone is resolved here. The
+     * lookup costs one indexed query, and only on a cache miss — the route caches the response for a
+     * week. A missing row falls back to the flat key so an orphaned object still serves.
+     */
     public function getAsset(Request $request, string $ulid, string $filename)
     {
-        $path = Video::assetPath($ulid, $filename);
+        $video = Video::where('ulid', $ulid)->first();
+
+        $path = $video
+            ? $video->assetKey($filename)
+            : Video::assetPath($ulid, $filename);
 
         if (! Storage::exists($path)) {
             return response()->json([

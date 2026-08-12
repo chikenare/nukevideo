@@ -186,7 +186,7 @@ class GenerateVideoStoryboard implements ShouldBeUnique, ShouldQueue
 
             $handle = fopen($localPath, 'r');
             try {
-                $primary->writeStream(Video::assetPath($video->ulid, $name), $handle);
+                $primary->writeStream($video->assetKey($name), $handle);
             } finally {
                 if (is_resource($handle)) {
                     fclose($handle);

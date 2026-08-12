@@ -252,7 +252,7 @@ class ManifestEditor
 
         foreach ($caps as $cap) {
             foreach (['hls', 'dash'] as $format) {
-                $path = "{$video->ulid}/".$output->manifestFile($format, $cap);
+                $path = "{$video->playPrefix()}/".$output->manifestFile($format, $cap);
 
                 if ($disk->exists($path)) {
                     $files[] = ['cap' => $cap, 'format' => $format, 'path' => $path];

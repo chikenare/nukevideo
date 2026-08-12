@@ -19,10 +19,9 @@ class VideoObserver
         // dir, so delete it through Eloquent to let the observer clean up the storage object.
         $video->streams()->where('type', 'original')->get()->each->delete();
 
+        // One prefix covers every zone (`play/`, `download/`, `assets/`, `source/`) in both layouts,
+        // so a zone added later cannot be forgotten here and leave its objects orphaned.
         DeleteResourceWithPath::dispatch($video->ulid);
-        // Retained renditions are filed outside the video's own prefix, so they need their own
-        // sweep — otherwise deleting a video would leave its heaviest files behind.
-        DeleteResourceWithPath::dispatch(Video::processedPrefixFor($video->ulid));
     }
 
     public function deleted(Video $video): void

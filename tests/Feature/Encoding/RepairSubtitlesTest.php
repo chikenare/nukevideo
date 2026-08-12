@@ -45,10 +45,10 @@ function publishedWithoutSubtitles(): Video
             'path' => "{$video->ulid}/subtitle/".strtoupper((string) Str::ulid()).'.vtt',
         ]);
 
-        Storage::disk('s3')->put("{$video->ulid}/{$stream->relativePath()}", $body);
+        Storage::disk('s3')->put($stream->storedPath($video), $body);
     }
 
-    Storage::disk('s3')->put("{$video->ulid}/OUTPUT.mpd", <<<'XML'
+    Storage::disk('s3')->put("{$video->playPrefix()}/OUTPUT.mpd", <<<'XML'
         <?xml version="1.0" encoding="UTF-8"?>
         <MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT20S" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
           <Period id="0">
@@ -83,11 +83,11 @@ beforeEach(function () {
 it('grafts the subtitles back into a manifest that lost them', function () {
     $video = publishedWithoutSubtitles();
 
-    expect(Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd"))->not->toContain('contentType="text"');
+    expect(Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd"))->not->toContain('contentType="text"');
 
     $this->artisan('videos:repair-subtitles', ['video' => [$video->ulid]])->assertSuccessful();
 
-    $mpd = (string) Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd");
+    $mpd = (string) Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd");
 
     // Both tracks are back — including the malformed one, which is the point of the repair.
     expect(substr_count($mpd, 'contentType="text"'))->toBe(2)
@@ -95,8 +95,8 @@ it('grafts the subtitles back into a manifest that lost them', function () {
         ->and($mpd)->toContain('lang="es"');
 
     foreach ($video->streams()->where('type', 'subtitle')->get() as $stream) {
-        expect(Storage::disk('s3')->exists("{$video->ulid}/{$stream->ulid}/init.mp4"))->toBeTrue()
-            ->and(Storage::disk('s3')->exists("{$video->ulid}/{$stream->ulid}/1.m4s"))->toBeTrue();
+        expect(Storage::disk('s3')->exists("{$stream->segmentsPath($video)}/init.mp4"))->toBeTrue()
+            ->and(Storage::disk('s3')->exists("{$stream->segmentsPath($video)}/1.m4s"))->toBeTrue();
     }
 });
 
@@ -104,18 +104,18 @@ it('leaves a manifest that already carries subtitles alone', function () {
     $video = publishedWithoutSubtitles();
 
     $this->artisan('videos:repair-subtitles', ['video' => [$video->ulid]])->assertSuccessful();
-    $repaired = Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd");
+    $repaired = Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd");
 
     $this->artisan('videos:repair-subtitles', ['video' => [$video->ulid]])->assertSuccessful();
 
-    expect(Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd"))->toBe($repaired);
+    expect(Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd"))->toBe($repaired);
 });
 
 it('changes nothing on a dry run', function () {
     $video = publishedWithoutSubtitles();
-    $before = Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd");
+    $before = Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd");
 
     $this->artisan('videos:repair-subtitles', ['video' => [$video->ulid], '--dry-run' => true])->assertSuccessful();
 
-    expect(Storage::disk('s3')->get("{$video->ulid}/OUTPUT.mpd"))->toBe($before);
+    expect(Storage::disk('s3')->get("{$video->playPrefix()}/OUTPUT.mpd"))->toBe($before);
 });

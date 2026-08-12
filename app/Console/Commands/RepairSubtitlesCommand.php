@@ -82,7 +82,7 @@ class RepairSubtitlesCommand extends Command
         $disk = Storage::disk('s3');
         $missing = [];
 
-        foreach ($disk->files($video->ulid) as $key) {
+        foreach ($disk->files($video->playPrefix()) as $key) {
             $isDash = str_ends_with($key, '.mpd');
 
             if (! $isDash && ! str_ends_with($key, '.m3u8')) {
@@ -180,7 +180,7 @@ class RepairSubtitlesCommand extends Command
         $inputs = [];
 
         foreach ($video->streams as $sub) {
-            $key = "{$video->ulid}/{$sub->relativePath()}";
+            $key = $sub->storedPath($video);
 
             if (! $disk->exists($key)) {
                 $this->warn("  stream {$sub->id}: {$key} is gone, skipping.");
@@ -228,7 +228,7 @@ class RepairSubtitlesCommand extends Command
         foreach ($video->streams as $sub) {
             foreach (glob("{$workDir}/{$sub->ulid}/*") ?: [] as $segment) {
                 $disk->put(
-                    "{$video->ulid}/{$sub->ulid}/".basename($segment),
+                    $sub->segmentsPath($video).'/'.basename($segment),
                     (string) file_get_contents($segment),
                     ['ContentType' => $this->contentType($segment)],
                 );

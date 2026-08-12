@@ -489,8 +489,10 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         }
     }
 
-    /** Gather sub-dirs holding raw renditions: packager inputs, never what serves playback. */
-    private const PROCESSED_TYPES = ['video', 'audio'];
+    /** Gather sub-dirs holding raw tracks: packager inputs, never what serves playback. Subtitles
+     *  belong here for the same reason the renditions do — the manifest references the packaged
+     *  segments under the stream's own dir, never the standalone VTT. */
+    private const PROCESSED_TYPES = ['video', 'audio', 'subtitle'];
 
     /**
      * The raw video/audio renditions are only packager inputs — the CMAF segments serve playback.
@@ -498,12 +500,12 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      * reach primary S3 at all. One that does keep them has them MOVED OUT of the gather tree, so
      * they sync to their own prefix instead of the video's.
      *
-     * That move is the point. A playback token authorizes all of `{videoUlid}/*`
-     * ({@see SelfHostedProvider}) and every manifest names each rendition's
-     * stream ULID, so a retained rendition sitting under the video's prefix was the full-quality
-     * progressive file, one predictable GET away for anyone holding a legitimate playback link —
-     * no segments, no ABR, no second signature. The panel offers the setting as a storage
-     * trade-off, which is all it should be.
+     * That move is the point. A playback token authorizes the manifest's whole directory
+     * ({@see SelfHostedProvider::aclFor}), so a retained track sitting in the same directory as the
+     * manifest was the full-quality progressive file, one GET away for anyone holding a legitimate
+     * playback link — no segments, no ABR, no second signature. And not even a guess: `Str::ulid()`
+     * is monotonic, so the file's ULID is derivable from the stream ULID the manifest names. The
+     * panel offers the setting as a storage trade-off, which is all it should be.
      *
      * Returns the local dir the renditions were moved to, or null when they were dropped.
      */
@@ -557,13 +559,17 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     ];
 
     /**
-     * `s5cmd sync` of the gathered tree (processed files + packages) to primary `{ulid}/`: one pass per
-     * known extension with its Content-Type forced, then a catch-all for the rest. A pass whose filter
-     * matches nothing (an HLS-less output has no `.m3u8`) is a no-op, not an error.
+     * `s5cmd sync` of the gathered tree (manifests + segment dirs) to the video's PLAYBACK zone: one
+     * pass per known extension with its Content-Type forced, then a catch-all for the rest. A pass
+     * whose filter matches nothing (an HLS-less output has no `.m3u8`) is a no-op, not an error.
+     *
+     * The destination has to track {@see Video::playPrefix} exactly. Syncing the gather
+     * tree to the bare `{ulid}/` while the readers resolve manifests under `play/` would publish
+     * every new video where nothing looks for it.
      */
     private function syncToPrimary(Video $video, string $gatherDir, ?string $processedDir): void
     {
-        $dest = $this->s3Uri('s3', "{$video->ulid}/");
+        $dest = $this->s3Uri('s3', "{$video->playPrefix()}/");
         $timeout = $this->timeout - 120;
 
         foreach (self::SYNC_CONTENT_TYPES as $ext => $contentType) {
@@ -577,13 +583,13 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
         $this->s5cmdSync('s3', "{$gatherDir}/", $dest, $video, $timeout, $excludes);
 
-        // Its own pass to its own prefix: these are retained bytes, not something a playback token
-        // should reach ({@see relocateProcessedRenditions}).
+        // Its own pass to the download zone: these are full-quality masters, not something a
+        // playback token should reach ({@see relocateProcessedRenditions}).
         if ($processedDir !== null) {
             $this->s5cmdSync(
                 's3',
                 "{$processedDir}/",
-                $this->s3Uri('s3', Video::processedPrefixFor($video->ulid).'/'),
+                $this->s3Uri('s3', "{$video->downloadPrefix()}/"),
                 $video,
                 $timeout,
             );

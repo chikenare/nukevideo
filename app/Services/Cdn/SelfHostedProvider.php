@@ -52,11 +52,24 @@ class SelfHostedProvider implements CdnProvider
         return "{$url}{$separator}{$config->tokenName}={$token}";
     }
 
+    /**
+     * The ACL is the manifest's directory, which is why the zone a manifest lives in decides how far
+     * a playback link reaches. The edge compares it as a raw byte prefix, so the trailing `*` spans
+     * sub-directories — that is what covers the segment dirs.
+     *
+     * A path with no `/` would make `strrpos` return false, `$dir` empty and the ACL `/*`: a token
+     * for the entire bucket. Unreachable today, but it fails towards "authorize everything", so it
+     * throws instead of signing.
+     */
     private function aclFor(string $url): string
     {
-        $path = (string) parse_url($url, PHP_URL_PATH); // /{videoUlid}/manifest.mpd
-        $dir = substr($path, 0, (int) strrpos($path, '/')); // /{videoUlid}
+        $path = (string) parse_url($url, PHP_URL_PATH); // /{videoUlid}/play/manifest.mpd
+        $separator = strrpos($path, '/');
 
-        return "{$dir}/*";
+        if ($separator === false || $separator === 0) {
+            throw new \InvalidArgumentException("Refusing to sign a bucket-wide ACL for [{$path}].");
+        }
+
+        return substr($path, 0, $separator).'/*';
     }
 }

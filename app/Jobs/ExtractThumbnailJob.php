@@ -65,7 +65,7 @@ class ExtractThumbnailJob implements ShouldBeUnique, ShouldQueue
             // Straight to primary S3 (not the mirror's final/ staging): this job races the encode
             // batch, and packaging would sync final/ before a slow thumbnail lands there — the
             // asset would then be deleted with the mirror and silently never reach primary.
-            $this->publish(Video::assetPath($video->ulid, Video::THUMBNAIL_FILENAME), $thumbnailLocalPath);
+            $this->publish($video->assetKey(Video::THUMBNAIL_FILENAME), $thumbnailLocalPath);
         } catch (Throwable $e) {
             $this->reportFailure($e);
         }
