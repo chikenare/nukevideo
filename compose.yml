@@ -1,22 +1,4 @@
 services:
-  traefik:
-    image: traefik:v3.6
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    ports:
-      - "80:80"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      default:
-        aliases:
-          - api.nukevideo.localhost
-          - app.nukevideo.localhost
-      traefik: {}
   nukevideo-api:
     build:
       context: .
@@ -26,8 +8,6 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.nukevideo-api.rule=Host(`api.nukevideo.localhost`)"
       - "traefik.http.services.nukevideo-api.loadbalancer.server.port=8080"
-    ports:
-      - 8082:8080
     volumes:
       - ./:/var/www/html
     depends_on:
@@ -131,7 +111,7 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
     ports:
-      - 8123:8123
+      - ${CLICKHOUSE_PORT-8123}:8123
     ulimits:
       nofile:
         soft: 262144
@@ -162,9 +142,7 @@ services:
       - "traefik.http.services.rustfs-9001.loadbalancer.server.port=9001"
       - "traefik.http.routers.rustfs-9001.service=rustfs-9001"
     ports:
-      - 9000:9000
-      - 9001:9001
-
+      - ${AWS_PORT-9000}:9000
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -187,7 +165,8 @@ services:
       - "traefik.http.services.nukevideo-redis.loadbalancer.server.port=5540"
 
 networks:
-  traefik:
+  default:
+    name: traefik
     external: true
 
 volumes:
