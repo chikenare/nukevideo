@@ -47,6 +47,9 @@ class NodeService
     // covering it too would hold every deploy for up to 30 minutes.
     public const WORKER_STOP_GRACE = self::WORKER_TIMEOUT + 60;
 
+    // Environments whose in-flight work is disposable, so a deploy kills instead of draining.
+    private const UNDRAINED_ENVIRONMENTS = ['local', 'staging'];
+
     // Keeps the worker's idle Redis connection alive through ISP CGNAT during long ffmpeg
     // encodes; without outgoing traffic the NAT mapping is dropped and the next command read-errors.
     private const WORKER_SYSCTLS = [
@@ -195,10 +198,26 @@ class NodeService
         return "/home/{$node->user}/nukevideo/node-{$node->uuid}";
     }
 
+    /**
+     * Seconds a deploy gives the old worker to finish its in-flight jobs before SIGKILL.
+     *
+     * Killing one is not free: it sits `reserved` in Redis for QUEUE_RETRY_AFTER (~31 min) with
+     * the new container idle, and the video stays in an active status the whole time, holding a
+     * slot `videos:dispatch` counts against the fleet's concurrency. That is worth waiting out on
+     * a live fleet and pure friction on a machine that redeploys every few minutes, so
+     * development and staging kill outright. Allowlisted rather than derived from
+     * `isProduction()`, because an unset or unexpected APP_ENV must still drain — the safe side
+     * of this choice is the one that waits.
+     */
+    public static function drainGrace(): int
+    {
+        return app()->environment(self::UNDRAINED_ENVIRONMENTS) ? 0 : self::WORKER_STOP_GRACE;
+    }
+
     public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true): void
     {
         $script = $this->buildDeployScript($node);
-        $grace = $drain ? self::WORKER_STOP_GRACE : 0;
+        $grace = $drain ? self::drainGrace() : 0;
 
         // SSH timeout covers the worst case: the drain window plus image pull and startup.
         // The old flat 300s cut the session mid-drain and left no container at all.
@@ -213,7 +232,7 @@ class NodeService
         // a second command. (Every other free-text value reaches the script through
         // buildDockerRunArgs, which escapes it already.)
         $workdirArg = escapeshellarg($workdir);
-        $stopGrace = self::WORKER_STOP_GRACE;
+        $drainGrace = self::drainGrace();
         $nodeType = $node->type->value;
         $nodeId = $node->id;
         // The name is free text and lands on a `#` comment line, which a newline would end —
@@ -239,12 +258,13 @@ class NodeService
         [ "\$(id -u)" -ne 0 ] && SUDO="sudo"
 
         # Seconds the old worker gets to finish in-flight jobs before it is killed. The default
-        # covers one full chunk pass; docker stop returns the moment Horizon exits, so an idle
-        # worker drains in seconds either way. Override per run when the wait is not worth it
-        # (killed jobs sit reserved in Redis for ~31 min before redelivery):
+        # covers one full chunk pass, and is 0 in development and staging, where the wait buys
+        # nothing; docker stop returns the moment Horizon exits, so an idle worker drains in
+        # seconds either way. Override per run in both directions (killed jobs sit reserved in
+        # Redis for ~31 min before redelivery):
         #   curl ... | bash -s -- --no-drain
         #   curl ... | bash -s -- --drain=60
-        DRAIN={$stopGrace}
+        DRAIN={$drainGrace}
         for arg in "\$@"; do
             case "\$arg" in
                 --no-drain) DRAIN=0 ;;
