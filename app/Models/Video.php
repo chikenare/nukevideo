@@ -5,7 +5,9 @@ namespace App\Models;
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\VideoController;
+use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\PrepareVideoJob;
+use App\Jobs\PruneScratchJob;
 use App\Observers\VideoObserver;
 use App\Services\WebhookDispatcher;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -74,8 +76,11 @@ class Video extends Model
 
     /** Sub-dir names used across the internal mirror ('chunks' disk) and local scratch.
      *
-     *  `SOURCE_DIR` doubles as the primary-S3 zone holding the archived original ({@see sourcePrefix}):
-     *  same word, same meaning on both disks — the untouched input file. */
+     *  These must never name a primary-S3 zone. Both disks are configured with the SAME bucket and
+     *  differ only by endpoint, so wherever they resolve to one store, the mirror sweeps
+     *  ({@see PruneScratchJob}, {@see CompletesVideo}) delete these
+     *  directories by name and would take the primary object with them. That is why the archived
+     *  original lives under {@see ORIGINAL_DIR} and not here. */
     public const SOURCE_DIR = 'source';
 
     public const CHUNKS_DIR = 'chunks';
@@ -113,6 +118,9 @@ class Video extends Model
 
     /** Thumbnail and storyboard. Its own zone so an image link cannot unlock playback. */
     public const ASSETS_DIR = 'assets';
+
+    /** The retained upload. Deliberately NOT `source`, which the mirror already uses — see SOURCE_DIR. */
+    public const ORIGINAL_DIR = 'original';
 
     /** Filename of every video's thumbnail/storyboard assets, shared by the jobs that produce them
      *  and the controller/DTOs that serve/link them. */
@@ -251,9 +259,9 @@ class Video extends Model
     }
 
     /** Primary-S3 prefix of the archived original. No manifest and no issued token ever names it. */
-    public function sourcePrefix(): string
+    public function originalPrefix(): string
     {
-        return $this->zonePrefix(self::SOURCE_DIR);
+        return $this->zonePrefix(self::ORIGINAL_DIR);
     }
 
     /** Primary-S3 key of a thumbnail/storyboard object. See {@see assetPath} for the public URL. */

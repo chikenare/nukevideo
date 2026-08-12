@@ -112,7 +112,7 @@ class Stream extends Model
     {
         $extension = pathinfo($this->path, PATHINFO_EXTENSION);
 
-        return "{$video->sourcePrefix()}/{$this->ulid}".($extension ? ".{$extension}" : '');
+        return "{$video->originalPrefix()}/{$this->ulid}".($extension ? ".{$extension}" : '');
     }
 
     public function outputs(): BelongsToMany

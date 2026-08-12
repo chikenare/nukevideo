@@ -130,9 +130,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     /**
      * Pull the single-pass tracks staged on the mirror (`final/`: audio, subtitle) into the gather
-     * tree. Sync drops the prefix, so they land beside the concatenated video under the destination
-     * `{ulid}/` layout. Thumbnail/storyboard don't pass through here — they upload straight to
-     * primary S3 from their own jobs, which run in parallel and must not race this sync.
+     * tree. Sync drops the prefix, so they land beside the concatenated video, which is what lets
+     * {@see relocateProcessedRenditions} lift all three raw types out to the download zone in one
+     * move before the rest of the tree syncs to `play/`. Thumbnail/storyboard don't pass through
+     * here — they upload straight to primary S3 from their own jobs, which run in parallel and must
+     * not race this sync.
      */
     private function gatherSidecars(Video $video, string $gatherDir): void
     {
@@ -495,6 +497,16 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     private const PROCESSED_TYPES = ['video', 'audio', 'subtitle'];
 
     /**
+     * The subset `keep_processed_files = false` actually discards.
+     *
+     * Subtitles are excluded on purpose: they are the only input `videos:repair-subtitles` can read
+     * back, and dropping them makes a video permanently unrepairable to save a few kilobytes — the
+     * whole catalogue's VTTs come to ~117 MB against 1.2 TB of renditions. They still leave the
+     * gather tree with the rest, because staying would sync them into the playback zone.
+     */
+    private const OPTIONAL_TYPES = ['video', 'audio'];
+
+    /**
      * The raw video/audio renditions are only packager inputs — the CMAF segments serve playback.
      * A template that does not keep them has them dropped here, before the sync, so they never
      * reach primary S3 at all. One that does keep them has them MOVED OUT of the gather tree, so
@@ -514,13 +526,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
         $local = Storage::disk('local');
 
         if (! ($video->template?->keep_processed_files ?? true)) {
-            foreach (self::PROCESSED_TYPES as $type) {
+            foreach (self::OPTIONAL_TYPES as $type) {
                 $local->deleteDirectory($video->gatherDir()."/{$type}");
             }
 
             Log::info('Pruned processed renditions before sync', ['video' => $video->id]);
-
-            return null;
         }
 
         // A redelivery rebuilds the gather tree from scratch; clear whatever a previous attempt

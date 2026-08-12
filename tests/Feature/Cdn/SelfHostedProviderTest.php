@@ -102,7 +102,7 @@ it('never authorizes the masters, the original or the images with a playback tok
         "/{$video->downloadPrefix()}/video/MASTER.mp4",
         "/{$video->downloadPrefix()}/audio/TRACK.mp4",
         "/{$video->downloadPrefix()}/subtitle/TRACK.vtt",
-        "/{$video->sourcePrefix()}/ORIGINAL.mkv",
+        "/{$video->originalPrefix()}/ORIGINAL.mkv",
         "/{$video->assetsPrefix()}/thumbnail.jpg",
     ];
 
@@ -136,7 +136,7 @@ it('pins why the manifest may never sit at the video root again', function () {
 
     expect($acl)->toBe("/{$video->ulid}/")
         ->and(str_starts_with("/{$video->downloadPrefix()}/video/MASTER.mp4", $acl))->toBeTrue()
-        ->and(str_starts_with("/{$video->sourcePrefix()}/ORIGINAL.mkv", $acl))->toBeTrue();
+        ->and(str_starts_with("/{$video->originalPrefix()}/ORIGINAL.mkv", $acl))->toBeTrue();
 });
 
 it('refuses to sign a bucket-wide ACL', function () {

@@ -26,14 +26,14 @@ class BunnyProvider implements CdnProvider
     public function manifestUrl(Video $video, string $path, string $ip, bool $local): string
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
-        $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/{file}
+        $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
         if ($config->tokenKey === '') {
             return "https://{$config->host}{$urlPath}";
         }
 
         $expires = now()->timestamp + $config->tokenWindow;
-        $tokenPath = $this->directoryOf($urlPath); // /{videoUlid}/
+        $tokenPath = $this->directoryOf($urlPath); // /{videoUlid}/play/
 
         // Bunny signs the alphabetically-sorted parameters; token_path is our only one.
         $parameters = ['token_path' => $tokenPath];
@@ -51,7 +51,7 @@ class BunnyProvider implements CdnProvider
 
     private function directoryOf(string $path): string
     {
-        return substr($path, 0, (int) strrpos($path, '/')).'/'; // /{videoUlid}/
+        return substr($path, 0, (int) strrpos($path, '/')).'/'; // /{videoUlid}/play/
     }
 
     /** @param  array<string, string>  $parameters */

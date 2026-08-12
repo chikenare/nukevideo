@@ -15,12 +15,13 @@ class VideoObserver
             $video->loadMissing(['outputs.streams', 'streams']);
         }
 
-        // The DB cascade skips StreamObserver, and the original's source lives outside the ULID
-        // dir, so delete it through Eloquent to let the observer clean up the storage object.
+        // The DB cascade skips StreamObserver, and an original that was never archived still points
+        // at the shared upload folder, outside the ULID dir — so delete it through Eloquent to let
+        // the observer clean up that object. An archived one is covered by the sweep below too.
         $video->streams()->where('type', 'original')->get()->each->delete();
 
-        // One prefix covers every zone (`play/`, `download/`, `assets/`, `source/`) in both layouts,
-        // so a zone added later cannot be forgotten here and leave its objects orphaned.
+        // One prefix covers all four zones (`play/`, `download/`, `assets/`, `original/`), so a zone
+        // added later cannot be forgotten here and leave its objects orphaned.
         DeleteResourceWithPath::dispatch($video->ulid);
     }
 
