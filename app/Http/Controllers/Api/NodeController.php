@@ -103,18 +103,22 @@ class NodeController extends Controller
         try {
             $docker = app(DockerService::class);
             $containers = $docker->listContainers($node);
-            $prefixes = ["nukevideo_{$node->type->value}_{$node->id}"];
+            // Through the model: the names carry an environment prefix, and a hand-built one here
+            // would either miss this environment's containers or match the other environment's.
+            $owned = $node->deployedContainerNames();
             if ($node->type->value === 'worker') {
-                $prefixes[] = "nukevideo_storage_{$node->id}";
+                // Only on delete. The node is gone for good, so its chunk store goes with it —
+                // and if this was the storage server, another node has to be flagged as one.
+                $owned[] = $node->storageContainerName();
             }
 
             foreach ($containers as $container) {
                 $name = ltrim($container['Names'] ?? '', '/');
-                foreach ($prefixes as $prefix) {
-                    if (str_starts_with($name, $prefix)) {
-                        $docker->removeContainer($node, $name);
-                        break;
-                    }
+                // Exact names, not prefixes: `nukevideo_worker_1` is a prefix of
+                // `nukevideo_worker_11`, so deleting node 1 also removed node 11's worker whenever
+                // the two shared a host — which is the normal case for a development node.
+                if (in_array($name, $owned, true)) {
+                    $docker->removeContainer($node, $name);
                 }
             }
         } catch (\Throwable $e) {

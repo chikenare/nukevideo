@@ -2,9 +2,12 @@
 
 namespace App\Services;
 
+use App\Console\Commands\IngestBunnyLogs;
 use App\Data\NodeData;
 use App\Data\SelfHostedConfigData;
+use App\Enums\CdnDriver;
 use App\Enums\NodeAccel;
+use App\Enums\NodeType;
 use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
@@ -211,7 +214,6 @@ class NodeService
         // buildDockerRunArgs, which escapes it already.)
         $workdirArg = escapeshellarg($workdir);
         $stopGrace = self::WORKER_STOP_GRACE;
-        $vectorImage = 'timberio/vector:0.56.0-alpine';
         $nodeType = $node->type->value;
         $nodeId = $node->id;
         // The name is free text and lands on a `#` comment line, which a newline would end —
@@ -224,15 +226,7 @@ class NodeService
             default => throw new \RuntimeException("Unknown node type: {$nodeType}"),
         };
 
-        $vectorRunArgs = $this->buildDockerRunArgs('nukevideo_vector', $vectorImage, [
-            'env' => $this->getEnvironmentVariables($node),
-            'volumes' => [
-                '/var/run/docker.sock:/var/run/docker.sock:ro',
-                "{$workdir}/config/vector.yaml:/etc/vector/vector.yaml:ro",
-            ],
-        ]);
-
-        $vectorYaml = file_get_contents(base_path('vector/vector.yaml'));
+        $vectorSection = $this->vectorScript($node, $workdir);
 
         return <<<BASH
         #!/bin/bash
@@ -279,20 +273,11 @@ class NodeService
         \$SUDO docker network create nukevideo_default 2>/dev/null && echo "Network created" || echo "Network already exists"
         mkdir -p "\$WORKDIR/config" "\$WORKDIR/data" "\$WORKDIR/certs"
 
-        # ---- 3. Vector config ----
-        echo "=== Writing Vector config ==="
-        cat > "\$WORKDIR/config/vector.yaml" << '__VECTOR_EOF__'
-        {$vectorYaml}
-        __VECTOR_EOF__
-
-        # ---- 4-5. Node-specific: pull + deploy ----
+        # ---- 3-4. Node-specific: image + deploy ----
         {$nodeSection}
 
-        # ---- 6. Vector ----
-        echo "=== Deploying Vector ==="
-        pull_image {$vectorImage}
-        docker rm -f nukevideo_vector 2>/dev/null || true
-        docker run -d {$vectorRunArgs}
+        # ---- 5. Vector ----
+        {$vectorSection}
 
         echo ""
         echo "=== Deployment complete — node {$nodeId} is running ==="
@@ -306,7 +291,7 @@ class NodeService
         }
 
         $image = $this->resolveImage('api');
-        $name = "nukevideo_worker_{$node->id}";
+        $name = $node->serviceContainerName();
         $stopGrace = self::WORKER_STOP_GRACE;
 
         $dockerFlags = $this->extractDockerFlags($node);
@@ -333,8 +318,8 @@ class NodeService
         return <<<BASH
         {$gpuSetup}
 
-        echo "=== Pulling worker image ==="
-        pull_image {$image}
+        echo "=== Worker image ==="
+        {$this->imageStep($image, 'api-prod')}
 
         echo "=== Deploying worker ==="
         # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit
@@ -396,7 +381,7 @@ class NodeService
         }
 
         $image = $this->resolveImage('proxy');
-        $name = "nukevideo_proxy_{$node->id}";
+        $name = $node->serviceContainerName();
 
         $labels = ['vector.enable=true'];
 
@@ -422,8 +407,8 @@ class NodeService
         $traefik = $isProduction ? $this->traefikScript() : '';
 
         return <<<BASH
-        echo "=== Pulling proxy image ==="
-        pull_image {$image}
+        echo "=== Proxy image ==="
+        {$this->imageStep($image, 'proxy-prod')}
 
         echo "=== Deploying proxy ==="
         docker rm -f {$name} 2>/dev/null || true
@@ -460,7 +445,7 @@ class NodeService
     {
         $disk = config('filesystems.disks.chunks');
         $port = (int) (parse_url((string) $node->storage_endpoint, PHP_URL_PORT) ?: 9000);
-        $storeName = "nukevideo_storage_{$node->id}";
+        $storeName = $node->storageContainerName();
         $mcHostArg = escapeshellarg(sprintf('MC_HOST_rfs=http://%s:%s@127.0.0.1:%d', $disk['key'], $disk['secret'], $port));
         $mcCmd = escapeshellarg("mc mb --ignore-existing rfs/{$disk['bucket']}");
 
@@ -473,7 +458,9 @@ class NodeService
             ],
             'labels' => ['vector.enable=true'],
             'ports' => ["{$port}:9000"],
-            'volumes' => ['nukevideo_chunks:/data'],
+            // Prefixed like the containers: a development store must never be handed the volume
+            // holding the fleet's mirrored sources and chunks.
+            'volumes' => [Node::containerPrefix().'_chunks:/data'],
             'command' => '/data',
         ]);
 
@@ -487,6 +474,63 @@ class NodeService
           n=\$((n+1)); [ \$n -ge 30 ] && echo "Chunk store failed to start" && exit 1; sleep 2
         done
         echo "Chunk store ready"
+        BASH;
+    }
+
+    /**
+     * Vector only earns its keep on a self-hosted edge. It ships exactly one thing — the
+     * `ip=/bytes=/video=` lines the vod nginx writes — into the bandwidth pipeline, and every other
+     * container's logs are dropped by its own transform, so on a worker node it reads all of
+     * Horizon's output to produce nothing. When the CDN is Bunny it has nothing to read at all:
+     * viewer traffic never reaches our edge and {@see IngestBunnyLogs} polls Bunny's Logging API
+     * into the very same pipeline instead. It was also the one deploy artifact with no node id in
+     * its name, so every environment sharing a host fought over it.
+     *
+     * Deploying anywhere else therefore removes it, including where a previous deploy or a previous
+     * CDN provider left one running.
+     */
+    private function vectorScript(Node $node, string $workdir): string
+    {
+        $name = Node::containerPrefix().'_vector';
+
+        $collectsEdgeLogs = $node->type === NodeType::PROXY
+            && app(CdnSettings::class)->provider === CdnDriver::SelfHosted->value;
+
+        if (! $collectsEdgeLogs) {
+            return <<<BASH
+            echo "=== Vector not needed on this node — removing any leftover ==="
+            docker rm -f {$name} 2>/dev/null || true
+            BASH;
+        }
+
+        $image = 'timberio/vector:0.56.0-alpine';
+        $vectorYaml = file_get_contents(base_path('vector/vector.yaml'));
+
+        $runArgs = $this->buildDockerRunArgs($name, $image, [
+            // Only the two variables the config interpolates. Handing a third-party image the whole
+            // node environment — database, S3 and webhook credentials — bought nothing. Filtered
+            // out of the merged list rather than rebuilt, so a node or global override of the
+            // internal URL still reaches it.
+            'env' => array_values(array_filter(
+                $this->getEnvironmentVariables($node),
+                fn ($v) => in_array(explode('=', $v, 2)[0], ['INTERNAL_API_URL', 'INTERNAL_API_SECRET'], true)
+            )),
+            'volumes' => [
+                '/var/run/docker.sock:/var/run/docker.sock:ro',
+                "{$workdir}/config/vector.yaml:/etc/vector/vector.yaml:ro",
+            ],
+        ]);
+
+        return <<<BASH
+        echo "=== Writing Vector config ==="
+        cat > "\$WORKDIR/config/vector.yaml" << '__VECTOR_EOF__'
+        {$vectorYaml}
+        __VECTOR_EOF__
+
+        echo "=== Deploying Vector ==="
+        pull_image {$image}
+        docker rm -f {$name} 2>/dev/null || true
+        docker run -d {$runArgs}
         BASH;
     }
 
@@ -510,7 +554,7 @@ class NodeService
                 $output = match ($check['key']) {
                     'docker' => $this->ssh($node, 'docker --version && docker info --format "Server: {{.ServerVersion}}"', 15),
                     'network' => $this->ssh($node, 'docker network inspect nukevideo_default --format "{{.Name}} ({{.Driver}})"', 15),
-                    'containers' => $this->ssh($node, 'docker ps --filter name=nukevideo_ --format "{{.Names}}\t{{.Status}}"', 15),
+                    'containers' => $this->ssh($node, 'docker ps --filter '.escapeshellarg('name='.$this->containerFilter()).' --format "{{.Names}}\t{{.Status}}"', 15),
                     'disk' => $this->ssh($node, 'df -h / | tail -1', 15),
                     'gpu' => $this->ssh($node, $this->gpuProbeCommand($node), 120),
                 };
@@ -535,6 +579,19 @@ class NodeService
     }
 
     /**
+     * What "this installation's containers" means to `docker ps`. The filter is a regex over a
+     * substring, so a bare `nukevideo_` also reports the `nukevideo_dev_*` containers of a
+     * development install sharing the host — and the development panel would report production's.
+     * The alternation is what keeps the production filter from swallowing the dev prefix.
+     */
+    private function containerFilter(): string
+    {
+        return app()->isLocal()
+            ? 'nukevideo_dev_'
+            : 'nukevideo_(worker|proxy|storage|vector|traefik)';
+    }
+
+    /**
      * A real hardware encode of a synthetic second inside the worker image — proof the GPU,
      * its driver and the container flags all line up, not just that a device file exists.
      */
@@ -555,9 +612,74 @@ class NodeService
         };
     }
 
+    /**
+     * A node image built in development gets its own tag, never `:dev`. That one belongs to
+     * compose — it builds it from the `api-dev` target, which is the runtime with no application
+     * code in it, and the next `docker compose up --build` would rebuild it from under a node that
+     * needs the opposite. This tag is built from the release targets, so what a node runs in
+     * development is shaped exactly like production and can be pushed or copied to an external test
+     * node as it stands.
+     */
+    private const DEV_NODE_TAG = 'node-dev';
+
+    /**
+     * Pinned on APP_ENV rather than read from APP_VERSION: the version is a release concept and
+     * means nothing to a working copy, and a development panel must not be able to put a released
+     * production image on a node by accident.
+     */
     private function resolveImage(string $type): string
     {
-        return "chikenare/nukevideo-{$type}:".config('app.version');
+        $tag = app()->isLocal() ? self::DEV_NODE_TAG : config('app.version');
+
+        return $this->registry()."/nukevideo-{$type}:{$tag}";
+    }
+
+    /**
+     * The host part of every image name. Unset means Docker Hub, under the namespace the releases
+     * are published in — so production says nothing and keeps pulling exactly what it always did.
+     */
+    private function registry(): string
+    {
+        return rtrim((string) config('nuke.registry'), '/') ?: 'chikenare';
+    }
+
+    /**
+     * Production pulls the released tag. Development builds it, because there is nothing published
+     * to pull and the point of deploying a development node is to run the code as it is right now.
+     *
+     * Which of the two happens is decided on the node, not here, because that is where the answer
+     * is: the build context is the compose project's directory, read back from the label docker
+     * wrote on the containers running the panel — `base_path()` cannot answer it, that is the path
+     * *inside* the API container. A node that is the development machine has the working copy and
+     * builds; an external test node does not, and pulls what the last build pushed. Same script,
+     * and the deploy prints which of the two it did and from where.
+     *
+     * The push is what joins the two halves, so it only happens with a registry configured. Without
+     * one the name resolves to Docker Hub, and a development build has no business being pushed to
+     * the place releases are published.
+     */
+    private function imageStep(string $image, string $target): string
+    {
+        if (! app()->isLocal()) {
+            return "pull_image {$image}";
+        }
+
+        $push = config('nuke.registry')
+            ? "    docker push {$image}"
+            : "    echo \"No DOCKER_REGISTRY set — {$image} stays on this host\"";
+
+        return <<<BASH
+        SOURCE_DIR=\$(docker ps -a --filter label=com.docker.compose.service=nukevideo-api \
+            --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n1)
+        if [ -n "\$SOURCE_DIR" ]; then
+            echo "Building {$image} (target {$target}) from \$SOURCE_DIR"
+            docker build --target {$target} -t {$image} "\$SOURCE_DIR"
+        {$push}
+        else
+            echo "No working copy on this host — using {$image} as last published"
+            pull_image {$image}
+        fi
+        BASH;
     }
 
     private function ssh(Node $node, string $command, int $timeout = 30, ?string $input = null, ?\Closure $onOutput = null): string
