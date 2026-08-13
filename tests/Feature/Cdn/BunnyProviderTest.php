@@ -76,3 +76,46 @@ it('is a no-op passthrough (path only) when no token key is configured', functio
 
     expect($url)->toBe('https://cdn.example.com/vid-ulid/out-ulid.mpd');
 });
+
+it('signs a download for the one file, with no token_path', function () {
+    fakeCdnSettings();
+
+    $key = '01HTESTVIDEOULID0000000000/download/video/01HTESTFILEULID00000000000.mp4';
+    $url = app(BunnyProvider::class)->downloadUrl('01HTESTVIDEOULID0000000000', $key, false);
+
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    // token_path is a directory PREFIX. It exists so a DASH manifest and its segments can share one
+    // token; on a single file it would widen the link to everything under that prefix.
+    expect($query)->not->toHaveKey('token_path')
+        ->and(parse_url($url, PHP_URL_PATH))->toBe("/{$key}")
+        ->and($query['expires'])->toBe((string) (Carbon::parse('2026-01-01 00:00:00')->timestamp + 3600));
+
+    // Advanced token auth, no parameters and no IP: the base is the signature path plus the expiry.
+    $expected = 'HS256-'.rtrim(strtr(base64_encode(
+        hash_hmac('sha256', "/{$key}".$query['expires'], 'test-key', true)
+    ), '+/', '-_'), '=');
+
+    expect($query['token'])->toBe($expected);
+});
+
+it('signs the caller tracking id into the download token', function () {
+    fakeCdnSettings();
+
+    $key = '01HTESTVIDEOULID0000000000/download/audio/01HTESTFILEULID00000000000.mp4';
+    $url = app(BunnyProvider::class)->downloadUrl('01HTESTVIDEOULID0000000000', $key, false, 'client-42');
+
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    expect($query['tid'])->toBe('client-42');
+
+    // Bunny folds every query parameter into the signature, so `tid` has to be part of the hashable
+    // base — appended but unsigned, the edge rejects the request outright. Verified against the
+    // staging pull zone: altering the id afterwards, or adding one to a URL signed without it,
+    // both answer 403.
+    $expected = 'HS256-'.rtrim(strtr(base64_encode(
+        hash_hmac('sha256', "/{$key}".$query['expires'].'tid=client-42', 'test-key', true)
+    ), '+/', '-_'), '=');
+
+    expect($query['token'])->toBe($expected);
+});

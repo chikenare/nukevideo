@@ -36,8 +36,10 @@ function fakeBunnySettings(string $provider = 'bunny', string $apiKey = 'api-key
  */
 function eventsWithoutDate(IngestBandwidthJob $job): array
 {
+    // `tid` is dropped alongside `date`: these assertions are about aggregation shape, and every
+    // line here is a playback request that carries no tracking id.
     return array_map(
-        fn (array $event) => collect($event)->except('date')->all(),
+        fn (array $event) => collect($event)->except(['date', 'tid'])->all(),
         array_values($job->events),
     );
 }
@@ -158,4 +160,26 @@ it('keeps the cursor and fails when the API errors, so the window is retried', f
 
     Queue::assertNothingPushed();
     expect(Cache::get('bunny-ingest-logs:cursor'))->toBeNull();
+});
+
+it('attributes traffic to the tracking id carried in the logged query string', function () {
+    fakeBunnySettings();
+
+    // The v2 logging API reports `path` WITH the query string, which is the only reason a download
+    // link's `tid` can be attributed at all. Two ids must not collapse into one row.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-a'],
+        ['statusCode' => 200, 'bytesSent' => 50, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-b'],
+        ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.mpd'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
+        $byTid = collect($job->events)->keyBy('tid')->map->bytes;
+
+        return $byTid->get('customer-a') === 100
+            && $byTid->get('customer-b') === 50
+            && $byTid->get('') === 25;
+    });
 });

@@ -4,7 +4,11 @@ namespace App\Models;
 
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Api\ActivityLogController;
+use App\Http\Controllers\VideoController;
+use App\Jobs\CleanupVideoResourcesJob;
+use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\PrepareVideoJob;
+use App\Jobs\PruneScratchJob;
 use App\Observers\VideoObserver;
 use App\Services\WebhookDispatcher;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
@@ -71,7 +75,14 @@ class Video extends Model
      * single call site. Disk selection stays at the call site; these return keys only.
      */
 
-    /** Sub-dir names used across the internal mirror ('chunks' disk) and local scratch. */
+    /** Sub-dir names used across the internal mirror ('chunks' disk) and local scratch.
+     *
+     *  These must never name a primary-S3 zone. Both disks are configured with the SAME bucket and
+     *  differ only by endpoint, so wherever they resolve to one store, the three mirror sweeps
+     *  ({@see PruneScratchJob}, {@see CompletesVideo} and
+     *  {@see CleanupVideoResourcesJob}, this last one on the happy path) delete these
+     *  directories by name and would take the primary object with them. That is why the archived
+     *  original lives under {@see ORIGINAL_DIR} and not here. */
     public const SOURCE_DIR = 'source';
 
     public const CHUNKS_DIR = 'chunks';
@@ -84,8 +95,34 @@ class Video extends Model
 
     public const SIDECAR_DIR = 'sidecar';
 
-    /** Sub-dir holding the raw processed renditions a template chose to keep. */
+    /** Local-scratch sub-dir holding the raw renditions a template chose to keep, while they wait
+     *  for their own sync. Not a primary-S3 name: on S3 they land in {@see downloadPrefix}. */
     public const PROCESSED_DIR = 'processed';
+
+    /*
+     * Primary-S3 zones, one per authorization boundary.
+     *
+     * A CDN token authorizes the *directory* of the URL it signs and the edge compares that ACL as a
+     * raw byte prefix ({@see \App\Services\Cdn\SelfHostedProvider::aclFor}), so whatever directory a
+     * manifest sits in is exactly how far every playback link reaches. Keeping playback in its own
+     * sub-dir is therefore the whole mechanism: it is what stops a playback link from also fetching
+     * the full-quality masters and the archived original.
+     *
+     * Lowercase names, and a stream ULID is 26 chars of uppercase base32 — they can never collide
+     * with a segment directory.
+     */
+
+    /** Manifests and CMAF segments: exactly what a playback token must reach, and nothing else. */
+    public const PLAY_DIR = 'play';
+
+    /** The tracks a user may fetch, plus muxed derivatives later. */
+    public const DOWNLOAD_DIR = 'download';
+
+    /** Thumbnail and storyboard. Its own zone so an image link cannot unlock playback. */
+    public const ASSETS_DIR = 'assets';
+
+    /** The retained upload. Deliberately NOT `source`, which the mirror already uses — see SOURCE_DIR. */
+    public const ORIGINAL_DIR = 'original';
 
     /** Filename of every video's thumbnail/storyboard assets, shared by the jobs that produce them
      *  and the controller/DTOs that serve/link them. */
@@ -185,7 +222,14 @@ class Video extends Model
         return "{$this->ulid}/".self::CHUNKSTAGE_DIR;
     }
 
-    /** Primary-S3 key of a video-root asset (thumbnail/storyboard): `{ulid}/{filename}`. */
+    /**
+     * PUBLIC URL path of a thumbnail/storyboard asset: `{ulid}/{filename}`, served by
+     * {@see VideoController::getAsset} under `/api/videos/…`.
+     *
+     * Deliberately NOT the storage key ({@see assetKey}) and deliberately unchanged by the zoned
+     * layout: `routes/api.php` whitelists these filenames, the responses are cached for a week, and
+     * every panel/API consumer already holds these URLs. The zone is resolved server-side instead.
+     */
     public static function assetPath(string $ulid, string $filename): string
     {
         return "{$ulid}/{$filename}";
@@ -197,17 +241,46 @@ class Video extends Model
         return "{$this->ulid}/".self::PROCESSED_DIR;
     }
 
-    /**
-     * Primary-S3 prefix for the retained raw renditions: `processed/{ulid}` — deliberately OUTSIDE
-     * the video's own prefix. A playback token authorizes all of `{ulid}/*`, and every manifest
-     * names each rendition's stream ULID, so anything filed under there is one predictable GET
-     * away for anyone holding a legitimate link. The archived original gets away with living
-     * inside it only because no manifest ever names its ULID ({@see Stream::archivePath()}); a
-     * rendition has no such cover, so it lives where no issued token reaches.
-     */
-    public static function processedPrefixFor(string $ulid): string
+    /** Primary-S3 prefix a playback token authorizes: manifests and every stream's segment dir. */
+    public function playPrefix(): string
     {
-        return self::PROCESSED_DIR."/{$ulid}";
+        return $this->zonePrefix(self::PLAY_DIR);
+    }
+
+    /** Primary-S3 prefix of the downloadable tracks — the full-quality masters a playback token
+     *  must NOT reach. */
+    public function downloadPrefix(): string
+    {
+        return $this->zonePrefix(self::DOWNLOAD_DIR);
+    }
+
+    /** Primary-S3 prefix of the thumbnail/storyboard objects. */
+    public function assetsPrefix(): string
+    {
+        return $this->zonePrefix(self::ASSETS_DIR);
+    }
+
+    /** Primary-S3 prefix of the archived original. No manifest and no issued token ever names it. */
+    public function originalPrefix(): string
+    {
+        return $this->zonePrefix(self::ORIGINAL_DIR);
+    }
+
+    /** Primary-S3 key of a thumbnail/storyboard object. See {@see assetPath} for the public URL. */
+    public function assetKey(string $filename): string
+    {
+        return self::assetKeyFor($this->ulid, $filename);
+    }
+
+    /** Same key for call sites that only hold the ulid, e.g. building a listing payload. */
+    public static function assetKeyFor(string $ulid, string $filename): string
+    {
+        return "{$ulid}/".self::ASSETS_DIR."/{$filename}";
+    }
+
+    private function zonePrefix(string $zone): string
+    {
+        return "{$this->ulid}/{$zone}";
     }
 
     public function user(): BelongsTo

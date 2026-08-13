@@ -56,8 +56,8 @@ beforeEach(function () {
         '{sub}' => $this->subtitle->ulid,
     ];
 
-    $this->dashPath = "{$this->video->ulid}/{$this->output->ulid}.mpd";
-    $this->hlsPath = "{$this->video->ulid}/{$this->output->ulid}.m3u8";
+    $this->dashPath = "{$this->video->playPrefix()}/{$this->output->ulid}.mpd";
+    $this->hlsPath = "{$this->video->playPrefix()}/{$this->output->ulid}.m3u8";
 
     Storage::disk('s3')->put($this->dashPath, dashFixture($ulids));
     Storage::disk('s3')->put($this->hlsPath, hlsFixture($ulids));

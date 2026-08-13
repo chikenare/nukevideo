@@ -144,9 +144,10 @@ class StreamManagementService
             if ($video->status === VideoStatus::COMPLETED->value) {
                 $this->manifests->removeStream($video, $stream);
 
-                // removeStream cleans up CMAF segments; the original staged file (VTT) is separate.
+                // removeStream cleans up CMAF segments; the standalone VTT lives in the download
+                // zone, which `path` does not name — resolve it or this deletes nothing.
                 if ($stream->type === 'subtitle') {
-                    Storage::disk('s3')->delete($stream->path);
+                    Storage::disk('s3')->delete($stream->storedPath($video));
                 }
             }
 

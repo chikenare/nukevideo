@@ -80,22 +80,39 @@ class Stream extends Model
         return strstr($this->path, '/', true).'/'.Video::FINAL_DIR.'/'.$this->relativePath();
     }
 
-    /** This stream's packaged CMAF segment directory on primary S3: `{videoUlid}/{streamUlid}`.
-     *  Matches the layout the packager writes into ({@see PackagerCommandBuilder}). */
+    /** This stream's packaged CMAF segment directory on primary S3, inside the video's playback
+     *  zone. Matches the layout the packager writes into ({@see PackagerCommandBuilder}). */
     public function segmentsPath(Video $video): string
     {
-        return "{$video->ulid}/{$this->ulid}";
+        return "{$video->playPrefix()}/{$this->ulid}";
     }
 
-    /** Where a retained `original` is filed once processing ends: `{videoUlid}/{streamUlid}.{ext}`,
-     *  alongside the video's own prefix instead of the shared upload folder. The unguessable stream
-     *  ULID is what keeps it undownloadable: the CDN token authorizes all of `{videoUlid}/`, but no
-     *  manifest ever names this stream. */
+    /**
+     * Where this stream's raw, downloadable file lives on primary S3. The filename comes from
+     * `path` via {@see relativePath} — NOT from `$this->ulid`, which names the segment directory and
+     * is a different ULID entirely.
+     *
+     * Single source of truth for every reader of a raw track, so the zone is resolved in one place.
+     */
+    public function storedPath(Video $video): string
+    {
+        return "{$video->downloadPrefix()}/{$this->relativePath()}";
+    }
+
+    /**
+     * Where a retained `original` is filed once processing ends, out of the shared upload folder.
+     *
+     * It used to sit directly under `{videoUlid}/` on the theory that an unguessable stream ULID
+     * kept it undownloadable. That theory was wrong: `Str::ulid()` is monotonic, so a ULID minted in
+     * the same millisecond as the video's own is the very next value — making the key derivable from
+     * the public video ULID. What keeps it unreachable now is the zone: no token is ever issued for
+     * `original/`, and no manifest names anything in it.
+     */
     public function archivePath(Video $video): string
     {
         $extension = pathinfo($this->path, PATHINFO_EXTENSION);
 
-        return "{$video->ulid}/{$this->ulid}".($extension ? ".{$extension}" : '');
+        return "{$video->originalPrefix()}/{$this->ulid}".($extension ? ".{$extension}" : '');
     }
 
     public function outputs(): BelongsToMany

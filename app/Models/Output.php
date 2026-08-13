@@ -49,7 +49,7 @@ class Output extends Model
 
     public function packagePrefix(): string
     {
-        return $this->video->ulid;
+        return $this->video->playPrefix();
     }
 
     /**
@@ -57,8 +57,8 @@ class Output extends Model
      * `{ulid}.720.m3u8` (HLS) or `{ulid}.mpd` / `{ulid}.720.mpd` (DASH). Keyed by the output's own
      * ulid (not a fixed `master`/`manifest` name) so two outputs of the same video — which can land
      * on the same cap if their video renditions share a height — never collide on the same S3 key;
-     * segments stay shared at `{videoUlid}/{streamUlid}/…` regardless, only the manifest is scoped
-     * per output. Shared with {@see PackagerCommandBuilder} so the packager output and
+     * segments stay shared at `{videoUlid}/play/{streamUlid}/…` regardless, only the manifest is
+     * scoped per output. Shared with {@see PackagerCommandBuilder} so the packager output and
      * the served path can never diverge.
      */
     public function manifestFile(string $format, ?int $cap = null): string
@@ -68,7 +68,7 @@ class Output extends Model
         return $cap === null ? "{$this->ulid}.{$ext}" : "{$this->ulid}.{$cap}.{$ext}";
     }
 
-    /** Public path of this output's manifest, mirroring its S3 key (`{videoUlid}/file`), optionally capped. */
+    /** Public path of this output's manifest, mirroring its S3 key (`{videoUlid}/play/file`), optionally capped. */
     public function manifestPath(string $format, ?int $cap = null): string
     {
         return "{$this->packagePrefix()}/".$this->manifestFile($format, $cap);

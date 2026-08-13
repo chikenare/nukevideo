@@ -1,4 +1,4 @@
-import { ref, computed } from 'vue'
+import { ref, computed, markRaw } from 'vue'
 import { defineStore } from 'pinia'
 import Uppy, { type Meta } from '@uppy/core'
 import { type AwsBody } from '@uppy/aws-s3'
@@ -18,7 +18,7 @@ export const useUploadStore = defineStore('upload', () => {
   const files = ref<FileUpload[]>([])
   const selectedTemplate = ref<string>('')
 
-  const uppy = new Uppy<Meta, AwsBody>({
+  const uppy = markRaw(new Uppy<Meta, AwsBody>({
     debug: true,
     autoProceed: false,
   }).use(AwsS3Multipart, {
@@ -29,7 +29,7 @@ export const useUploadStore = defineStore('upload', () => {
     getChunkSize() {
       return 30 * 1024 * 1024
     },
-  })
+  }))
 
   // Raw bytes uploaded per file, updated on every progress event. The global
   // speed is derived from the sum of these on a fixed 1s cadence (see below),

@@ -71,6 +71,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // Streams
         Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);
         Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
+        Route::post('streams/{stream}/download', [StreamController::class, 'download']);
 
         // Activity log (scoped to the project's videos)
         Route::get('activity-log', [ActivityLogController::class, 'index']);

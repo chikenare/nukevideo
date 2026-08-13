@@ -24,18 +24,23 @@ class StopNodeServicesJob implements ShouldQueue
     public function handle(SSHService $ssh): void
     {
         $node = $this->node->load('sshKey');
-        $container = $node->serviceContainerName();
+        $containers = implode(' ', $node->deployedContainerNames());
 
-        // Only this node's own service. `--filter name=nukevideo_` is a substring match, so it also
-        // caught `nukevideo_storage_{id}` — the RustFS the `chunks` disk of EVERY node points at —
-        // and `nukevideo_vector`. Deactivating one worker took the whole fleet's chunk store down
-        // with it, and since the containers run with `--restart unless-stopped`, a `docker stop`
-        // survives reboots: it stayed down until someone redeployed the node by hand.
+        // Everything the deploy raised for this node — on a proxy that is Traefik and Vector too,
+        // which served nothing once the proxy itself is down. Never `nukevideo_storage_{id}`, the
+        // RustFS the `chunks` disk of EVERY node points at: this used to run
+        // `--filter name=nukevideo_`, a substring match that caught it, and deactivating one worker
+        // took the whole fleet's chunk store down with it. Since the containers run with
+        // `--restart unless-stopped` a `docker stop` survives reboots, so it stayed down until
+        // someone redeployed the node by hand.
+        //
+        // One call for all of them; docker reports the ones that were not there and stops the rest,
+        // which is the normal case for a node deployed before it had these companions.
         $stopped = trim($ssh->run(
             ip: $node->ip_address,
             user: $node->user,
             privateKey: $node->sshKey->private_key,
-            command: "docker stop {$container} 2>/dev/null || true",
+            command: "docker stop {$containers} 2>/dev/null || true",
             timeout: 60,
         ));
 

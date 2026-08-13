@@ -33,15 +33,17 @@ class StartNodeServicesJob implements ShouldQueue
     public function handle(SSHService $ssh): void
     {
         $node = $this->node->load('sshKey');
-        $container = $node->serviceContainerName();
+        $containers = implode(' ', $node->deployedContainerNames());
 
-        // Only starts a container that already exists: a node that was never deployed has nothing
-        // to start, and saying so is more useful than a deploy that half-happens behind a toggle.
+        // The same set {@see StopNodeServicesJob} stops, or reactivating a proxy would put it back
+        // in rotation with no Traefik in front of it. Only starts containers that already exist: a
+        // node that was never deployed has nothing to start, and saying so is more useful than a
+        // deploy that half-happens behind a toggle.
         $started = trim($ssh->run(
             ip: $node->ip_address,
             user: $node->user,
             privateKey: $node->sshKey->private_key,
-            command: "docker start {$container} 2>&1 || true",
+            command: "docker start {$containers} 2>&1 || true",
             timeout: 60,
         ));
 

@@ -5,6 +5,7 @@ namespace App\Data;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\Cdn\AssetUrlResolver;
 use Spatie\LaravelData\Data;
 
 class VideoData extends Data
@@ -32,6 +33,8 @@ class VideoData extends Data
 
     public static function fromModel(Video $video): self
     {
+        $assets = app(AssetUrlResolver::class);
+
         return new self(
             ulid: $video->ulid,
             name: $video->name,
@@ -41,8 +44,8 @@ class VideoData extends Data
             createdAt: $video->created_at->toIso8601String(),
             externalUserId: $video->external_user_id,
             externalResourceId: $video->external_resource_id,
-            thumbnailUrl: url('/api/videos/'.Video::assetPath($video->ulid, Video::THUMBNAIL_FILENAME)),
-            storyboardUrl: url('/api/videos/'.Video::assetPath($video->ulid, Video::STORYBOARD_VTT_FILENAME)),
+            thumbnailUrl: $assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
+            storyboardUrl: $assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
             outputs: OutputData::collect($video->outputs)->all(),
             streams: StreamData::collect($video->streams)->all(),
             size: $video->streams->sum(fn (Stream $s) => (int) $s->package_size + (int) $s->file_size),

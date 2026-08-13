@@ -18,6 +18,7 @@ transforms:
       .ip = parsed.ip
       .bytes = to_int(parsed.bytes) ?? 0
       .video = parsed.video
+      .tid = parsed.tid
 
       if .bytes <= 0 { abort }
 
@@ -38,13 +39,24 @@ transforms:
       # flushed on a timer, so a batch that straddles midnight would otherwise be stamped at
       # insert time and book the tail of one day to the next — permanently, since `date` is the
       # partition key of a SummingMergeTree no later correction can take back.
-      date = format_timestamp!(.timestamp ?? now(), "%Y-%m-%d")
+      #
+      # Not `.timestamp ?? now()`: reading a path never errors in VRL, it yields null, so the
+      # coalescing has nothing to catch and the config is rejected outright (E651). The missing
+      # timestamp has to be handled as the null it actually is.
+      ts = .timestamp
+      if !is_timestamp(ts) { ts = now() }
+      date = format_timestamp!(ts, "%Y-%m-%d")
+
+      # Absent on every playback line and on downloads that carried no id; nginx logs it as an
+      # empty value either way, so the column's own default is what lands.
+      tid = to_string(.tid) ?? ""
 
       . = {}
       .video_ulid = video
       .ip = ip
       .bytes = bytes
       .date = date
+      .tid = tid
 
   aggregate_bandwidth_logs:
     type: reduce
@@ -56,6 +68,9 @@ transforms:
       - video_ulid
       - ip
       - date
+      # Grouped on, not carried: summing across tracking ids would merge two customers' traffic
+      # into one row and lose exactly what the id was added for.
+      - tid
     merge_strategies:
       bytes: sum
 

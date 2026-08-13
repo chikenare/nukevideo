@@ -74,9 +74,27 @@ class VideoController extends Controller
         ]);
     }
 
+    /**
+     * The URL keeps the flat `{ulid}/{filename}` shape ({@see Video::assetPath}) wherever the object
+     * actually sits, so cached links and API consumers never break; the zone is resolved here, at the
+     * cost of one indexed query on a cache miss.
+     *
+     * The flat key is tried second rather than skipped, because the two writers of these objects run
+     * on worker nodes from a baked image with no code mount: a worker still on an older build keeps
+     * publishing `{ulid}/thumbnail.jpg` after this deploys, and nothing ever re-runs those jobs. The
+     * route caches responses for a week and Laravel's cache-header middleware does not spare error
+     * responses, so a single miss here would pin a public 404 for seven days.
+     */
     public function getAsset(Request $request, string $ulid, string $filename)
     {
-        $path = Video::assetPath($ulid, $filename);
+        $video = Video::where('ulid', $ulid)->first();
+        $flat = Video::assetPath($ulid, $filename);
+
+        $path = $video?->assetKey($filename) ?? $flat;
+
+        if ($path !== $flat && ! Storage::exists($path)) {
+            $path = $flat;
+        }
 
         if (! Storage::exists($path)) {
             return response()->json([

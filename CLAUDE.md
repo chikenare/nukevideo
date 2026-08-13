@@ -201,8 +201,17 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   the JSON. It lives in the `file` store, not Redis: `php artisan data:cache-structures`.
 - **The database is MariaDB**, whatever the global guide says about PostgreSQL. Write migrations
   for MySQL.
-- Worker containers run a baked image with no code mount: testing a change there means
-  `docker cp` plus `horizon:terminate`.
+- Worker containers run a baked image with no code mount: testing a change there means `docker cp`
+  plus `horizon:terminate`. Deploying while `APP_ENV=local` builds that image on the node instead of
+  pulling it (release targets, from the compose project's directory, tagged `:node-dev` — `:dev` is
+  compose's own runtime-only image and must not be reused), so a redeploy ships the working copy. A
+  node with no working copy on it pulls that tag instead, which is how an external test node gets
+  it; that needs `DOCKER_REGISTRY` set, and only then does a development build get pushed anywhere.
+- Everything a deploy names is prefixed `nukevideo_dev_` in local and `nukevideo_` otherwise
+  (`Node::containerPrefix()`). Both environments number their nodes from their own database, so
+  without that a dev deploy would replace the production containers on the same host. Vector is
+  deployed **only on proxy nodes with the self-hosted CDN** — nothing else produces the access-log
+  lines it ships, and Bunny is covered by `bunny:ingest-logs`.
 - Retrying a video takes more than `status = pending`: delete its `job_batches` row first (the
   chunks survive, so the retry is a cache hit).
 

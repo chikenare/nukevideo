@@ -32,7 +32,59 @@ class SelfHostedProvider implements CdnProvider
         return $this->sign($url, $ip);
     }
 
-    private function sign(string $url, string $ip): string
+    public function assetUrl(string $videoUlid, string $key, bool $local): string
+    {
+        $node = Node::findProxyForVideo($videoUlid);
+
+        if (! $node) {
+            throw new NoCdnNodeAvailableException;
+        }
+
+        return ($local ? 'http://' : 'https://').$node->hostname.'/'.ltrim($key, '/');
+    }
+
+    /**
+     * Signed for this object and nothing else: the ACL carries no trailing `*`, and the edge
+     * compares an unwildcarded ACL as an exact URI match rather than a byte prefix. Verified
+     * against the running edge — the same token on a sibling rendition returns 403, which is the
+     * whole point, since the renditions of one video are neighbours in `download/video/`.
+     */
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string
+    {
+        $node = Node::findProxyForVideo($videoUlid);
+
+        if (! $node) {
+            throw new NoCdnNodeAvailableException;
+        }
+
+        $path = '/'.ltrim($key, '/');
+
+        $url = $this->sign(
+            ($local ? 'http://' : 'https://').$node->hostname.$path,
+            ip: null,
+            acl: $path,
+        );
+
+        // Appended, not signed — unlike Bunny, which folds every parameter into its token. The
+        // edge's ACL is compared against the request URI, which excludes the query, so a parameter
+        // here neither strengthens nor breaks the signature; the edge simply logs it
+        // (`log_format bandwidth`) for {@see \App\Jobs\IngestBandwidthJob} to attribute.
+        //
+        // That makes the id caller-alterable on this provider. It is the integrator's own label for
+        // its own traffic, so there is nothing to gain by changing it, but it must never be treated
+        // as an authorization input.
+        if ($trackingId === null) {
+            return $url;
+        }
+
+        // `sign()` returns the URL untouched when no token secret is configured, so the separator
+        // cannot be assumed: appending `&` to a URL with no query at all produces a malformed one.
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url.$separator.'tid='.rawurlencode($trackingId);
+    }
+
+    private function sign(string $url, ?string $ip, ?string $acl = null): string
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);
 
@@ -41,9 +93,13 @@ class SelfHostedProvider implements CdnProvider
         }
 
         $exp = now()->timestamp + $config->tokenWindow;
-        $acl = $this->aclFor($url);
+        $acl ??= $this->aclFor($url);
 
-        $authString = "exp={$exp}~acl={$acl}~ip={$ip}";
+        // The edge never parses `ip` (its token_fields are st/exp/acl only), so it is carried purely
+        // for parity with the playback links; a download omits it because nothing consumes it.
+        $authString = $ip === null
+            ? "exp={$exp}~acl={$acl}"
+            : "exp={$exp}~acl={$acl}~ip={$ip}";
         $hmac = hash_hmac('sha256', $authString, pack('H*', $config->tokenSecret));
         $token = "{$authString}~hmac={$hmac}";
 
@@ -52,11 +108,24 @@ class SelfHostedProvider implements CdnProvider
         return "{$url}{$separator}{$config->tokenName}={$token}";
     }
 
+    /**
+     * The ACL is the manifest's directory, which is why the zone a manifest lives in decides how far
+     * a playback link reaches. The edge compares it as a raw byte prefix, so the trailing `*` spans
+     * sub-directories — that is what covers the segment dirs.
+     *
+     * A path with no `/` would make `strrpos` return false, `$dir` empty and the ACL `/*`: a token
+     * for the entire bucket. Unreachable today, but it fails towards "authorize everything", so it
+     * throws instead of signing.
+     */
     private function aclFor(string $url): string
     {
-        $path = (string) parse_url($url, PHP_URL_PATH); // /{videoUlid}/manifest.mpd
-        $dir = substr($path, 0, (int) strrpos($path, '/')); // /{videoUlid}
+        $path = (string) parse_url($url, PHP_URL_PATH); // /{videoUlid}/play/manifest.mpd
+        $separator = strrpos($path, '/');
 
-        return "{$dir}/*";
+        if ($separator === false || $separator === 0) {
+            throw new \InvalidArgumentException("Refusing to sign a bucket-wide ACL for [{$path}].");
+        }
+
+        return substr($path, 0, $separator).'/*';
     }
 }

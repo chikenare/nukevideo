@@ -20,6 +20,12 @@ function workerNode(): Node
     ]);
 }
 
+function asEnvironment(string $env): void
+{
+    // `environment()` reads the container's `env` binding, which `config()` does not touch.
+    app()->detectEnvironment(fn () => $env);
+}
+
 describe('worker deploy drain', function () {
     it('drains the old container before replacing it, and only then removes it', function () {
         $script = app(NodeService::class)->buildDeployScript(workerNode());
@@ -54,4 +60,26 @@ describe('worker deploy drain', function () {
         // The grace exists to cover the longest job the gpu/cpu transcode supervisors run.
         expect(NodeService::WORKER_STOP_GRACE)->toBeGreaterThan(NodeService::WORKER_TIMEOUT);
     });
+
+    it('kills outright in development and staging instead of waiting', function (string $env) {
+        // These redeploy every few minutes and their in-flight encodes are disposable, so holding
+        // each deploy for a full chunk pass buys nothing. `\nDRAIN=0\n` and not just `DRAIN=0`:
+        // the `--no-drain` case arm contains that string in every environment.
+        asEnvironment($env);
+
+        expect(NodeService::drainGrace())->toBe(0)
+            ->and(app(NodeService::class)->buildDeployScript(workerNode()))
+            ->toContain("\nDRAIN=0\n");
+    })->with(['local', 'staging']);
+
+    it('drains on production and on any environment it was not told about', function (string $env) {
+        // Allowlisted rather than "not production": an unset or mistyped APP_ENV has to land on
+        // the side that waits, since the cost of guessing wrong is a job stranded for ~31 minutes.
+        asEnvironment($env);
+        $grace = NodeService::WORKER_STOP_GRACE;
+
+        expect(NodeService::drainGrace())->toBe($grace)
+            ->and(app(NodeService::class)->buildDeployScript(workerNode()))
+            ->toContain("\nDRAIN={$grace}\n");
+    })->with(['production', 'testing', 'whatever-this-is']);
 });

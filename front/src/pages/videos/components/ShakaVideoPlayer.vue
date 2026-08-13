@@ -55,13 +55,20 @@ const handlePlayVideo = async () => {
     await player.attach(videoEl.value!)
     ui = new shaka.ui.Overlay(player, containerEl.value!, videoEl.value!)
 
-    // Shaka's menus default to naming tracks by LANGUAGE, which ignores the track label entirely —
-    // two Spanish audio tracks both read as "Español" and subtitles fall back to their DASH role
-    // ("subtitle", "caption", "forced-subtitle"). LABEL_OR_LANGUAGE shows the label we package into
-    // the manifest (DASH `<Label>` / HLS `NAME`) and only falls back to the language when absent.
+    // LABEL, not LABEL_OR_LANGUAGE: this decides which tracks the menus list, not just how they are
+    // named. Shaka de-duplicates menu entries by a key built from language + roles (+ forced, for
+    // text), and `ui/language_utils.js` only adds the label to that key when the format is exactly
+    // LABEL — so under LABEL_OR_LANGUAGE any two tracks sharing a language and role collapse into
+    // one entry and the rest are dropped silently. A release with four audio tracks and nine
+    // subtitles showed three and four: both Spanish dubs became one, and the four Spanish subtitle
+    // tracks became one.
+    //
+    // The trade-off is that a track with no label renders as "?" instead of falling back to its
+    // language. Our packager always writes one ({@see PackagerCommandBuilder::descriptorLabel}), and
+    // a track that is visible but oddly named beats a track the viewer cannot reach at all.
     ui.configure({
-      trackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL_OR_LANGUAGE,
-      textTrackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL_OR_LANGUAGE,
+      trackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL,
+      textTrackLabelFormat: shaka.ui.Overlay.TrackLabelFormat.LABEL,
     })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

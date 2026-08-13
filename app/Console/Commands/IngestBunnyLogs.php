@@ -134,12 +134,19 @@ class IngestBunnyLogs extends Command
                 // group on, the partition key and the TTL key, inside a SummingMergeTree no later
                 // correction can take back. The window is minutes wide, so its start stands in
                 // unambiguously for every event within it.
-                $key = "{$match[1]}|{$ip}";
+                // The v2 log's `path` carries the query string, which is the only reason a
+                // download link's `tid` can be attributed at all ({@see \App\Services\Cdn\BunnyProvider::downloadUrl}).
+                // It is part of the grouping key: summing across tracking ids would merge two
+                // customers' traffic into one row and lose exactly what the id was added for.
+                $tid = $this->trackingId((string) ($line['path'] ?? ''));
+
+                $key = "{$match[1]}|{$ip}|{$tid}";
                 $events[$key] ??= [
                     'video_ulid' => $match[1],
                     'ip' => $ip,
                     'bytes' => 0,
                     'date' => $from->toDateString(),
+                    'tid' => $tid,
                 ];
                 $events[$key]['bytes'] += $bytes;
             }
@@ -148,5 +155,15 @@ class IngestBunnyLogs extends Command
         } while ($response->json('pagination.hasMore') === true);
 
         return $events;
+    }
+
+    /** The `tid` query parameter of a logged request, or '' when the link carried none. */
+    private function trackingId(string $path): string
+    {
+        parse_str((string) parse_url($path, PHP_URL_QUERY), $query);
+
+        $tid = (string) ($query['tid'] ?? '');
+
+        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
     }
 }
