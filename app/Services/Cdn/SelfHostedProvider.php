@@ -32,6 +32,17 @@ class SelfHostedProvider implements CdnProvider
         return $this->sign($url, $ip);
     }
 
+    public function assetUrl(string $videoUlid, string $key, bool $local): string
+    {
+        $node = Node::findProxyForVideo($videoUlid);
+
+        if (! $node) {
+            throw new NoCdnNodeAvailableException;
+        }
+
+        return ($local ? 'http://' : 'https://').$node->hostname.'/'.ltrim($key, '/');
+    }
+
     private function sign(string $url, string $ip): string
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);

@@ -106,7 +106,7 @@ class Stream extends Model
      * kept it undownloadable. That theory was wrong: `Str::ulid()` is monotonic, so a ULID minted in
      * the same millisecond as the video's own is the very next value — making the key derivable from
      * the public video ULID. What keeps it unreachable now is the zone: no token is ever issued for
-     * `source/`, and no manifest names anything in it.
+     * `original/`, and no manifest names anything in it.
      */
     public function archivePath(Video $video): string
     {

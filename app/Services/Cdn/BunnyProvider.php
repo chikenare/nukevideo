@@ -49,6 +49,14 @@ class BunnyProvider implements CdnProvider
         return "https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}";
     }
 
+    public function assetUrl(string $videoUlid, string $key, bool $local): string
+    {
+        $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
+
+        // Always https: a Bunny pull zone has no local mode to fall back to.
+        return "https://{$config->host}/".ltrim($key, '/');
+    }
+
     private function directoryOf(string $path): string
     {
         return substr($path, 0, (int) strrpos($path, '/')).'/'; // /{videoUlid}/play/

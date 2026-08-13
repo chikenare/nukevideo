@@ -5,6 +5,7 @@ namespace App\Models;
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\VideoController;
+use App\Jobs\CleanupVideoResourcesJob;
 use App\Jobs\Concerns\CompletesVideo;
 use App\Jobs\PrepareVideoJob;
 use App\Jobs\PruneScratchJob;
@@ -77,8 +78,9 @@ class Video extends Model
     /** Sub-dir names used across the internal mirror ('chunks' disk) and local scratch.
      *
      *  These must never name a primary-S3 zone. Both disks are configured with the SAME bucket and
-     *  differ only by endpoint, so wherever they resolve to one store, the mirror sweeps
-     *  ({@see PruneScratchJob}, {@see CompletesVideo}) delete these
+     *  differ only by endpoint, so wherever they resolve to one store, the three mirror sweeps
+     *  ({@see PruneScratchJob}, {@see CompletesVideo} and
+     *  {@see CleanupVideoResourcesJob}, this last one on the happy path) delete these
      *  directories by name and would take the primary object with them. That is why the archived
      *  original lives under {@see ORIGINAL_DIR} and not here. */
     public const SOURCE_DIR = 'source';
@@ -267,7 +269,13 @@ class Video extends Model
     /** Primary-S3 key of a thumbnail/storyboard object. See {@see assetPath} for the public URL. */
     public function assetKey(string $filename): string
     {
-        return "{$this->assetsPrefix()}/{$filename}";
+        return self::assetKeyFor($this->ulid, $filename);
+    }
+
+    /** Same key for call sites that only hold the ulid, e.g. building a listing payload. */
+    public static function assetKeyFor(string $ulid, string $filename): string
+    {
+        return "{$ulid}/".self::ASSETS_DIR."/{$filename}";
     }
 
     private function zonePrefix(string $zone): string

@@ -92,7 +92,7 @@ class VideoController extends Controller
 
         $path = $video?->assetKey($filename) ?? $flat;
 
-        if (! Storage::exists($path)) {
+        if ($path !== $flat && ! Storage::exists($path)) {
             $path = $flat;
         }
 
