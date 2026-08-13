@@ -54,16 +54,19 @@ function sshCommandOf(object $job): string
 }
 
 describe('deactivating a node', function () {
-    it('stops everything its deploy raised on a proxy', function () {
-        // Traefik and Vector exist only to serve that proxy; leaving them up after the proxy is
-        // down leaves an edge that terminates TLS for nothing.
+    it('stops its own container but not the services the host shares', function () {
+        // Traefik and Vector serve every proxy on the host, not the one being deactivated: Traefik
+        // owns ports 80 and 443 so a second instance could not exist, and Vector reads the Docker
+        // socket rather than any single container. Stopping them here took TLS and bandwidth
+        // accounting away from the neighbours — and `--restart unless-stopped` means the stop
+        // outlives a reboot, so they stayed down until someone redeployed by hand.
         $node = lifecycleNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false]);
 
         $command = sshCommandOf(new StopNodeServicesJob($node));
 
         expect($command)->toContain("nukevideo_proxy_{$node->id}")
-            ->and($command)->toContain('nukevideo_traefik')
-            ->and($command)->toContain('nukevideo_vector')
+            ->and($command)->not->toContain('traefik')
+            ->and($command)->not->toContain('vector')
             ->and($command)->toStartWith('docker stop ');
     });
 

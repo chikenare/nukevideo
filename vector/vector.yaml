@@ -2,7 +2,12 @@ sources:
   nginx_logs:
     type: docker_logs
     include_labels:
-      - "vector.enable=true"
+      # Scoped to one environment, not a bare `true`. This source reads the Docker socket, so it
+      # sees every container on the host — including the other environment's proxies when
+      # development and production share a machine. A shared label meant production's Vector
+      # ingested development's access logs and billed them to production, into a SummingMergeTree
+      # partition no later correction can take back.
+      - "vector.enable=${VECTOR_SCOPE}"
 
 transforms:
   parse_base:
