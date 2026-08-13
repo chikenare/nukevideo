@@ -56,9 +56,8 @@ beforeEach(function () {
     };
 });
 
-it('dispatches only as many videos as the configured concurrency', function () {
-    config(['nuke.video.concurrent' => 2]);
-
+it('dispatches as many videos as the family has nodes, plus one', function () {
+    // One CPU node in the fixture, so two: one encoding, one preparing.
     collect(range(1, 5))->each(fn () => ($this->makeVideo)());
 
     $this->artisan('videos:dispatch')->assertSuccessful();
@@ -69,8 +68,6 @@ it('dispatches only as many videos as the configured concurrency', function () {
 });
 
 it('counts what is already in flight against the same cap', function () {
-    config(['nuke.video.concurrent' => 2]);
-
     ($this->makeVideo)('running');
     ($this->makeVideo)('uploading');
     ($this->makeVideo)();
@@ -80,19 +77,33 @@ it('counts what is already in flight against the same cap', function () {
     Queue::assertNothingPushed();
 });
 
-it('ignores the node count, which says nothing about queue depth', function () {
-    // Ten nodes do not mean ten videos should be queued at once — they all drain one list.
-    collect(range(1, 9))->each(fn (int $i) => Node::create([
+it('grows with the fleet instead of waiting for someone to edit a config', function () {
+    // Adding hardware should widen the pipeline on the next tick. A fixed number drifts silently:
+    // nodes sit idle until somebody remembers to raise it and redeploy.
+    collect(range(1, 3))->each(fn (int $i) => Node::create([
         'name' => "cpu-{$i}", 'ip_address' => "10.0.1.{$i}", 'type' => 'worker',
     ]));
 
-    config(['nuke.video.concurrent' => 1]);
-
-    collect(range(1, 4))->each(fn () => ($this->makeVideo)());
+    collect(range(1, 9))->each(fn () => ($this->makeVideo)());
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 
-    Queue::assertPushed(PrepareVideoJob::class, 1);
+    // Four CPU nodes now, so five.
+    Queue::assertPushed(PrepareVideoJob::class, 5);
+});
+
+it('counts only the nodes of that video\'s own hardware', function () {
+    // GPU nodes never drain the CPU queue, so they add nothing to what CPU work can be in flight.
+    collect(range(1, 5))->each(fn (int $i) => Node::create([
+        'name' => "gpu-{$i}", 'ip_address' => "10.0.2.{$i}", 'type' => 'worker', 'accel' => 'intel',
+    ]));
+
+    collect(range(1, 6))->each(fn () => ($this->makeVideo)());
+
+    $this->artisan('videos:dispatch')->assertSuccessful();
+
+    // Still one CPU node, so still two.
+    Queue::assertPushed(PrepareVideoJob::class, 2);
 });
 
 it('dispatches nothing at all while no worker node is active', function () {
@@ -106,7 +117,7 @@ it('dispatches nothing at all while no worker node is active', function () {
 });
 
 it('takes the oldest waiting video first', function () {
-    config(['nuke.video.concurrent' => 1]);
+    ($this->makeVideo)('running');   // fills the family's first slot, leaving exactly one
 
     $newer = ($this->makeVideo)();
     $older = ($this->makeVideo)();
@@ -116,4 +127,38 @@ it('takes the oldest waiting video first', function () {
 
     expect($older->fresh()->status)->toBe('running')
         ->and($newer->fresh()->status)->toBe('pending');
+});
+
+it('does not let a busy GPU family hold back the CPU queue', function () {
+    // A fleet with both kinds of hardware, and the queues are independent: a GPU node never drains
+    // the CPU queue. Counted fleet-wide, one GPU video in flight left every CPU node idle with work
+    // waiting behind it.
+    Node::create(['name' => 'gpu-01', 'ip_address' => '10.0.0.21', 'type' => 'worker', 'accel' => 'intel']);
+
+    $gpuTemplate = Template::create([
+        'name' => 'QSV',
+        'query' => ['outputs' => [['video_codec' => 'av1_qsv', 'variants' => [['width' => 1280, 'height' => 720]]]]],
+        'user_id' => $this->template->user_id,
+        'project_id' => $this->template->project_id,
+    ]);
+
+    ($this->makeVideo)('running')->update(['template_id' => $gpuTemplate->id]);
+    $cpuVideo = ($this->makeVideo)();
+
+    $this->artisan('videos:dispatch')->assertExitCode(0);
+
+    Queue::assertPushed(PrepareVideoJob::class, fn ($job) => $job->videoId === $cpuVideo->id);
+    expect($cpuVideo->refresh()->status)->toBe('running');
+});
+
+it('still holds a video back when its own family is full', function () {
+    // One CPU node means two slots; both taken.
+    ($this->makeVideo)('running');
+    ($this->makeVideo)('running');
+    $waiting = ($this->makeVideo)();
+
+    // Same family as the one already in flight, so the cap applies exactly as before.
+    $this->artisan('videos:dispatch')->assertExitCode(0);
+
+    expect($waiting->refresh()->status)->toBe('pending');
 });

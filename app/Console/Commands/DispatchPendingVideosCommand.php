@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Enums\VideoStatus;
 use App\Jobs\PrepareVideoJob;
 use App\Models\Node;
+use App\Models\Template;
 use App\Models\Video;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -13,7 +14,7 @@ class DispatchPendingVideosCommand extends Command
 {
     protected $signature = 'videos:dispatch';
 
-    protected $description = 'Dispatch pending videos into the chunk-based encoding pipeline, up to the configured concurrency';
+    protected $description = 'Dispatch pending videos into the chunk-based encoding pipeline, up to what each hardware family can hold';
 
     // Light orchestration queue every worker drains, so prep runs even on a GPU-only fleet.
     private const QUEUE = 'orchestration';
@@ -31,27 +32,21 @@ class DispatchPendingVideosCommand extends Command
             return;
         }
 
-        // Bounded by a configured concurrency, not by the node count. The old cap assumed "each
-        // worker node processes one video at a time", which chunking makes false in both
-        // directions: one video already spreads across every node, and N videos dispatched
-        // together all pile onto the same FIFO queue — so the shortest one waits out the longest
-        // one's entire fan-out, unheartbeaten, until the reaper mistakes the wait for a dead
-        // worker and fails it.
-        $available = (int) config('nuke.video.concurrent') - Video::whereIn('status', self::IN_FLIGHT)->count();
-
-        if ($available <= 0) {
-            return;
-        }
-
-        $dispatched = 0;
+        $inFlight = $this->inFlightByCapacity();
 
         Video::where('status', VideoStatus::PENDING->value)
             ->with('template')
             ->oldest('created_at')
             ->cursor()
-            ->each(function (Video $video) use (&$dispatched, $available) {
-                if ($dispatched >= $available) {
-                    return false;
+            ->each(function (Video $video) use (&$inFlight) {
+                $capacities = $this->capacitiesOf($video);
+
+                // Skipped, never `return false`: a full GPU family must not hold back the CPU
+                // videos queued behind it, which is the whole point of counting per family.
+                foreach ($capacities as $capacity) {
+                    if (($inFlight[$capacity] ?? 0) >= $this->limitFor($capacity)) {
+                        return;
+                    }
                 }
 
                 // Never claim a video the fleet cannot encode: its chunks would land on a hardware
@@ -90,7 +85,10 @@ class DispatchPendingVideosCommand extends Command
                     PrepareVideoJob::dispatch($video->id, $originalPath)
                         ->onQueue(self::QUEUE);
 
-                    $dispatched++;
+                    // Occupies a slot in every family it encodes on, for the rest of this tick.
+                    foreach ($capacities as $capacity) {
+                        $inFlight[$capacity] = ($inFlight[$capacity] ?? 0) + 1;
+                    }
                 } catch (\Throwable $e) {
                     Log::error('Failed to dispatch segment job; reverting to pending', ['video' => $video->id, 'error' => $e->getMessage()]);
 
@@ -99,5 +97,67 @@ class DispatchPendingVideosCommand extends Command
                         ->update(['status' => VideoStatus::PENDING->value]);
                 }
             });
+    }
+
+    /** @var array<string, int> Memoised per tick; the fleet cannot change mid-run. */
+    private array $limits = [];
+
+    /**
+     * How many videos this hardware family may have in flight: its active nodes, plus one.
+     *
+     * Derived rather than configured, because a fixed number drifts the moment the fleet changes —
+     * and it drifts silently, leaving nodes idle or the queue starved until someone remembers to
+     * edit it and redeploy.
+     *
+     * One video per node is already generous: a node runs several encode processes and a single
+     * video fans out into tens of chunk jobs, so it saturates that node many times over. The extra
+     * one covers preparation — a video that is still downloading and probing its source has
+     * produced no chunks yet, so without it a one-node family sits idle through every prep.
+     *
+     * A family with no nodes at all lands on 1, which never dispatches anything: `missingCapacity()`
+     * below turns those away first, and says why.
+     */
+    private function limitFor(string $capacity): int
+    {
+        return $this->limits[$capacity] ??= 1 + Node::worker()->active()
+            ->when(
+                $capacity === Template::CPU,
+                fn ($q) => $q->whereNull('accel'),
+                fn ($q) => $q->where('accel', $capacity),
+            )->count();
+    }
+
+    /**
+     * How many videos already occupy each hardware family.
+     *
+     * @return array<string, int>
+     */
+    private function inFlightByCapacity(): array
+    {
+        $counts = [];
+
+        // get(), not cursor(): the set is bounded by these very limits, so it is small, and the
+        // template relation is genuinely eager-loaded instead of queried per row.
+        foreach (Video::whereIn('status', self::IN_FLIGHT)->with('template')->get() as $video) {
+            foreach ($this->capacitiesOf($video) as $capacity) {
+                $counts[$capacity] = ($counts[$capacity] ?? 0) + 1;
+            }
+        }
+
+        return $counts;
+    }
+
+    /**
+     * The hardware families a video's chunks will land on.
+     *
+     * Read from the TEMPLATE, not the streams: a pending video has none yet — they are created when
+     * {@see PrepareVideoJob} probes the source — and the routing is decided by the codec the
+     * template asks for either way.
+     *
+     * @return list<string>
+     */
+    private function capacitiesOf(Video $video): array
+    {
+        return $video->template?->capacities() ?: [Template::CPU];
     }
 }
