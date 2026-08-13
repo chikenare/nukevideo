@@ -33,6 +33,60 @@ PUT /api/streams/{ulid}
 Returns the updated stream. Responds `400` for a video rendition, the original file, or a video
 that is still being processed, and `422` when validation fails.
 
+## Download a Track
+
+Mint a signed URL for **one** track. Downloads are per-track by design: the encoded video
+renditions carry no audio, so a single playable file does not exist on our side — you fetch the
+tracks you want and mux them yourself (for example with `ffmpeg -i video.mp4 -i audio.mp4 -c copy
+out.mp4`).
+
+```
+POST /api/streams/{ulid}/download
+```
+
+List a video's tracks first with `GET /api/videos/{ulid}`, then request a link per track you want.
+
+**Request Body:**
+
+```json
+{ "tid": "customer-42" }
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `tid` | string \| null | Your own tracking id — a customer, a tenant. Echoed into the link so the CDN's request log attributes the transfer to it, and the bytes land against that id in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
+
+On Bunny the id is part of the token signature, so it can be neither altered nor added after the
+fact — both answer `403`. On a self-hosted edge it rides alongside the token instead, because that
+edge scopes its signature to the path; treat it as a label you chose, never as an authorization
+input. Traffic with no id is still recorded, under an empty one.
+
+**Response:**
+
+```json
+{
+  "data": {
+    "url": "https://cdn.example.com/01J.../download/audio/01J....mp4?...",
+    "expiresAt": "2026-08-13T02:41:24+00:00",
+    "filename": "01KZW4GN1K3B7Y4RFQBGM0KQF6.mp4",
+    "type": "audio",
+    "size": 4779203
+  }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `url` | string | Signed for **this object only** — a link to one rendition will not fetch another. Not bound to your IP, so it survives resumes and download managers. |
+| `expiresAt` | string | ISO 8601. Validity is checked when the request starts, so a transfer already in flight is not cut off; a resume after this fails and needs a new link. |
+| `filename` | string | The stored name — a ULID plus its extension. Unique per track, so fetching several never lands two on the same name. |
+| `type` | string | `video`, `audio` or `subtitle`. |
+| `size` | integer \| null | Bytes, when known. |
+
+Responds `422` for the original file, `409` while the video is still processing, `404` when the
+track was not retained (a template with `keepProcessedFiles` off discards the renditions before they
+reach storage) or belongs to another project, and `503` when no delivery node is available.
+
 ## Delete Stream
 
 ```

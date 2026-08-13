@@ -23,7 +23,10 @@ http {
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
-    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid';
+    # `tid` is the caller's tracking id, carried on download links so a transfer can be attributed
+    # to the integrator's own customer. Empty for playback and for links that carried none — the
+    # token itself is stripped before this runs, so it never leaks into the log.
+    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid tid=$arg_tid';
 
     access_log off;
     error_log  stderr warn;

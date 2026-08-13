@@ -28,4 +28,21 @@ interface CdnProvider
      * @param  string  $key  host-relative asset key ({videoUlid}/assets/{file})
      */
     public function assetUrl(string $videoUlid, string $key, bool $local): string;
+
+    /**
+     * Build the fully-qualified, signed URL of ONE downloadable track.
+     *
+     * Signed per object, not per directory: the renditions of a video sit side by side in
+     * `download/video/`, so a directory-scoped token handed out for 360p would authorize the 1080p
+     * master just as well. Implementations must scope the signature to this exact key.
+     *
+     * Not IP-bound. Downloads are resumed, retried and handed to download managers, which roam
+     * between addresses; playback tokens can afford the binding because a session is short.
+     *
+     * @param  string  $key  host-relative object key ({videoUlid}/download/{type}/{file})
+     * @param  string|null  $trackingId  echoed into the URL so the CDN log can attribute the
+     *                                   transfer; only providers whose logs carry the query string
+     *                                   can honour it, the rest ignore it
+     */
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string;
 }

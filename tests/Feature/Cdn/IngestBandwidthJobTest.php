@@ -61,7 +61,7 @@ it('dates a row by the traffic, not by the moment it was ingested', function () 
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 500, 'date' => '2026-01-31'],
     ]);
 
-    expect($rows)->toBe([['2026-01-31', $video->user_id, $video->ulid, '1.2.3.4', 500]]);
+    expect($rows)->toBe([['2026-01-31', $video->user_id, $video->ulid, '1.2.3.4', 500, '']]);
 });
 
 it('accepts a full timestamp and keeps only its day', function () {
@@ -107,4 +107,31 @@ it('attributes traffic for a video that no longer exists to no user', function (
     ]);
 
     expect($rows[0][1])->toBe(0);
+});
+
+it('keeps traffic from different tracking ids in separate rows', function () {
+    $video = videoOwnedBySomeone();
+
+    // `tid` is part of the sorting key of a SummingMergeTree, so two customers' bytes must arrive
+    // as distinct rows; collapsing them here would be indistinguishable from a merge later.
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => 'customer-a'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'date' => '2026-08-13', 'tid' => 'customer-b'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'date' => '2026-08-13'],
+    ]);
+
+    expect(array_column($rows, 5))->toBe(['customer-a', 'customer-b', '']);
+});
+
+it('blanks a tracking id that did not survive the round trip intact', function () {
+    $video = videoOwnedBySomeone();
+
+    // The value is echoed into a URL by an API client and read back out of a CDN log line, so it
+    // reaches here as untrusted text and is clamped to the alphabet the request validation accepts.
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => 'a&b=c'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => str_repeat('x', 65)],
+    ]);
+
+    expect(array_column($rows, 5))->toBe(['', '']);
 });
