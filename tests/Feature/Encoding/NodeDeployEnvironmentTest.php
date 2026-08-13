@@ -61,6 +61,46 @@ describe('development and production deploys on one host', function () {
             ->and($script)->not->toContain('nukevideo_chunks:');
     });
 
+    it('gives each proxy its own Traefik router name', function () {
+        // Traefik keys routers by name across every container it discovers on the host, and it
+        // discovers all of them. A fixed `routers.proxy` meant a second proxy — or the development
+        // host beside production — redefined the same router with a different rule and entrypoint;
+        // Traefik drops the conflicting one and the edge stops resolving.
+        $first = deployableNode(['type' => 'proxy', 'hostname' => 'a.example.com']);
+        $second = deployableNode(['type' => 'proxy', 'hostname' => 'b.example.com']);
+
+        $scripts = app(NodeService::class);
+
+        expect($scripts->buildDeployScript($first))->toContain("routers.nukevideo-proxy-{$first->id}.rule")
+            ->and($scripts->buildDeployScript($second))->toContain("routers.nukevideo-proxy-{$second->id}.rule")
+            ->and($scripts->buildDeployScript($first))->not->toContain('routers.proxy.');
+    });
+
+    it('keeps a development proxy out of production\'s Traefik namespace', function () {
+        asLocalEnvironment();
+        $node = deployableNode(['type' => 'proxy', 'hostname' => 'dev.example.com']);
+
+        $script = app(NodeService::class)->buildDeployScript($node);
+
+        expect($script)->toContain("routers.nukevideo_dev-proxy-{$node->id}.")
+            ->and($script)->not->toContain("routers.nukevideo-proxy-{$node->id}.");
+    });
+
+    it('scopes the vector label to the environment', function () {
+        // Vector reads the Docker socket, so it sees the other environment's containers too. A
+        // shared `vector.enable=true` had production ingesting development's access logs and
+        // billing them to production.
+        $prod = app(NodeService::class)->buildDeployScript(deployableNode(['type' => 'proxy', 'hostname' => 'a.example.com']));
+
+        asLocalEnvironment();
+        $dev = app(NodeService::class)->buildDeployScript(deployableNode(['type' => 'proxy', 'hostname' => 'b.example.com']));
+
+        expect($prod)->toContain('vector.enable=nukevideo')
+            ->and($prod)->not->toContain('vector.enable=true')
+            ->and($dev)->toContain('vector.enable=nukevideo_dev')
+            ->and($dev)->toContain('VECTOR_SCOPE=nukevideo_dev');
+    });
+
     it('still deploys production under the plain names', function () {
         $node = deployableNode();
         $script = app(NodeService::class)->buildDeployScript($node);

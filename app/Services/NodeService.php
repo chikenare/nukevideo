@@ -318,7 +318,7 @@ class NodeService
 
         $runArgs = $this->buildDockerRunArgs($name, $image, [
             'env' => $this->getEnvironmentVariables($node),
-            'labels' => ['vector.enable=true'],
+            'labels' => ['vector.enable='.Node::containerPrefix()],
             'sysctls' => self::WORKER_SYSCTLS,
             // So a plain `docker stop` (host reboot included) also drains instead of killing at 10s.
             'stop_timeout' => $stopGrace,
@@ -403,18 +403,27 @@ class NodeService
         $image = $this->resolveImage('proxy');
         $name = $node->serviceContainerName();
 
-        $labels = ['vector.enable=true'];
+        $labels = ['vector.enable='.Node::containerPrefix()];
 
         $isProduction = ! app()->isLocal();
 
         if ($node->hostname) {
             $entrypoint = $isProduction ? 'websecure' : 'web';
+
+            // Namespaced per node AND per environment. Traefik keys routers by name across every
+            // container it discovers on the host, and it discovers all of them — so a fixed `proxy`
+            // meant a second proxy node, or the same host running development alongside production,
+            // redefined production's router with a different rule and entrypoint. Traefik drops the
+            // conflicting definition, and the edge stops resolving. The container prefix isolates
+            // names and volumes; this is the same boundary in Traefik's namespace.
+            $router = Node::containerPrefix()."-proxy-{$node->id}";
+
             $labels[] = 'traefik.enable=true';
-            $labels[] = "traefik.http.routers.proxy.rule=Host(`{$node->hostname}`)";
-            $labels[] = "traefik.http.routers.proxy.entrypoints={$entrypoint}";
-            $labels[] = 'traefik.http.services.proxy.loadbalancer.server.port=80';
+            $labels[] = "traefik.http.routers.{$router}.rule=Host(`{$node->hostname}`)";
+            $labels[] = "traefik.http.routers.{$router}.entrypoints={$entrypoint}";
+            $labels[] = "traefik.http.services.{$router}.loadbalancer.server.port=80";
             if ($isProduction) {
-                $labels[] = 'traefik.http.routers.proxy.tls.certresolver=le';
+                $labels[] = "traefik.http.routers.{$router}.tls.certresolver=le";
             }
         }
 
@@ -476,7 +485,7 @@ class NodeService
                 'RUSTFS_ADDRESS=:9000',
                 'RUSTFS_CONSOLE_ENABLE=false',
             ],
-            'labels' => ['vector.enable=true'],
+            'labels' => ['vector.enable='.Node::containerPrefix()],
             'ports' => ["{$port}:9000"],
             // Prefixed like the containers: a development store must never be handed the volume
             // holding the fleet's mirrored sources and chunks.
@@ -531,10 +540,15 @@ class NodeService
             // node environment — database, S3 and webhook credentials — bought nothing. Filtered
             // out of the merged list rather than rebuilt, so a node or global override of the
             // internal URL still reaches it.
-            'env' => array_values(array_filter(
-                $this->getEnvironmentVariables($node),
-                fn ($v) => in_array(explode('=', $v, 2)[0], ['INTERNAL_API_URL', 'INTERNAL_API_SECRET'], true)
-            )),
+            'env' => array_merge(
+                array_values(array_filter(
+                    $this->getEnvironmentVariables($node),
+                    fn ($v) => in_array(explode('=', $v, 2)[0], ['INTERNAL_API_URL', 'INTERNAL_API_SECRET'], true)
+                )),
+                // Which containers this Vector may read, by label. Passed rather than baked into
+                // the config so one file serves both environments.
+                ['VECTOR_SCOPE='.Node::containerPrefix()],
+            ),
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
                 "{$workdir}/config/vector.yaml:/etc/vector/vector.yaml:ro",

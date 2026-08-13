@@ -98,13 +98,15 @@ class Node extends Model
     {
         $names = [$this->serviceContainerName()];
 
-        if ($this->type === NodeType::PROXY) {
-            // A proxy deploy raises both, and both exist only to serve that proxy: Traefik fronts
-            // it and terminates its TLS, Vector ships its access logs to the bandwidth pipeline.
-            $names[] = self::containerPrefix().'_traefik';
-            $names[] = self::containerPrefix().'_vector';
-        }
-
+        // Traefik and Vector are deliberately absent, even though a proxy deploy raises them. They
+        // serve every proxy on the host, not the one being acted on: Traefik owns ports 80 and 443
+        // so a second instance could not exist anyway, and Vector reads the Docker socket rather
+        // than any single container. Listing them here meant deactivating one proxy tore down TLS
+        // and bandwidth accounting for its neighbours — and left them off after a reboot, since the
+        // stop outlives it.
+        //
+        // The cost is that removing the last proxy from a host leaves both running idle, which is
+        // the cheaper mistake.
         return $names;
     }
 
