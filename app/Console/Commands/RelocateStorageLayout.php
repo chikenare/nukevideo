@@ -151,23 +151,45 @@ class RelocateStorageLayout extends Command
      */
     private function plan(Video $video): array
     {
-        $plan = [];
+        $arrived = [];
+        $flat = [];
 
-        foreach (Storage::disk('s3')->allFiles($video->ulid) as $key) {
-            $relative = substr($key, strlen($video->ulid) + 1);
-            $head = strtok($relative, '/');
-
-            // Already relocated. Checked by name rather than by probing the destination, so a
-            // re-run after a partial pass costs one listing instead of one HEAD per object.
-            if (in_array($head, self::ZONES, true)) {
+        // One listing, used twice: the flat keys to move, and the sizes of whatever already sits in
+        // a zone. That is what makes a re-run resumable — a copy interrupted at hour six picks up
+        // where it stopped instead of starting over — and it costs nothing extra, because the
+        // originals are never deleted and would otherwise be re-planned on every pass.
+        foreach (Storage::disk('s3')->listContents($video->ulid, true) as $item) {
+            if (! $item->isFile()) {
                 continue;
             }
 
+            $relative = substr($item->path(), strlen($video->ulid) + 1);
+
+            if (in_array(strtok($relative, '/'), self::ZONES, true)) {
+                $arrived[$relative] = $item->fileSize();
+
+                continue;
+            }
+
+            $flat[$relative] = $item->fileSize();
+        }
+
+        $plan = [];
+
+        foreach ($flat as $relative => $size) {
             $zone = $this->zoneFor($relative);
 
-            if ($zone !== null) {
-                $plan[$key] = "{$video->ulid}/{$zone}/{$relative}";
+            if ($zone === null) {
+                continue;
             }
+
+            // Size, not mere presence: a copy that died mid-flight leaves a short object, and
+            // skipping it would leave the video quietly broken in the new layout.
+            if (($arrived["{$zone}/{$relative}"] ?? null) === $size) {
+                continue;
+            }
+
+            $plan["{$video->ulid}/{$relative}"] = "{$video->ulid}/{$zone}/{$relative}";
         }
 
         return $plan;
@@ -263,7 +285,10 @@ class RelocateStorageLayout extends Command
             );
         }
 
-        $script = tempnam(sys_get_temp_dir(), 'relocate').'.txt';
+        // No suffix on purpose: `tempnam()` CREATES the file it names, so appending an extension
+        // would write to a different path and leak the original — one empty file per video, which
+        // over a full catalogue is a thousand of them.
+        $script = tempnam(sys_get_temp_dir(), 'relocate');
         file_put_contents($script, implode("\n", $lines)."\n");
 
         try {

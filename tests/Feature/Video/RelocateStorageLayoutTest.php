@@ -97,3 +97,26 @@ it('does not touch an object it cannot classify', function () {
         ->expectsOutputToContain('not classified, staying put')
         ->assertSuccessful();
 });
+
+it('skips an object whose copy already arrived intact', function () {
+    $video = flatVideo(['thumbnail.jpg', 'video/FILE.mp4']);
+    Storage::disk('s3')->put("{$video->ulid}/assets/thumbnail.jpg", 'bytes');
+
+    // The originals are never deleted, so without this every re-run would re-copy the whole
+    // catalogue — and a run interrupted at hour six would start from zero.
+    $this->artisan('videos:relocate-storage', ['video' => [$video->ulid], '--dry-run' => true])
+        ->expectsOutputToContain('1 object(s) to copy')
+        ->expectsOutputToContain('download   1')
+        ->assertSuccessful();
+});
+
+it('re-copies an object whose copy is short', function () {
+    $video = flatVideo(['thumbnail.jpg']);
+    Storage::disk('s3')->put("{$video->ulid}/assets/thumbnail.jpg", 'tr');
+
+    // Present but truncated: skipping on presence alone would leave the video broken in the new
+    // layout, and the flat original is deleted later by the sweep.
+    $this->artisan('videos:relocate-storage', ['video' => [$video->ulid], '--dry-run' => true])
+        ->expectsOutputToContain('1 object(s) to copy')
+        ->assertSuccessful();
+});
