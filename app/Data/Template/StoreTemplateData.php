@@ -14,6 +14,7 @@ class StoreTemplateData extends RequestData
 {
     public function __construct(
         public string $name,
+        public bool|Optional $enabled,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $keepProcessedFiles,
         #[MapInputName(CamelCaseMapper::class)]
@@ -26,6 +27,7 @@ class StoreTemplateData extends RequestData
     {
         return [
             'name' => 'required|string|max:255',
+            'enabled' => 'sometimes|boolean',
             'keepProcessedFiles' => 'sometimes|boolean',
             'keepOriginal' => 'sometimes|boolean',
             'query.outputs' => 'required|array|min:1',

@@ -12,7 +12,8 @@ import {
 } from '@/components/ui/table'
 import UploadButton from '@/components/upload/UploadButton.vue';
 import { FileVideo } from '@lucide/vue';
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import VideoService from '@/services/VideoService';
 import { useUploadStore } from '@/stores/upload';
 type Video = App.Data.VideoData
@@ -25,14 +26,30 @@ import {
   PaginationPrevious,
 } from '@/components/ui/pagination'
 import { formatSecondsToTime } from '@/utils/timeFormatter';
+import { formatBytes } from '@/utils/byteFormatter';
 
 const uploadStore = useUploadStore();
+const route = useRoute();
+const router = useRouter();
 
 const videos = ref<ResPagination<Video>>({ currentPage: 1, data: [], perPage: 15, total: 0 });
 const loading = ref(true);
-const page = ref(1);
-const search = ref('');
+
+// The page and the query live in the URL (`/videos?q=trailer&page=2`), so a reload, a shared link
+// or the back button all land on the list the user was actually looking at.
+const page = ref(Math.max(Number(route.query.page) || 1, 1));
+const search = ref(typeof route.query.q === 'string' ? route.query.q : '');
 let searchTimeout: ReturnType<typeof setTimeout>;
+
+/** Mirror the current state into the URL, leaving the defaults (page 1, no query) implicit. */
+const syncQuery = () => {
+  const query: Record<string, string> = {};
+  if (search.value) query.q = search.value;
+  if (page.value > 1) query.page = String(page.value);
+
+  // replace(), not push(): typing a search must not bury the previous page in the history stack.
+  router.replace({ query });
+};
 
 // Typing fast or paging fast issues overlapping requests, and the last one to ARRIVE used to win
 // rather than the last one issued — the table could end up showing results for a query the input
@@ -79,14 +96,34 @@ const onSearch = () => {
   clearTimeout(searchTimeout);
   searchTimeout = setTimeout(() => {
     page.value = 1;
+    syncQuery();
     fetchVideos();
   }, 300);
 };
 
 const onPageChange = (newPage: number) => {
+  if (newPage === page.value) return;
+
   page.value = newPage;
+  syncQuery();
   fetchVideos();
 };
+
+// Back/forward moves the URL under us; the list follows it. Our own syncQuery() writes the state
+// that is already loaded, so the guard below keeps that from firing a second identical request.
+watch(() => route.query, (query) => {
+  // Navigating away (to a video, say) also swaps route.query out from under this watcher.
+  if (route.name !== 'Videos') return;
+
+  const urlPage = Math.max(Number(query.page) || 1, 1);
+  const urlSearch = typeof query.q === 'string' ? query.q : '';
+
+  if (urlPage === page.value && urlSearch === search.value) return;
+
+  page.value = urlPage;
+  search.value = urlSearch;
+  fetchVideos();
+});
 
 const formatDate = (dateString: string): string => {
   const date = new Date(dateString);
@@ -140,19 +177,20 @@ onUnmounted(() => {
             <TableHead class="w-20"></TableHead>
             <TableHead>Title</TableHead>
             <TableHead>Duration</TableHead>
+            <TableHead>Size</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow v-if="loading">
-            <TableCell colspan="5" class="text-center">
+            <TableCell colspan="6" class="text-center">
               <Spinner />
               Loading videos...
             </TableCell>
           </TableRow>
           <TableRow v-else-if="videos.data.length === 0">
-            <TableCell colspan="5" class="text-center text-muted-foreground">
+            <TableCell colspan="6" class="text-center text-muted-foreground">
               No videos found
             </TableCell>
           </TableRow>
@@ -173,6 +211,8 @@ onUnmounted(() => {
               <RouterLink :to="`/videos/${video.ulid}`">{{ video.name }}</RouterLink>
             </TableCell>
             <TableCell>{{ formatSecondsToTime(video.duration) }}</TableCell>
+            <!-- Everything the video keeps on S3: the packages plus any retained renditions/source. -->
+            <TableCell>{{ formatBytes(video.size) }}</TableCell>
             <TableCell>
               <Badge :variant="video.status === 'completed' ? 'default' : 'outline'">
                 <Spinner v-if="video.status === 'running'" />
@@ -188,7 +228,7 @@ onUnmounted(() => {
       </Table>
 
       <div v-if="videos.total > videos.perPage" class="py-4">
-        <Pagination v-slot="{ page: currentPage }" :items-per-page="videos.perPage" :total="videos.total" :default-page="page" @update:page="onPageChange">
+        <Pagination v-slot="{ page: currentPage }" :items-per-page="videos.perPage" :total="videos.total" :page="page" @update:page="onPageChange">
           <PaginationContent v-slot="{ items }">
             <PaginationPrevious />
             <template v-for="(item, index) in items" :key="index">

@@ -22,7 +22,8 @@ import {
 import TemplateService from '@/services/TemplateService'
 type Template = App.Data.TemplateData
 type TemplatePreset = App.Data.TemplatePresetData
-import { Edit, MoreVertical, Plus, Download } from '@lucide/vue'
+import { Copy, Edit, GripVertical, MoreVertical, Plus, Download } from '@lucide/vue'
+import { Switch } from '@/components/ui/switch'
 import DeleteTemplateButton from './components/DeleteTemplateButton.vue'
 import { toast } from 'vue-sonner'
 
@@ -32,6 +33,7 @@ const presets = ref<TemplatePreset[]>([])
 const loading = ref(true)
 const loadingPresets = ref(true)
 const adoptingSlug = ref<string | null>(null)
+const duplicatingUlid = ref<string | null>(null)
 
 const fetchTemplates = async () => {
   try {
@@ -66,6 +68,90 @@ const adoptPreset = async (slug: string) => {
     toast.error('Failed to add template')
   } finally {
     adoptingSlug.value = null
+  }
+}
+
+/**
+ * A template that videos were encoded with can never be deleted, so retiring one is how it leaves
+ * the picker. Applied optimistically — the switch has to feel immediate — and rolled back if the
+ * request fails.
+ */
+const toggleEnabled = async (template: Template, enabled: boolean) => {
+  const previous = template.enabled
+  template.enabled = enabled
+
+  try {
+    await TemplateService.setEnabled(template.ulid, enabled)
+    toast.success(enabled ? 'Template enabled' : 'Template disabled: new uploads can no longer use it')
+  } catch (error) {
+    console.error('Error updating template:', error)
+    template.enabled = previous
+    toast.error('Failed to update the template')
+  }
+}
+
+const handleDuplicate = async (template: Template) => {
+  try {
+    duplicatingUlid.value = template.ulid
+    const copy = await TemplateService.duplicate(template.ulid)
+    toast.success(`Created "${copy.name}"`)
+    await fetchTemplates()
+  } catch (error) {
+    console.error('Error duplicating template:', error)
+    toast.error('Failed to duplicate the template')
+  } finally {
+    duplicatingUlid.value = null
+  }
+}
+
+// --- Ordering (drag and drop) ---
+// Rows are only draggable while their grip is held: a row-wide `draggable` swallows the text
+// selection and the clicks on the actions menu.
+const draggingUlid = ref<string | null>(null)
+const dragIndex = ref<number | null>(null)
+const dropIndex = ref<number | null>(null)
+
+const onDragStart = (index: number, event: DragEvent) => {
+  dragIndex.value = index
+
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move'
+    // Firefox will not start a drag at all unless some payload is attached.
+    event.dataTransfer.setData('text/plain', String(index))
+  }
+}
+
+const onDragOver = (index: number) => {
+  if (dragIndex.value !== null) dropIndex.value = index
+}
+
+const onDragEnd = () => {
+  draggingUlid.value = null
+  dragIndex.value = null
+  dropIndex.value = null
+}
+
+const onDrop = async (index: number) => {
+  const from = dragIndex.value
+  onDragEnd()
+
+  if (from === null || from === index) return
+
+  const previous = [...templates.value]
+  const next = [...templates.value]
+  const [moved] = next.splice(from, 1)
+  if (!moved) return
+
+  next.splice(index, 0, moved)
+  templates.value = next
+
+  try {
+    // The response is the stored order, so a concurrent change elsewhere lands here too.
+    templates.value = await TemplateService.reorder(next.map(template => template.ulid))
+  } catch (error) {
+    console.error('Error reordering templates:', error)
+    templates.value = previous
+    toast.error('Failed to save the new order')
   }
 }
 
@@ -124,20 +210,22 @@ onMounted(() => {
       <Table>
         <TableHeader class="bg-muted sticky top-0 z-10">
           <TableRow>
+            <TableHead class="w-10"></TableHead>
             <TableHead>Name</TableHead>
+            <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
             <TableHead class="text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           <TableRow v-if="loading">
-            <TableCell colspan="4" class="text-center">
+            <TableCell colspan="5" class="text-center">
               <Spinner />
               Loading templates...
             </TableCell>
           </TableRow>
           <TableRow v-else-if="templates.length === 0">
-            <TableCell colspan="4" class="text-center text-muted-foreground py-8">
+            <TableCell colspan="5" class="text-center text-muted-foreground py-8">
               <div class="flex flex-col items-center gap-2">
                 <p>No templates found</p>
                 <Button variant="outline" size="sm" @click="handleCreate">
@@ -147,9 +235,46 @@ onMounted(() => {
               </div>
             </TableCell>
           </TableRow>
-          <TableRow v-else v-for="template in templates" :key="template.ulid" class="cursor-pointer hover:bg-muted/50">
-            <TableCell class="font-medium">
+          <TableRow
+            v-else
+            v-for="(template, index) in templates"
+            :key="template.ulid"
+            :draggable="draggingUlid === template.ulid"
+            class="hover:bg-muted/50"
+            :class="[
+              dragIndex === index ? 'opacity-50' : '',
+              dropIndex === index && dragIndex !== index ? 'border-t-2 border-primary' : '',
+            ]"
+            @dragstart="onDragStart(index, $event)"
+            @dragover.prevent="onDragOver(index)"
+            @drop.prevent="onDrop(index)"
+            @dragend="onDragEnd"
+          >
+            <TableCell>
+              <button
+                type="button"
+                class="cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing"
+                aria-label="Reorder template"
+                @mousedown="draggingUlid = template.ulid"
+                @mouseup="draggingUlid = null"
+              >
+                <GripVertical :size="16" />
+              </button>
+            </TableCell>
+            <TableCell class="font-medium" :class="template.enabled ? '' : 'text-muted-foreground'">
               {{ template.name }}
+            </TableCell>
+            <TableCell>
+              <div class="flex items-center gap-2">
+                <Switch
+                  :model-value="template.enabled"
+                  :aria-label="template.enabled ? 'Disable template' : 'Enable template'"
+                  @update:model-value="toggleEnabled(template, $event)"
+                />
+                <span class="text-sm text-muted-foreground">
+                  {{ template.enabled ? 'Enabled' : 'Disabled' }}
+                </span>
+              </div>
             </TableCell>
             <TableCell>
               {{ formatDate(template.createdAt) }}
@@ -165,6 +290,10 @@ onMounted(() => {
                   <DropdownMenuItem @click="handleEdit(template)">
                     <Edit :size="16" class="mr-2" />
                     Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem :disabled="duplicatingUlid === template.ulid" @click="handleDuplicate(template)">
+                    <Copy :size="16" class="mr-2" />
+                    Duplicate
                   </DropdownMenuItem>
                   <DeleteTemplateButton :template="template" @deleted="handleDeleteSuccess" />
                 </DropdownMenuContent>

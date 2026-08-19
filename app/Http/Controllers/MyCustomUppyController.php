@@ -227,8 +227,10 @@ class MyCustomUppyController extends Controller
             'metadata.template' => [
                 'required',
                 'ulid',
+                // Disabled templates are retired, not deleted (they cannot be deleted once a video
+                // uses them), so they must not be selectable for a new upload either.
                 Rule::exists('templates', 'ulid')->where(function ($query) use ($project) {
-                    return $query->where('project_id', $project->id);
+                    return $query->where('project_id', $project->id)->where('enabled', true);
                 }),
             ],
             'metadata.externalUserId' => 'nullable|string|max:255',

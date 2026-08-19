@@ -9,10 +9,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Str;
+use Spatie\EloquentSortable\Sortable;
+use Spatie\EloquentSortable\SortableTrait;
 
-class Template extends Model
+class Template extends Model implements Sortable
 {
-    use BuildsArguments;
+    use BuildsArguments, SortableTrait;
 
     /** Marker for "encodes on the CPU queue", the counterpart of a node's GPU accel. */
     public const CPU = 'cpu';
@@ -20,19 +22,34 @@ class Template extends Model
     protected $fillable = [
         'name',
         'query',
+        'enabled',
         'keep_processed_files',
         'keep_original',
         'user_id',
         'project_id',
     ];
 
+    // The column default alone leaves a just-created model with `enabled` unset in memory, and the
+    // store/duplicate responses are built from that instance — they reported a template as disabled
+    // the moment it was created.
+    protected $attributes = [
+        'enabled' => true,
+    ];
+
     protected function casts()
     {
         return [
             'query' => 'json',
+            'enabled' => 'boolean',
             'keep_processed_files' => 'boolean',
             'keep_original' => 'boolean',
         ];
+    }
+
+    /** Hand ordering, per project: the only scope a template is ever listed in. */
+    public function buildSortQuery(): Builder
+    {
+        return static::query()->where('project_id', $this->project_id);
     }
 
     protected static function boot()
