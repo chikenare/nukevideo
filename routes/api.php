@@ -58,6 +58,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::post('template-presets/{slug}/adopt', [TemplateController::class, 'adoptPreset']);
         Route::get('templates', [TemplateController::class, 'index']);
         Route::post('templates', [TemplateController::class, 'store']);
+        // Before the {template} routes: `reorder` is not a ULID, but the router would still try.
+        Route::post('templates/reorder', [TemplateController::class, 'reorder']);
+        Route::post('templates/{template}/duplicate', [TemplateController::class, 'duplicate']);
         Route::get('templates/{template}', [TemplateController::class, 'show']);
         Route::match(['put', 'patch'], 'templates/{template}', [TemplateController::class, 'update']);
         Route::delete('templates/{template}', [TemplateController::class, 'destroy']);

@@ -48,8 +48,10 @@ const handleTemplateChange = (value: AcceptableValue) => {
   }
 }
 
+// Retired templates are refused by the upload endpoints, so offering one here would only produce a
+// 422 at the worst possible moment. Filtered by the API, not here: the panel is not the only client.
 const getTemplates = async () => {
-  templates.value = await TemplateService.index()
+  templates.value = await TemplateService.index({ enabled: true })
 }
 
 onMounted(getTemplates)

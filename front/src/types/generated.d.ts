@@ -34,6 +34,13 @@ provider: App.Enums.CdnDriver,
 selfHosted: App.Data.SelfHostedConfigData,
 bunny: App.Data.BunnyConfigData,
 };
+export type DownloadLinkData = {
+url: string,
+expiresAt: string,
+filename: string,
+type: string,
+size: number | null,
+};
 export type NodeData = {
 id: number,
 uuid: string,
@@ -116,6 +123,7 @@ export type TemplateData = {
 ulid: string,
 name: string,
 query: Record<string, any>,
+enabled: boolean,
 keepProcessedFiles: boolean,
 keepOriginal: boolean,
 commands: string[],
@@ -281,6 +289,9 @@ privateKey: string,
 };
 }
 namespace Stream {
+export type DownloadStreamData = {
+tid: string | null,
+};
 export type UpdateStreamData = {
 name: string,
 language: string | null,
@@ -289,14 +300,19 @@ hearingImpaired: boolean | null,
 };
 }
 namespace Template {
+export type ReorderTemplatesData = {
+ulids: string[],
+};
 export type StoreTemplateData = {
 name: string,
+enabled?: boolean,
 keepProcessedFiles?: boolean,
 keepOriginal?: boolean,
 query: Record<string, any>,
 };
 export type UpdateTemplateData = {
 name?: string,
+enabled?: boolean,
 keepProcessedFiles?: boolean,
 keepOriginal?: boolean,
 query: Record<string, any>,

@@ -14,6 +14,7 @@ class UpdateTemplateData extends RequestData
 {
     public function __construct(
         public string|Optional $name,
+        public bool|Optional $enabled,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $keepProcessedFiles,
         #[MapInputName(CamelCaseMapper::class)]
@@ -26,6 +27,7 @@ class UpdateTemplateData extends RequestData
     {
         return [
             'name' => 'sometimes|string|max:255',
+            'enabled' => 'sometimes|boolean',
             'keepProcessedFiles' => 'sometimes|boolean',
             'keepOriginal' => 'sometimes|boolean',
             // Both halves are needed. `required_with` alone still lets `query: []` through:

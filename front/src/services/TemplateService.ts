@@ -5,8 +5,9 @@ class TemplateService {
 
   constructor(private api = apiClient) { }
 
-  async index(): Promise<App.Data.TemplateData[]> {
-    const res = await this.api.get(this.BASE_PATH)
+  /** Omitting `enabled` lists every template, retired ones included — what the panel manages. */
+  async index(params?: { enabled?: boolean }): Promise<App.Data.TemplateData[]> {
+    const res = await this.api.get(this.BASE_PATH, { params })
     return res.data.data
   }
 
@@ -22,6 +23,22 @@ class TemplateService {
 
   async update(ulid: string, data: App.Data.Template.UpdateTemplateData) {
     return this.api.put(`${this.BASE_PATH}/${ulid}`, data)
+  }
+
+  /** Retire or bring back a template without touching the rest of its configuration. */
+  async setEnabled(ulid: string, enabled: boolean) {
+    return this.api.patch(`${this.BASE_PATH}/${ulid}`, { enabled })
+  }
+
+  async duplicate(ulid: string): Promise<App.Data.TemplateData> {
+    const res = await this.api.post(`${this.BASE_PATH}/${ulid}/duplicate`)
+    return res.data.data
+  }
+
+  /** The full list in display order — the API renumbers from it, so a partial list is not valid. */
+  async reorder(ulids: string[]): Promise<App.Data.TemplateData[]> {
+    const res = await this.api.post(`${this.BASE_PATH}/reorder`, { ulids })
+    return res.data.data
   }
 
   async destroy(ulid: string) {

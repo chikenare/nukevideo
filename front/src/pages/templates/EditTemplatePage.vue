@@ -27,6 +27,7 @@ const isEdit = computed(() => !!route.params.id)
 const pageTitle = computed(() => isEdit.value ? 'Edit Template' : 'Create Template')
 
 const templateName = ref('')
+const enabled = ref(true)
 const keepProcessedFiles = ref(true)
 const keepOriginal = ref(false)
 const outputs = ref<TemplateOutput[]>([
@@ -71,6 +72,7 @@ const loadTemplate = async () => {
   try {
     const template: Template = await TemplateService.show(route.params.id as string)
     templateName.value = template.name
+    enabled.value = template.enabled ?? true
     keepProcessedFiles.value = template.keepProcessedFiles ?? true
     keepOriginal.value = template.keepOriginal ?? false
 
@@ -112,6 +114,7 @@ const saveTemplate = async () => {
   try {
     const data = {
       name: templateName.value,
+      enabled: enabled.value,
       keepProcessedFiles: keepProcessedFiles.value,
       keepOriginal: keepOriginal.value,
       query: {
@@ -196,6 +199,21 @@ onMounted(async () => {
               placeholder="e.g., High Quality Web, Mobile Optimized"
               class="max-w-sm"
             />
+          </div>
+
+          <div class="flex items-start gap-3 pt-4">
+            <Switch
+              id="template-enabled"
+              v-model="enabled"
+              @update:checked="enabled = $event"
+            />
+            <div class="space-y-0.5">
+              <Label for="template-enabled">Enabled</Label>
+              <p class="text-sm text-muted-foreground">
+                Offer this template to new uploads. Turn it off to retire it: videos already encoded
+                with it are untouched, and it can be turned back on at any time.
+              </p>
+            </div>
           </div>
 
           <div class="flex items-start gap-3 pt-4">

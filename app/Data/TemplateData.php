@@ -12,6 +12,8 @@ class TemplateData extends Data
         public string $name,
         /** @var array<string, mixed> */
         public array $query,
+        // Disabled templates stay listed in the panel but are no longer offered to new uploads.
+        public bool $enabled,
         public bool $keepProcessedFiles,
         public bool $keepOriginal,
         /** @var string[] */
@@ -26,6 +28,7 @@ class TemplateData extends Data
             ulid: $template->ulid,
             name: $template->name,
             query: $template->query ?? [],
+            enabled: (bool) $template->enabled,
             keepProcessedFiles: (bool) $template->keep_processed_files,
             keepOriginal: (bool) $template->keep_original,
             commands: $template->buildCommands(),
