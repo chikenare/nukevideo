@@ -6,6 +6,7 @@ use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
 use App\Models\Video;
+use App\Services\ChunkPlanner;
 use App\Services\CreateVideoStreamsService;
 use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
@@ -46,35 +47,6 @@ class PrepareVideoJob implements ShouldQueue
     // Must stay under the queue's retry_after (NodeService exports REDIS_QUEUE_RETRY_AFTER=1850
     // to workers) or the job is re-delivered mid-run and two attempts race on the local scratch.
     public $timeout = 1800;
-
-    // Chunk-window sizing. A single ProcessChunkJob pass must finish well inside the per-chunk
-    // timeout, and its wall-time scales ~linearly with pixels/frame × fps — for BOTH ends: it
-    // decodes a window of the source and encodes one rendition out of it. So we hold that workload
-    // near the reference (a 1080p source encoded to a 1080p rendition, 30fps, REF_WINDOW seconds)
-    // and shrink the window as either end's resolution/fps climb — a 4K/8K master gets proportionally
-    // shorter windows instead of blowing the timeout even when its top rendition is only 1080p.
-    // Floored/capped so fan-out and parallelism stay sane.
-    private const REF_PIXELS = 1920 * 1080;
-
-    private const REF_FPS = 30.0;
-
-    private const REF_WINDOW = 120.0;
-
-    private const MIN_WINDOW = 8;
-
-    private const MAX_WINDOW = 300;
-
-    // Decoding a pixel is far cheaper than encoding one; weight the source side accordingly.
-    private const DECODE_WEIGHT = 0.25;
-
-    // Above this, `avg_frame_rate` is a VFR container lying (1000/1 and friends), not a real rate.
-    // Public because every consumer of a probed rate has to apply the same disbelief — see
-    // {@see \App\Services\CreateVideoStreamsService::deriveGopSize()}.
-    public const MAX_FPS = 120.0;
-
-    // Held past the last video packet so `-to` keeps that frame whole, and short enough to stay
-    // inside the truncation guard's tolerance.
-    private const TAIL_SLACK = 0.5;
 
     // Light orchestration queue every worker drains (thumbnail/storyboard/sidecar); the heavy
     // chunk transcode fans out per-hardware via Stream::encodeQueue(), not this queue.
@@ -133,7 +105,7 @@ class PrepareVideoJob implements ShouldQueue
         return Storage::disk('chunks')->temporaryUrl($mirrorPath, now()->addHours(6));
     }
 
-    public function handle(CreateVideoStreamsService $streamsService): void
+    public function handle(CreateVideoStreamsService $streamsService, ChunkPlanner $planner): void
     {
         $video = Video::find($this->videoId);
 
@@ -216,7 +188,7 @@ class PrepareVideoJob implements ShouldQueue
 
             $this->resolveRenditions($video, $localPath);
 
-            $windows = $this->planWindows($video, $localPath);
+            $windows = $this->planWindows($video, $localPath, $planner);
 
             if (empty($windows)) {
                 throw new RuntimeException("Segment planner produced no windows for video {$this->videoId}");
@@ -269,7 +241,7 @@ class PrepareVideoJob implements ShouldQueue
         foreach ($video->streams()->where('type', 'video')->get() as $stream) {
             (new PerTitleCrfService($stream))->apply($localPath, $duration, $tick);
             (new QualityBitrateProbe($stream))->measure($localPath, $duration, $tick);
-            (new RenditionPreflight($stream))->assert($localPath, $tick);
+            (new RenditionPreflight($stream))->assert($localPath, $duration, $tick);
         }
     }
 
@@ -279,7 +251,7 @@ class PrepareVideoJob implements ShouldQueue
      *
      * @return list<array{0:float,1:float}> ordered [start, end] windows in seconds
      */
-    private function planWindows(Video $video, string $localPath): array
+    private function planWindows(Video $video, string $localPath, ChunkPlanner $planner): array
     {
         $command = ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
             '-show_entries', 'packet=pts_time,flags', '-of', 'csv=p=0', $localPath];
@@ -293,121 +265,21 @@ class PrepareVideoJob implements ShouldQueue
             throw new RuntimeException($process->errorOutput());
         }
 
-        return self::windowsFromPackets($process->output(), (float) $video->duration, $this->chunkSeconds($video));
-    }
+        $plan = $planner->plan($video, $process->output(), (float) $video->duration);
+        $context = ['video' => $this->videoId] + $plan->context();
 
-    /**
-     * Pure window planning off the packet probe: keyframe-aligned blocks that stop where the VIDEO
-     * track does. Static so it's covered without a DB round-trip or a real probe.
-     *
-     * `$containerDuration` is the video's stored duration, which ffprobe reads off the container —
-     * i.e. the LONGEST track. An MKV whose audio runs past the picture (common) would otherwise get
-     * a last window asking for video that isn't there, and ProcessChunkJob's truncation guard would
-     * reject that complete encode on every retry. The last packet is the picture's real end.
-     *
-     * @return list<array{0:float,1:float}> ordered [start, end] windows in seconds
-     */
-    public static function windowsFromPackets(string $probeOutput, float $containerDuration, int $chunkSeconds): array
-    {
-        $keyTimes = [];
-        $lastPacket = 0.0;
-
-        foreach (explode("\n", trim($probeOutput)) as $line) {
-            // Each line is "<pts_time>,<flags>", e.g. "12.345000,K__".
-            [$time, $flags] = array_pad(explode(',', $line), 2, '');
-
-            if ($time === '' || $time === 'N/A') {
-                continue;
-            }
-
-            // B-frames put packets out of order, so the tail is the max, not the last line.
-            $lastPacket = max($lastPacket, (float) $time);
-
-            if (str_contains($flags, 'K')) {
-                $keyTimes[] = (float) $time;
-            }
+        // Said here or not at all: when a chunk overruns the per-chunk timeout, the first question
+        // is what window it was handed and why, and by then the streams it was sized from are gone.
+        if ($plan->withinBudget()) {
+            Log::info('Windows planned', $context);
+        } else {
+            // Not a failure: the chunks may still finish, and refusing the video over an estimate
+            // would hand it to `videos:prune`. But nothing downstream can size these windows any
+            // smaller, so a timeout here is the planner's doing and the log has to say so.
+            Log::warning('Windows exceed their sizing budget', $context);
         }
 
-        sort($keyTimes);
-
-        $end = $lastPacket > 0.0
-            ? min($containerDuration, $lastPacket + self::TAIL_SLACK)
-            : $containerDuration;
-
-        return self::groupKeyframes($keyTimes, $end, $chunkSeconds);
-    }
-
-    /**
-     * Window length (seconds) for THIS video. Every rendition must share the chunk boundaries, so
-     * size a window for each one — off its own pixels and the `source_*` probe meta its chunks
-     * decode ({@see CreateVideoStreamsService}) — and keep the tightest: the heaviest rendition's
-     * jobs are the ones that have to stay inside the per-chunk timeout.
-     */
-    private function chunkSeconds(Video $video): int
-    {
-        return $video->streams()->where('type', 'video')->get()
-            ->map(fn ($stream) => self::chunkWindowSeconds(
-                (int) $stream->width * (int) $stream->height,
-                (int) ($stream->meta['source_width'] ?? 0) * (int) ($stream->meta['source_height'] ?? 0),
-                (float) ($stream->meta['source_fps'] ?? 0.0),
-            ))
-            ->min() ?? (int) self::REF_WINDOW;
-    }
-
-    /**
-     * Pure window-size calc (seconds of source per chunk) for ONE rendition: scale the reference
-     * window inversely with the per-frame workload of its chunk jobs — its own pixels plus the
-     * source pixels each of them decodes — times fps, then clamp. Static so it's covered without
-     * a DB round-trip.
-     *
-     * A source probed before `source_fps` existed reports no rate; fall back to the reference one
-     * rather than stretching the window on a video whose framerate we can't see.
-     */
-    public static function chunkWindowSeconds(int $renditionPixels, int $sourcePixels, float $fps): int
-    {
-        if ($renditionPixels <= 0 && $sourcePixels <= 0) {
-            return (int) self::REF_WINDOW;
-        }
-
-        $sourcePixels = $sourcePixels > 0 ? $sourcePixels : $renditionPixels;
-        $fps = $fps > 0 && $fps <= self::MAX_FPS ? $fps : self::REF_FPS;
-
-        $pixels = $renditionPixels + $sourcePixels * self::DECODE_WEIGHT;
-        $refPixels = self::REF_PIXELS * (1 + self::DECODE_WEIGHT);
-
-        $window = self::REF_WINDOW
-            * ($refPixels / $pixels)
-            * (self::REF_FPS / $fps);
-
-        return (int) max(self::MIN_WINDOW, min(self::MAX_WINDOW, round($window)));
-    }
-
-    /**
-     * Close each block at the first keyframe >= $chunkSeconds past its start, so every
-     * boundary lands on a source keyframe and the worker's `-ss` seek decodes no partial GOP.
-     *
-     * @param  list<float>  $keyTimes
-     * @return list<array{0:float,1:float}>
-     */
-    private static function groupKeyframes(array $keyTimes, float $duration, int $chunkSeconds): array
-    {
-        if ($duration <= 0) {
-            return [];
-        }
-
-        $windows = [];
-        $start = 0.0;
-
-        foreach ($keyTimes as $t) {
-            if ($t - $start >= $chunkSeconds && $t < $duration) {
-                $windows[] = [$start, $t];
-                $start = $t;
-            }
-        }
-
-        $windows[] = [$start, $duration];
-
-        return $windows;
+        return $plan->windows;
     }
 
     /**

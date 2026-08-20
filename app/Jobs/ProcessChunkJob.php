@@ -6,6 +6,7 @@ use App\Exceptions\EncodeInterruptedException;
 use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\ChunkPlanner;
 use App\Services\ChunkProgressReporter;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
@@ -56,7 +57,12 @@ class ProcessChunkJob implements ShouldQueue
         return [new SkipIfBatchCancelled];
     }
 
-    private function ffmpegTimeout(): int
+    /**
+     * The wall time one chunk's ffmpeg may take. Public because the planner sizes windows against
+     * this exact number ({@see ChunkPlanner}) and a second copy of the arithmetic
+     * would drift from it silently — the drift only ever showing up as a timeout.
+     */
+    public static function ffmpegTimeout(): int
     {
         return (int) config('nuke.video.worker_timeout') - 120;
     }
@@ -151,7 +157,7 @@ class ProcessChunkJob implements ShouldQueue
 
         $progress = new ChunkProgressReporter($outputs, $this->chunkIndex, $this->streamId, $windowDuration);
 
-        $process = Process::timeout($this->ffmpegTimeout())->run(
+        $process = Process::timeout(self::ffmpegTimeout())->run(
             $command,
             function (string $_type, string $output) use ($video, $progress) {
                 $this->heartbeat($video);

@@ -1,5 +1,19 @@
 <?php
 
+// Relative encode cost of the libx264/libx265 preset ladder, against `medium` = 1.0. Both
+// encoders trade speed for quality on roughly the same curve at each rung, so they share it.
+$x26xPresetCost = [
+    'ultrafast' => 0.15,
+    'superfast' => 0.2,
+    'veryfast' => 0.3,
+    'faster' => 0.5,
+    'fast' => 0.75,
+    'medium' => 1.0,
+    'slow' => 1.8,
+    'slower' => 3.5,
+    'veryslow' => 6.0,
+];
+
 return [
 
     // The GPU family THIS worker node has, exported per node by NodeService. Null on CPU-only nodes
@@ -7,6 +21,17 @@ return [
     // sample themselves (probe, preflight) can only do it where the hardware is.
     'node_accel' => env('NODE_ACCEL'),
 
+    // `encode_cost` is what an encoder costs in wall time per pixel, relative to the reference the
+    // chunk windows are sized against (libx264 `medium` = 1.0), and `preset_cost` moves it along
+    // that encoder's own speed ladder. PrepareVideoJob divides the window by the product, because
+    // a window is only ever "150 seconds of source" to the planner — to the ffmpeg process that has
+    // to finish it inside the per-chunk timeout it is 150 seconds of THIS encoder, and SVT-AV1 and
+    // x264 are an order of magnitude apart at the same resolution.
+    //
+    // Only values above 1.0 change anything: the planner never stretches a window past the
+    // reference, so a hardware encoder being 4x faster than x264 buys nothing here and is left at
+    // 1.0 rather than carrying a number that does nothing. Calibrate against x264 `medium` at
+    // 1080p if you add a codec; being 2x out is harmless, being 10x out is what this exists for.
     'codecs' => [
         // ========== VIDEO CODECS ==========
         [
@@ -17,6 +42,9 @@ return [
             // Output muxer (`-f`) used when encoding this codec; see EncodeCommandBuilder.
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
+            'encode_cost' => 1.0,
+            'preset_parameter' => 'preset',
+            'preset_cost' => $x26xPresetCost,
         ],
         [
             'codec' => 'libx265',
@@ -25,6 +53,10 @@ return [
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
+            // x265 `medium` runs roughly 4x the wall time of x264 `medium` over the same pixels.
+            'encode_cost' => 4.0,
+            'preset_parameter' => 'preset',
+            'preset_cost' => $x26xPresetCost,
         ],
         [
             'codec' => 'libsvtav1',
@@ -33,11 +65,46 @@ return [
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
+
+            // Measured, not guessed: a 1080p10 preset-6 chunk on a 16-core CPU node held ~7.5 fps
+            // against ~62 fps for the same window at x264 `medium` on the same box, both under the
+            // node's full encode concurrency. The ladder is anchored on preset 6 = 1.0 and follows
+            // SVT-AV1's own step behaviour: near-doubling per step at the fast end, steeper at the
+            // slow end. Presets 0-2 stay pathological whatever we put here — they bottom out at
+            // MIN_WINDOW and still want more than the per-chunk timeout, so read the ladder as a
+            // guard over the usable range, not as a licence to encode a feature film at preset 0.
+            //
+            // A variant that omits the rung takes the base — preset 6 — while ffmpeg would hand
+            // SVT-AV1 its own, faster default, so the window comes out shorter than it strictly
+            // needs to be. That is the direction to be wrong in: a short window costs fan-out, a
+            // long one costs the whole video.
+            'encode_cost' => 10.0,
+            'preset_parameter' => 'svtav1_preset',
+            'preset_cost' => [
+                0 => 22.0,
+                1 => 14.0,
+                2 => 8.0,
+                3 => 4.5,
+                4 => 2.6,
+                5 => 1.6,
+                6 => 1.0,
+                7 => 0.7,
+                8 => 0.45,
+                9 => 0.3,
+                10 => 0.2,
+                11 => 0.12,
+                12 => 0.08,
+                13 => 0.05,
+            ],
         ],
 
         // ========== GPU VIDEO CODECS ==========
         // `accel` routes the rendition's chunk jobs to nodes with that hardware
         // (absent/null = CPU, any worker). See ChunkTranscodeService::accelForCodec().
+        //
+        // All six are far cheaper per pixel than the reference, but the planner never stretches a
+        // window past it — so they sit at 1.0 and carry no preset ladder: even the slowest QSV or
+        // NVENC preset finishes a reference window nowhere near the per-chunk timeout.
         [
             'codec' => 'h264_qsv',
             'type' => 'video',
@@ -46,6 +113,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'intel',
+            'encode_cost' => 1.0,
         ],
         [
             'codec' => 'hevc_qsv',
@@ -55,6 +123,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'intel',
+            'encode_cost' => 1.0,
         ],
         [
             'codec' => 'av1_qsv',
@@ -64,6 +133,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'intel',
+            'encode_cost' => 1.0,
         ],
         [
             'codec' => 'h264_nvenc',
@@ -73,6 +143,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'nvidia',
+            'encode_cost' => 1.0,
         ],
         [
             'codec' => 'hevc_nvenc',
@@ -82,6 +153,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'nvidia',
+            'encode_cost' => 1.0,
         ],
         [
             'codec' => 'av1_nvenc',
@@ -91,6 +163,7 @@ return [
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
             'accel' => 'nvidia',
+            'encode_cost' => 1.0,
         ],
 
         // ========== AUDIO CODECS ==========

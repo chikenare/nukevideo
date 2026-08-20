@@ -559,7 +559,7 @@ class CreateVideoStreamsService
         // GOP of thousands of frames — the packager can only cut on a keyframe, so segments would
         // stretch to a minute or more and ABR switching would be gone. Treat it as unknown, the
         // same disbelief the window planner already applies to the same number.
-        if ($fps <= 0 || $fps > PrepareVideoJob::MAX_FPS) {
+        if ($fps <= 0 || $fps > ChunkPlanner::MAX_FPS) {
             return null;
         }
 

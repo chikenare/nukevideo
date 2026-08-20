@@ -60,6 +60,10 @@ class SampleEncode
             $start + $seconds,
         );
 
+        // Wall time is measured here rather than by the callers: this is the one place the real
+        // chunk command runs against real footage before the fan-out commits to a window length.
+        $startedAt = microtime(true);
+
         try {
             $result = Process::timeout(self::TIMEOUT)->run($command, fn () => $tick ? $tick() : null);
 
@@ -68,11 +72,12 @@ class SampleEncode
                 $result->successful(),
                 (int) (@filesize($path) ?: 0),
                 trim($result->errorOutput() ?: $result->output()),
+                microtime(true) - $startedAt,
             );
         } catch (ProcessTimedOutException) {
             Log::warning('Sample encode timed out', ['stream' => $this->stream->id, 'start' => $start]);
 
-            return new SampleResult($command, false, 0, 'Sample encode timed out');
+            return new SampleResult($command, false, 0, 'Sample encode timed out', microtime(true) - $startedAt);
         } finally {
             @unlink($path);
         }
