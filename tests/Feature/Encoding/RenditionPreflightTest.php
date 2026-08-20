@@ -73,3 +73,48 @@ it('skips a rendition this node has no hardware for, leaving it to its own chunk
 
     Process::assertNothingRan();
 })->with(['CPU-only node' => null, 'the other GPU family' => 'nvidia']);
+
+describe('where the second comes from', function () {
+    it('samples the middle, so the one encode an ABR rendition ever measures is representative', function () {
+        // Neither PerTitleCrfService nor QualityBitrateProbe runs for a variant that pins
+        // constant_bitrate, so for those this second is the whole evidence ChunkPlanner gets. The
+        // opening is the cheapest second of most files and would read as a rendition twice as fast
+        // as it is.
+        fakeWritingEncoder();
+
+        (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv', 3600.0);
+
+        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 1800.0000 -to 1801.0000'));
+    });
+
+    it('keeps to the opening when the caller could not say how long the source is', function () {
+        fakeWritingEncoder();
+
+        (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv');
+
+        Process::assertRan(fn ($process) => str_contains($process->command, '-ss 0.0000 -to 1.0000'));
+    });
+
+    it('never seeks past what a short clip actually holds', function (float $duration, string $window) {
+        fakeWritingEncoder();
+
+        (new RenditionPreflight(preflightStream(qualityTemplate('libx264'))))->assert(sys_get_temp_dir().'/src.mkv', $duration);
+
+        Process::assertRan(fn ($process) => str_contains($process->command, $window));
+    })->with([
+        'a clip with no room for the sample anywhere but the start' => [1.0, '-ss 0.0000 -to 1.0000'],
+        'a clip shorter than the sample' => [0.4, '-ss 0.0000 -to 1.0000'],
+        'a clip just long enough to move off the opening' => [4.0, '-ss 2.0000 -to 3.0000'],
+    ]);
+
+    it('records what that second cost, from where it was taken', function () {
+        fakeWritingEncoder();
+        $stream = preflightStream(qualityTemplate('libx264'));
+
+        (new RenditionPreflight($stream))->assert(sys_get_temp_dir().'/src.mkv', 3600.0);
+
+        // Process::fake() returns instantly, so the rate is ~0 and nothing is worth recording —
+        // which is itself the contract: a measurement of nothing is not evidence the encode is free.
+        expect($stream->meta)->not->toHaveKey('encode_rate');
+    });
+});

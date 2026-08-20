@@ -48,6 +48,35 @@ class ChunkTranscodeService
     }
 
     /**
+     * Wall time this rendition's encoder costs per pixel, against the reference the chunk windows
+     * are sized on (config/ffmpeg.php `encode_cost`, libx264 `medium` = 1.0). The speed preset is
+     * folded in here because it moves the cost by an order of magnitude on its own — the same
+     * encoder at two presets is not the same workload, and the window planner only gets one number.
+     *
+     * An unknown codec or a preset that isn't on the ladder falls back to the reference rather than
+     * to a guess: 1.0 reproduces the sizing this fleet ran before costs existed, which is the one
+     * behaviour we know does not regress anything.
+     */
+    public static function encodeCost(?string $codec, ?array $params = null): float
+    {
+        $entry = collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec) ?? [];
+
+        $cost = (float) ($entry['encode_cost'] ?? 1.0);
+
+        $parameter = $entry['preset_parameter'] ?? null;
+        $preset = $parameter ? data_get($params, $parameter) : null;
+        $ladder = $entry['preset_cost'] ?? [];
+
+        // Presets arrive from the template's JSON, so a name is a string and a rung is an int or
+        // its numeric string; anything else is a malformed template and takes the fallback.
+        if ((is_string($preset) || is_int($preset)) && isset($ladder[$preset])) {
+            $cost *= (float) $ladder[$preset];
+        }
+
+        return $cost > 0 ? $cost : 1.0;
+    }
+
+    /**
      * Whether this stream's encoder can run on the node executing right now. Chunk jobs are routed
      * to matching hardware by {@see Stream::encodeQueue}, but the orchestration jobs that
      * encode a sample themselves ({@see SampleEncode}) run wherever they land — and `av1_qsv` on a

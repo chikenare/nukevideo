@@ -16,6 +16,8 @@ use Throwable;
  */
 class QualityBitrateProbe
 {
+    use Concerns\RecordsEncodeRate;
+
     public function __construct(
         private Stream $stream,
     ) {}
@@ -52,9 +54,10 @@ class QualityBitrateProbe
         }
 
         try {
-            $bitrate = $this->sampleBitrate($sourcePath, $duration, $tick);
+            [$bitrate, $wall, $seconds] = $this->sampleBitrate($sourcePath, $duration, $tick);
 
             $this->stream->update(['meta' => [...$this->stream->meta ?? [], 'quality_bitrate' => $bitrate]]);
+            $this->recordEncodeRate($this->stream->refresh(), $wall, $seconds);
 
             Log::info('Quality-mode bitrate measured', [
                 'stream' => $this->stream->id,
@@ -69,12 +72,21 @@ class QualityBitrateProbe
         }
     }
 
-    /** Mean bitrate over windows spread across the runtime; a lost window costs itself, not the probe. */
-    private function sampleBitrate(string $sourcePath, float $duration, ?Closure $tick): int
+    /**
+     * Mean bitrate over windows spread across the runtime; a lost window costs itself, not the probe.
+     *
+     * The same windows also answer a second question for free: how many seconds of wall time this
+     * node spends per second of source, with this exact command on this exact footage. Nothing else
+     * in the pipeline measures that, and {@see ChunkPlanner} has only an estimate without it.
+     *
+     * @return array{0:int,1:float,2:int} mean bitrate, wall seconds spent, source seconds encoded
+     */
+    private function sampleBitrate(string $sourcePath, float $duration, ?Closure $tick): array
     {
         $sampler = new SampleEncode($this->stream, $sourcePath);
         $bytes = 0;
         $seconds = 0;
+        $wall = 0.0;
 
         foreach (SampleEncode::windows($duration) as $start) {
             $result = $sampler->run($start, SampleEncode::SECONDS, $tick);
@@ -82,6 +94,7 @@ class QualityBitrateProbe
             if ($result->wrote()) {
                 $bytes += $result->bytes;
                 $seconds += SampleEncode::SECONDS;
+                $wall += $result->wallSeconds;
             }
         }
 
@@ -89,6 +102,6 @@ class QualityBitrateProbe
             throw new RuntimeException('No sample window encoded');
         }
 
-        return (int) round($bytes * 8 / $seconds);
+        return [(int) round($bytes * 8 / $seconds), $wall, $seconds];
     }
 }

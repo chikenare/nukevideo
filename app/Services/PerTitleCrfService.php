@@ -19,6 +19,11 @@ use Throwable;
  */
 class PerTitleCrfService
 {
+    use Concerns\RecordsEncodeRate;
+
+    /** Wall time of each batch the last {@see runPool} ran, in batch order. */
+    private array $poolBatchSeconds = [];
+
     private const ANCHOR_STEP = 8;
 
     // The probe corrects the template CRF, it doesn't replace template intent — bound the swing.
@@ -139,6 +144,10 @@ class PerTitleCrfService
                 $jobs,
             ), $tick);
 
+            // Read before the VMAF pass overwrites the timings: a batch runs concurrently, so its
+            // wall time is one encode's, not the sum — which is the number a chunk will live by.
+            $this->recordSampledRate();
+
             // Only score what actually encoded; a lost sample costs its window, not the probe.
             $encoded = array_keys(array_filter($encodes, fn (?string $output) => $output !== null));
 
@@ -234,8 +243,11 @@ class PerTitleCrfService
     private function runPool(array $commands, Closure $tick): array
     {
         $outputs = [];
+        $this->poolBatchSeconds = [];
 
         foreach (array_chunk($commands, self::MAX_CONCURRENCY) as $batch) {
+            $batchStartedAt = microtime(true);
+
             try {
                 $results = Process::pool(function (Pool $pool) use ($batch) {
                     foreach ($batch as $command) {
@@ -243,8 +255,19 @@ class PerTitleCrfService
                     }
                 })->start(fn () => $tick())->wait();
 
+                $succeeded = 0;
+
                 foreach ($results->collect() as $result) {
                     $outputs[] = $result->successful() ? $result->output().$result->errorOutput() : null;
+                    $succeeded += $result->successful() ? 1 : 0;
+                }
+
+                // Only a batch where everything ran to completion is worth timing. A timeout would
+                // clock SampleEncode::TIMEOUT instead of the encode — 15x the real cost per source
+                // second — and since the highest reading wins, one stuck sample would poison the
+                // rate for the whole rendition. A batch that failed fast lies the other way.
+                if ($succeeded === count($batch)) {
+                    $this->poolBatchSeconds[] = microtime(true) - $batchStartedAt;
                 }
             } catch (ProcessTimedOutException) {
                 // The pool surfaces a timeout as a throw, so the batch's other results go with it.
@@ -258,6 +281,22 @@ class PerTitleCrfService
         }
 
         return $outputs;
+    }
+
+    /**
+     * Mean batch wall time as a per-encode cost. The batches run {@see MAX_CONCURRENCY} encodes at
+     * once, so a batch takes as long as its slowest member rather than the sum — which makes this
+     * the cost of one encode with company, the same shape a chunk job runs in.
+     */
+    private function recordSampledRate(): void
+    {
+        $batches = array_filter($this->poolBatchSeconds, fn (float $seconds) => $seconds > 0.0);
+
+        if (! $batches) {
+            return;
+        }
+
+        $this->recordEncodeRate($this->stream, array_sum($batches) / count($batches), SampleEncode::SECONDS);
     }
 
     private function shouldProbe(?string $crfKey, float $duration): bool
