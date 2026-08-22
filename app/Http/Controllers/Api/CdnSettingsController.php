@@ -29,7 +29,7 @@ class CdnSettingsController extends Controller
 
             'selfHosted' => [Rule::requiredIf($selfHostedActive), 'array'],
             'selfHosted.tokenSecret' => ['nullable', 'string'],
-            'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string'],
+            'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
             'selfHosted.secureTokenExpires' => [Rule::requiredIf($selfHostedActive), 'string'],
             'selfHosted.secureTokenQueryExpires' => [Rule::requiredIf($selfHostedActive), 'string'],

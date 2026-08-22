@@ -246,3 +246,32 @@ describe('vector placement', function () {
             ->and($matches[0])->not->toContain('AWS_SECRET_ACCESS_KEY=');
     });
 });
+
+describe('edge token settings', function () {
+    it('hands the proxy the query argument the signer actually writes', function () {
+        // The name is one setting read by two sides: `SelfHostedProvider` signs `?<name>=...` and
+        // the edge's nginx.conf validates `$arg_<name>`. While it was hardcoded in the template,
+        // changing it in the panel left the edge reading an argument nobody sent — a 403 on every
+        // manifest and segment, with only the unsigned assets still served.
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'token_name' => 'nv_token']],
+        ]);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+        );
+
+        expect($env)->toContain('VOD_TOKEN_NAME=nv_token');
+    });
+
+    it('falls back to the akamai name both sides default to', function () {
+        fakeCdnProvider('self_hosted');
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+        );
+
+        expect($env)->toContain('VOD_TOKEN_NAME=__hdnea__');
+    });
+});

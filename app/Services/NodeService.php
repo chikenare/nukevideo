@@ -132,6 +132,7 @@ class NodeService
         $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
         $cdnEnv = [
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
+            'VOD_TOKEN_NAME' => $cdn->tokenName,
             'SECURE_TOKEN_EXPIRES_TIME' => $cdn->secureTokenExpires,
             'SECURE_TOKEN_QUERY_EXPIRES_TIME' => $cdn->secureTokenQueryExpires,
             'VOD_CACHE_MAX_SIZE' => $cdn->cacheMaxSize,

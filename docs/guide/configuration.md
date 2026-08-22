@@ -57,6 +57,7 @@ These values control token validation and local segment caching on self-hosted p
 | Variable | Default | Used in | Description |
 |----------|---------|---------|-------------|
 | `VOD_TOKEN_SECRET` | — | Proxy | Secret for signing and validating stream tokens |
+| `VOD_TOKEN_NAME` | `__hdnea__` | Proxy | Query argument carrying the token. Lowercase, digits and `_` only; changing it requires redeploying the proxy, and links already signed with the old name stop validating |
 | `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | Stream token expiration (e.g., `100d`, `24h`) |
 | `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | Query/segment token expiration |
 | `VOD_CACHE_MAX_SIZE` | `10g` | Proxy | Max size for the local segment cache |

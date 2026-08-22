@@ -108,6 +108,11 @@ onMounted(fetchSettings)
           <div class="grid gap-2">
             <Label for="sh_token_name">Token query name</Label>
             <Input id="sh_token_name" v-model="form.selfHosted.tokenName" />
+            <p class="text-sm text-muted-foreground">
+              Lowercase letters, digits and underscores. The edge reads this name from its nginx
+              config, so a change only applies once the proxy nodes are redeployed, and links
+              already signed with the previous name stop validating.
+            </p>
             <p v-if="errors['selfHosted.tokenName']" class="text-sm text-destructive">{{ errors['selfHosted.tokenName'][0] }}</p>
           </div>
           <div class="grid gap-2">
