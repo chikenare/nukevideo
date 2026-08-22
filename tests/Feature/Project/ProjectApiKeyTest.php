@@ -5,6 +5,8 @@ use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\ApiTokenService;
+use ClickHouseDB\Client;
+use ClickHouseDB\Statement;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
@@ -115,15 +117,31 @@ it('authenticates as the project, never as the owning user', function () {
         ->and(request()->user()->id)->toBe($this->project->id);
 });
 
-it('cannot reach account, usage or admin endpoints', function () {
+it('cannot reach account or admin endpoints', function () {
     $this->user->update(['is_admin' => true]);
     $key = projectKey($this->project);
 
-    foreach (['/api/me', '/api/projects', '/api/tokens', '/api/nodes', '/api/usage', '/api/analytics'] as $uri) {
+    foreach (['/api/me', '/api/projects', '/api/tokens', '/api/nodes'] as $uri) {
         $this->withToken($key)->getJson($uri)->assertForbidden();
     }
 
     $this->withToken($key)->postJson("/api/projects/{$this->project->ulid}/api-key")->assertForbidden();
+});
+
+it('reads the metrics endpoints, which is what an integrating backend holds the key for', function () {
+    // Analytics and usage used to sit behind `no-project-key` with everything else account-wide.
+    // They are the read side of the CDN logs and the upload counters — numbers written for a
+    // downstream backend to consume, which it can only do with the key it was given.
+    // {@see \Tests\Feature\Analytics\AnalyticsAccessTest} covers what that opening does and does
+    // not include.
+    $key = projectKey($this->project);
+
+    $client = Mockery::mock(Client::class);
+    $client->shouldReceive('select')->andReturn(Mockery::mock(Statement::class, fn ($mock) => $mock->shouldReceive('rows')->andReturn([])));
+    app()->instance(Client::class, $client);
+
+    $this->withToken($key)->getJson('/api/usage?from=2026-01-01&to=2026-01-31')->assertOk();
+    $this->withToken($key)->getJson('/api/analytics/queue')->assertOk();
 });
 
 it('does not let a user regenerate the key of a project they do not own', function () {

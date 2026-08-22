@@ -13,10 +13,12 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Writes a batch of aggregated bandwidth events (video_ulid + ip + bytes, already
- * aggregated by Vector) to ClickHouse `video_usage`, deriving the owning `user_id`
- * from the video in one batched lookup. No session/user metadata is involved —
- * the video and IP come straight from the edge log (the URL path + request).
+ * Writes a batch of aggregated bandwidth events to ClickHouse `usage`, the single metrics table.
+ *
+ * The video and IP come straight from the edge log (the URL path + request); the owning account and
+ * the integrator's own customer are resolved here, from the video, in one batched lookup. That
+ * resolution is the reason nothing has to travel in the URL to be trustworthy: a viewer can rewrite
+ * a link all they like and it cannot change who the bytes are billed to.
  */
 class IngestBandwidthJob implements ShouldQueue
 {
@@ -26,7 +28,29 @@ class IngestBandwidthJob implements ShouldQueue
 
     public $backoff = [10, 30, 60];
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, tid?: string}> $events */
+    /**
+     * Which metric a request counts towards, by the zone directory its path sits in
+     * ({@see Video::PLAY_DIR} and friends). Splitting delivery this way is the whole
+     * point of folding `video_usage` into `usage`: the old table had one `bytes` column and no way
+     * to tell a playback segment from a downloaded master.
+     *
+     * The unit lives in the metric name, deliberately — `value` is a shared Float64 that means
+     * seconds for `encoding_cpu` and bytes here, and nothing in the schema says which.
+     */
+    private const ZONE_METRICS = [
+        'play' => 'streaming_bytes',
+        'download' => 'download_bytes',
+        'assets' => 'asset_bytes',
+    ];
+
+    /**
+     * Delivered bytes we cannot place in a zone. They are still counted, under a generic metric,
+     * because the point of this pipeline is bandwidth: an unrecognised path costs its label, never
+     * its bytes. Also the metric the pre-merge history was carried over under.
+     */
+    private const FALLBACK_METRIC = 'bandwidth_bytes';
+
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tid?: string, zone?: string}> $events */
     public function __construct(public array $events) {}
 
     /**
@@ -42,6 +66,12 @@ class IngestBandwidthJob implements ShouldQueue
         $tid = (string) ($event['tid'] ?? '');
 
         return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
+    }
+
+    /** @param array<string, mixed> $event */
+    private function metric(array $event): string
+    {
+        return self::ZONE_METRICS[(string) ($event['zone'] ?? '')] ?? self::FALLBACK_METRIC;
     }
 
     public function handle(): void
@@ -63,7 +93,7 @@ class IngestBandwidthJob implements ShouldQueue
                 continue;
             }
 
-            $valid[] = [$videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event)];
+            $valid[] = [$videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event), $this->metric($event)];
             $ulids[$videoUlid] = true;
         }
 
@@ -71,8 +101,11 @@ class IngestBandwidthJob implements ShouldQueue
             return;
         }
 
-        // One batched lookup video_ulid -> owning user_id (0 when the video is gone).
-        $owners = Video::whereIn('ulid', array_keys($ulids))->pluck('user_id', 'ulid');
+        // One batched lookup for both attributes the log cannot carry. A video that is gone leaves
+        // its bytes under account 0 rather than dropping them.
+        $videos = Video::whereIn('ulid', array_keys($ulids))
+            ->get(['ulid', 'user_id', 'external_user_id'])
+            ->keyBy('ulid');
 
         // Ingest time, not traffic time — the ingest runs every five minutes over a window that
         // ends two minutes in the past, so the run just after midnight books the tail of the old
@@ -80,11 +113,22 @@ class IngestBandwidthJob implements ShouldQueue
         // partition key, so that slice is misattributed permanently. Prefer a date carried on the
         // event; the fallback is only for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'video_ulid', 'ip', 'bytes', 'tid'];
+        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tid', 'value'];
         $rows = [];
 
-        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid]) {
-            $rows[] = [$date ?? $ingestedOn, (int) ($owners[$videoUlid] ?? 0), $videoUlid, $ip, $bytes, $tid];
+        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid, $metric]) {
+            $video = $videos->get($videoUlid);
+
+            $rows[] = [
+                $date ?? $ingestedOn,
+                (int) ($video->user_id ?? 0),
+                $metric,
+                (string) ($video->external_user_id ?? ''),
+                $videoUlid,
+                $ip,
+                $tid,
+                $bytes,
+            ];
         }
 
         try {
@@ -92,7 +136,7 @@ class IngestBandwidthJob implements ShouldQueue
             // rule in lockstep with UsageService.
             app(Client::class)
                 ->https(! app()->isLocal())
-                ->insert('video_usage', $rows, $columns);
+                ->insert('usage', $rows, $columns);
         } catch (\Throwable $e) {
             Log::warning('Failed to ingest bandwidth batch: '.$e->getMessage());
             throw $e;
@@ -100,7 +144,7 @@ class IngestBandwidthJob implements ShouldQueue
     }
 
     /**
-     * The day the traffic actually happened, when the edge reports it. `video_usage` is a
+     * The day the traffic actually happened, when the edge reports it. `usage` is a
      * SummingMergeTree, so a row can only ever be added — a date that drifts by a few minutes at
      * a boundary is not something a later correction can take back.
      *

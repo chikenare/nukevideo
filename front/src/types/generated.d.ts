@@ -190,6 +190,7 @@ bandwidthOverTime: App.Data.Analytics.BandwidthPointData[],
 topIps: App.Data.Analytics.TopIpData[],
 topVideos: App.Data.Analytics.TopVideoData[],
 topExternalUsers: App.Data.Analytics.TopExternalUserData[],
+topTrackingIds: App.Data.Analytics.TopTrackingIdData[],
 bandwidthByVideo: App.Data.Analytics.BandwidthByVideoData[],
 encodingOverTime: App.Data.Analytics.EncodingPointData[],
 };
@@ -216,6 +217,12 @@ export type TopIpData = {
 ip: string,
 bytes: number,
 sessions: number,
+};
+export type TopTrackingIdData = {
+tid: string,
+bytes: number,
+videos: number,
+uniqueIps: number,
 };
 export type TopVideoData = {
 video: string,

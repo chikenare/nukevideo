@@ -32,6 +32,27 @@ Route::post('login', [AuthController::class, 'login'])->middleware('throttle:log
 Route::post('logout', [AuthController::class, 'logout']);
 
 Route::middleware(['auth:sanctum'])->group(function () {
+    // Read-only delivery and queue metrics, open to ANY authenticated token — a personal one or a
+    // project API key. Deliberately outside both groups below: not `no-project-key`, because
+    // reading these back is exactly what an integrating backend needs a project key for, and not
+    // `resolve.project`, because `usage` has no project column to scope to and requiring the
+    // header would only 400 a caller that has nothing to name.
+    //
+    // The trade this accepts is that the figures are instance-wide: a project key reads totals
+    // that include every other project's traffic. NukeVideo is a component other backends embed,
+    // reached server to server with a key that never leaves their infrastructure, so a tenant
+    // seeing aggregate bandwidth is not the boundary that matters here. Nothing else moved —
+    // nodes, users, CDN settings and the account surfaces stay admin-only, and neither of these
+    // endpoints reads `$request->user()`, which for a project key is a Project and not a User.
+    Route::get('analytics', [AnalyticsController::class, 'index']);
+    Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
+
+    // Upload and encoding consumption, for the same reason and with one extra step: this one IS
+    // keyed by user, so the controller resolves a project key back to the account that owns it
+    // rather than reading `$request->user()->id`, which for a Project is a project id and would
+    // have silently answered with another account's numbers — or with none.
+    Route::get('usage', [UsageController::class, 'index']);
+
     // Account-wide: these span every project, so a project API key has no business here — usage is
     // keyed by user in ClickHouse, not by project. No resolve.project either: a stale
     // X-Project-Ulid header must not 404 account endpoints.
@@ -46,8 +67,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('tokens', [ApiTokenController::class, 'index']);
         Route::post('tokens', [ApiTokenController::class, 'store']);
         Route::delete('tokens/{id}', [ApiTokenController::class, 'destroy']);
-
-        Route::get('usage', [UsageController::class, 'index']);
     });
 
     // Project-scoped: everything below works on the project named by the header/API key.
@@ -91,11 +110,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // Admin
     Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
-        // Instance-wide, not per-user: bandwidth totals, viewer IPs and the encoding queue span
-        // every tenant, and `user_id` selects whose usage to read. Admin-only, as the docs state.
-        Route::get('analytics', [AnalyticsController::class, 'index']);
-        Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
-
         Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
 
         Route::apiResource('nodes', NodeController::class);

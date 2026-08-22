@@ -61,6 +61,11 @@ fact — both answer `403`. On a self-hosted edge it rides alongside the token i
 edge scopes its signature to the path; treat it as a label you chose, never as an authorization
 input. Traffic with no id is still recorded, under an empty one.
 
+Read the bytes back per id with `topTrackingIds` on the
+[Analytics API](/api/users#bandwidth-by-tracking-id), optionally narrowed to one video. The id is
+attributed from the CDN's access log, so it lands **after** the transfer, not with the link: a
+self-hosted edge reports within seconds, a Bunny pull zone within about seven minutes.
+
 **Response:**
 
 ```json

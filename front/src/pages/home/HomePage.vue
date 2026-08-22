@@ -217,6 +217,44 @@ function formatCardValue(card: AnalyticsCard): string {
       </Card>
     </div>
 
+    <!-- Top Tracking IDs -->
+    <Card>
+      <CardHeader>
+        <CardTitle class="text-sm font-medium">Top Download Tracking IDs by Bandwidth</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Skeleton v-if="loading" class="h-64 w-full" />
+        <Table v-else-if="data?.topTrackingIds.length">
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tracking ID</TableHead>
+              <TableHead class="text-right">Videos</TableHead>
+              <TableHead class="text-right">Unique IPs</TableHead>
+              <TableHead class="text-right">Bandwidth</TableHead>
+              <TableHead class="text-right">%</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            <!-- The empty id is real traffic, not a gap: playback, and downloads minted without
+                 one. Labelled rather than hidden, so the rows add up to the total above. -->
+            <TableRow v-for="row in data.topTrackingIds" :key="row.tid || '__none__'">
+              <TableCell class="font-mono text-xs">
+                <span v-if="row.tid">{{ row.tid }}</span>
+                <span v-else class="text-muted-foreground italic">Not attributed</span>
+              </TableCell>
+              <TableCell class="text-right text-xs">{{ row.videos }}</TableCell>
+              <TableCell class="text-right text-xs">{{ row.uniqueIps }}</TableCell>
+              <TableCell class="text-right text-xs">{{ formatBytes(row.bytes) }}</TableCell>
+              <TableCell class="text-right text-xs text-muted-foreground">{{ pctOfTotal(row.bytes) }}</TableCell>
+            </TableRow>
+          </TableBody>
+        </Table>
+        <div v-else class="flex items-center justify-center h-64 text-sm text-muted-foreground">
+          No data
+        </div>
+      </CardContent>
+    </Card>
+
     <!-- Top External Users -->
     <Card>
       <CardHeader>

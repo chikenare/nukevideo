@@ -23,6 +23,7 @@ transforms:
       .ip = parsed.ip
       .bytes = to_int(parsed.bytes) ?? 0
       .video = parsed.video
+      .zone = parsed.zone
       .tid = parsed.tid
 
       if .bytes <= 0 { abort }
@@ -52,9 +53,17 @@ transforms:
       if !is_timestamp(ts) { ts = now() }
       date = format_timestamp!(ts, "%Y-%m-%d")
 
-      # Absent on every playback line and on downloads that carried no id; nginx logs it as an
-      # empty value either way, so the column's own default is what lands.
+      # `-` is nginx's marker for a variable it could not find, and a node deployed before the
+      # log format was fixed still emits it for both of these. It is not a value: a `-` tid would
+      # otherwise be stored as a real tracking id, because `-` is inside the alphabet one is
+      # allowed to use, and the unattributed bucket would split in two — '' from Bunny and '-'
+      # from the edges. A node deployed before `zone` existed sends nothing at all, which reads as
+      # null here and means the same thing: count the bytes under the generic metric.
       tid = to_string(.tid) ?? ""
+      if tid == "-" { tid = "" }
+
+      zone = to_string(.zone) ?? ""
+      if zone == "-" { zone = "" }
 
       . = {}
       .video_ulid = video
@@ -62,6 +71,7 @@ transforms:
       .bytes = bytes
       .date = date
       .tid = tid
+      .zone = zone
 
   aggregate_bandwidth_logs:
     type: reduce
@@ -74,8 +84,10 @@ transforms:
       - ip
       - date
       # Grouped on, not carried: summing across tracking ids would merge two customers' traffic
-      # into one row and lose exactly what the id was added for.
+      # into one row and lose exactly what the id was added for. Same for the zone, which decides
+      # which metric the bytes land under.
       - tid
+      - zone
     merge_strategies:
       bytes: sum
 

@@ -15,6 +15,22 @@ http {
         default                      -;
     }
 
+    # The zone directory that follows the ULID — `play`, `download`, `assets`. It is what separates
+    # streaming bytes from downloaded ones once the line reaches ClickHouse; nothing downstream can
+    # recover it from anywhere else.
+    map $uri $video_zone {
+        "~^/[0-9A-Za-z]{26}/(?<z>[a-z]+)/"  $z;
+        default                             "";
+    }
+
+    # An identity map, purely so the variable always EXISTS. nginx renders a variable it cannot
+    # find as `-`, so a plain `$arg_tid` logged `tid=-` on every request that carried no id — and
+    # `-` is inside the alphabet a tracking id is allowed to use, so it was stored as if it were
+    # one. Through a map the variable is always found, and an absent argument renders as empty.
+    map $arg_tid $bandwidth_tid {
+        default  $arg_tid;
+    }
+
     map $uri $is_manifest {
         "~\.(mpd|m3u8)$"  1;
         default           0;
@@ -26,7 +42,7 @@ http {
     # `tid` is the caller's tracking id, carried on download links so a transfer can be attributed
     # to the integrator's own customer. Empty for playback and for links that carried none — the
     # token itself is stripped before this runs, so it never leaks into the log.
-    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid tid=$arg_tid';
+    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid zone=$video_zone tid=$bandwidth_tid';
 
     access_log off;
     error_log  stderr warn;

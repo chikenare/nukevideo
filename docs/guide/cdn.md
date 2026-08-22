@@ -42,6 +42,40 @@ Bunny is configured entirely from the panel (stored in the database); it does no
 
 With the API key and pull zone ID set, the scheduler polls Bunny's [Logging API](https://bunny.net/docs/cdn/logging) every five minutes (`bunny:ingest-logs`) and feeds per-video bandwidth into the same ClickHouse analytics the self-hosted edges use.
 
+### How the log ingestion works
+
+`bunny:ingest-logs` reads `GET https://logging.bunnycdn.com/v2/pullzones/{id}/logs` and writes to the
+same `usage` table the self-hosted Vector pipeline feeds, so both providers answer the same
+[Analytics API](/api/users#analytics) and the same [Usage API](/api/users#usage).
+
+- **Window and cursor.** Each run reads from where the last one stopped up to two minutes ago, so a
+  window is only read once Bunny has finished writing it. The cursor lives in the cache; losing it
+  (a flush, a first run) falls back to a ten-minute lookback rather than a wide re-read, because
+  `usage` is a `SummingMergeTree` where a re-read would double-count.
+- **Retention.** Bunny keeps logs for **3 days** and rejects an older `from` outright. If ingestion
+  is down longer than that, the traffic in the gap is gone — there is no backfill.
+- **What is counted.** Only `2xx` responses (including `206`, which is what a resumed or ranged
+  download reports) whose path contains a video ULID. Bytes served with a `403` from an expired
+  token or a `404` are not billed to anyone.
+- **Dating.** Every line is dated by its own timestamp in UTC, not by the run, so a window that
+  straddles midnight splits across the two days instead of landing on one.
+- **Zones.** The directory after the video ULID — `play`, `download`, `assets` — decides which
+  metric the bytes land under. It is read from the logged path, the only place the distinction
+  survives; a path whose zone cannot be read still counts, under the generic `bandwidth_bytes`.
+- **Tracking ids.** The v2 log's `path` carries the query string, which is what lets a download
+  link's `tid` be attributed. See [Download a Track](/api/streams#download-a-track). An id that
+  arrives malformed costs its label, never its bytes — the line is still counted, as unattributed.
+- **Client IPs.** If the pull zone has **Log IP Anonymization** enabled (Bunny's default), Bunny
+  zeroes the last octet before you ever see the line. Bandwidth totals are unaffected, but the
+  "unique IPs" figures become an approximation. Turn it off in the Bunny panel if you need exact
+  counts.
+
+Run it by hand — to catch up after downtime, or to check the credentials — with an explicit window:
+
+```bash
+php artisan bunny:ingest-logs --from=2026-08-20T10:00:00Z
+```
+
 **Choose Bunny when** you want a global CDN without operating proxy nodes, need to scale delivery quickly, or prefer to offload edge caching and bandwidth entirely to a managed provider.
 
 ## Which Should I Use?
