@@ -28,7 +28,6 @@ function insertedRows(array $events): array
     $captured = [];
 
     $client = Mockery::mock(Client::class);
-    $client->shouldReceive('https')->andReturnSelf();
     $client->shouldReceive('insert')->andReturnUsing(function ($table, $rows) use (&$captured) {
         expect($table)->toBe('usage');
         $captured = $rows;
