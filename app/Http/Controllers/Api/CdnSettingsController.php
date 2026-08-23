@@ -33,8 +33,6 @@ class CdnSettingsController extends Controller
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
             'selfHosted.secureTokenExpires' => [Rule::requiredIf($selfHostedActive), 'string'],
             'selfHosted.secureTokenQueryExpires' => [Rule::requiredIf($selfHostedActive), 'string'],
-            'selfHosted.cacheMaxSize' => [Rule::requiredIf($selfHostedActive), 'string'],
-            'selfHosted.cacheInactive' => [Rule::requiredIf($selfHostedActive), 'string'],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -53,8 +51,6 @@ class CdnSettingsController extends Controller
                 'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
                 'secure_token_expires' => $validated['selfHosted']['secureTokenExpires'] ?? null,
                 'secure_token_query_expires' => $validated['selfHosted']['secureTokenQueryExpires'] ?? null,
-                'cache_max_size' => $validated['selfHosted']['cacheMaxSize'] ?? null,
-                'cache_inactive' => $validated['selfHosted']['cacheInactive'] ?? null,
             ], fn ($v) => $v !== null));
         }
 

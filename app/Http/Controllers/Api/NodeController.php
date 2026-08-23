@@ -2,14 +2,17 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Data\CacheDiskData;
 use App\Data\Node\StoreNodeData;
 use App\Data\Node\UpdateNodeData;
 use App\Data\NodeData;
 use App\Data\ValidationCheckData;
+use App\Enums\NodeType;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Services\DockerService;
 use App\Services\NodeService;
+use App\Services\ProxyCacheService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -58,7 +61,22 @@ class NodeController extends Controller
         // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
         $drain = request()->boolean('drain', true);
 
-        return response()->stream(function () use ($node, $drain) {
+        // Which spare disks to format into the cache pool, as the panel listed them. Absent means
+        // every one; an empty list means none — keep the cache off the disks and in a volume. The
+        // shape is checked here because a device path lands in a shell script on the node.
+        $disks = request()->validate([
+            'disks' => ['nullable', 'array'],
+            'disks.*' => ['string', 'regex:#^/dev/[a-z0-9]+$#'],
+        ])['disks'] ?? null;
+
+        // Absent from a development panel means none, not all: a dev deploy's target is often the
+        // developer's own machine, and "every spare disk" there is a backup drive. Production keeps
+        // the convenient default; the panel always sends an explicit list anyway.
+        if ($disks === null && app()->isLocal()) {
+            $disks = [];
+        }
+
+        return response()->stream(function () use ($node, $drain, $disks) {
             $send = function (string $type, string $data = '') {
                 echo 'data: '.json_encode(['type' => $type, 'data' => $data])."\n\n";
                 if (ob_get_level()) {
@@ -74,7 +92,7 @@ class NodeController extends Controller
 
                 $this->nodeService->runFullDeploy($node, function ($output) use ($send) {
                     $send('output', $output);
-                }, $drain);
+                }, $drain, $disks);
                 $send('done');
             } catch (\Throwable $e) {
                 $send('error', $e->getMessage());
@@ -94,6 +112,26 @@ class NodeController extends Controller
         $checks = $this->nodeService->runValidation($node);
 
         return response()->json(['checks' => ValidationCheckData::collect($checks)]);
+    }
+
+    /**
+     * What a deploy would do to the node's disks, so the panel can show it before running one.
+     * Only a proxy has a cache pool; a worker gets an empty list.
+     */
+    public function cacheDisks(Node $node, ProxyCacheService $cache)
+    {
+        if ($node->type !== NodeType::PROXY) {
+            return response()->json(['data' => ['preselect' => false, 'disks' => []]]);
+        }
+
+        $node->load('sshKey');
+
+        return response()->json(['data' => [
+            // Whether the panel ticks the spare disks by default. Not from a development panel,
+            // whose deploy target is often the developer's own machine.
+            'preselect' => ! app()->isLocal(),
+            'disks' => CacheDiskData::collect($cache->inventory($node)),
+        ]]);
     }
 
     public function destroy(string $id)
@@ -120,6 +158,13 @@ class NodeController extends Controller
                 if (in_array($name, $owned, true)) {
                     $docker->removeContainer($node, $name);
                 }
+            }
+
+            if ($node->type->value === 'proxy') {
+                // The fallback cache volume is the node's alone and is otherwise never reclaimed.
+                // A cache pool directory on a dedicated disk is not touched: the pool belongs to
+                // the host and is what the next node deployed there picks up.
+                $docker->removeVolume($node, ProxyCacheService::volumeFor($node));
             }
         } catch (\Throwable $e) {
             Log::error('Failed to remove containers for node', [

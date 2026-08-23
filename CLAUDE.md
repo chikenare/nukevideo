@@ -33,6 +33,7 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 │   ├── migrations/             # MariaDB in production, SQLite in tests
 │   ├── clickhouse-migrations/  # php artisan clickhouse:migrate
 │   └── settings/               # spatie/laravel-settings migrations
+├── resources/deploy/       # the node deploy, as bash; NodeService only prepends a variable header
 ├── docs/                   # VitePress (guide/ + api/)
 ├── front/                  # Vue 3 + Vite SPA (its own pnpm project)
 ├── vod/                    # delivery edge nginx (secure_token)

@@ -50,7 +50,24 @@ class IngestBandwidthJob implements ShouldQueue
      */
     private const FALLBACK_METRIC = 'bandwidth_bytes';
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tid?: string, zone?: string}> $events */
+    /**
+     * Bytes the edge had to fetch from S3 to serve a request — the cost side of the cache. Booked
+     * under account 0, the same bucket the delivery of deleted videos lands in: it is the
+     * operator's number, not the customer's, and account 0 is what `/api/usage` can never be
+     * asked for. Anything reading account 0 therefore has to filter by metric, since it holds
+     * both populations.
+     */
+    public const ORIGIN_METRIC = 'origin_bytes';
+
+    /**
+     * What nginx can say about a cache lookup. Clamped to the set rather than stored as received,
+     * because the value is parsed out of a log line: an unknown word becomes '' — "unknown" —
+     * which the hit-ratio query leaves out, and never a string that pollutes a LowCardinality
+     * dictionary. `OFF` is the download location (no cache), `BYPASS` the manifests.
+     */
+    private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
+
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tid?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
     public function __construct(public array $events) {}
 
     /**
@@ -74,6 +91,25 @@ class IngestBandwidthJob implements ShouldQueue
         return self::ZONE_METRICS[(string) ($event['zone'] ?? '')] ?? self::FALLBACK_METRIC;
     }
 
+    /** @param array<string, mixed> $event */
+    private function cacheStatus(array $event): string
+    {
+        $status = strtoupper((string) ($event['cache'] ?? ''));
+
+        return in_array($status, self::CACHE_STATUSES, true) ? $status : '';
+    }
+
+    /**
+     * The edge's node id, 0 when the line predates the field. UInt16 in the table, and a node id
+     * comes out of an auto-increment, so the clamp only guards the parse.
+     *
+     * @param  array<string, mixed>  $event
+     */
+    private function nodeId(array $event): int
+    {
+        return max(0, min(65535, (int) ($event['node'] ?? 0)));
+    }
+
     public function handle(): void
     {
         $valid = [];
@@ -93,7 +129,10 @@ class IngestBandwidthJob implements ShouldQueue
                 continue;
             }
 
-            $valid[] = [$videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event), $this->metric($event)];
+            $valid[] = [
+                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event), $this->metric($event),
+                $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)),
+            ];
             $ulids[$videoUlid] = true;
         }
 
@@ -113,10 +152,10 @@ class IngestBandwidthJob implements ShouldQueue
         // partition key, so that slice is misattributed permanently. Prefer a date carried on the
         // event; the fallback is only for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tid', 'value'];
+        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tid', 'node_id', 'cache', 'value'];
         $rows = [];
 
-        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid, $metric]) {
+        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid, $metric, $nodeId, $cache, $origin]) {
             $video = $videos->get($videoUlid);
 
             $rows[] = [
@@ -127,8 +166,17 @@ class IngestBandwidthJob implements ShouldQueue
                 $videoUlid,
                 $ip,
                 $tid,
+                $nodeId,
+                $cache,
                 $bytes,
             ];
+
+            // The origin's side, as its own row: `value` is the one summed column, so the bytes
+            // fetched from S3 cannot ride along on the delivery row. Keyed by node and video —
+            // what the operator asks about — and by nothing a customer is billed on.
+            if ($origin > 0) {
+                $rows[] = [$date ?? $ingestedOn, 0, self::ORIGIN_METRIC, '', $videoUlid, $ip, '', $nodeId, '', $origin];
+            }
         }
 
         try {

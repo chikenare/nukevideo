@@ -115,6 +115,8 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::apiResource('nodes', NodeController::class);
         Route::post('nodes/{node}/deploy', [NodeController::class, 'deploy']);
         Route::post('nodes/{node}/validate', [NodeController::class, 'validateNode']);
+        Route::get('nodes/{node}/cache-disks', [NodeController::class, 'cacheDisks']);
+        Route::get('analytics/edges', [AnalyticsController::class, 'edges']);
         Route::post('nodes/{node}/bootstrap-token', [NodeController::class, 'generateBootstrapToken']);
 
         Route::get('node-environment', [NodeEnvironmentController::class, 'show']);

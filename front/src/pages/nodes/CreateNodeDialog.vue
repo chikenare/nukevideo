@@ -143,8 +143,8 @@ const handleCreate = async () => {
           <p v-if="errors.sshKeyId" class="text-sm text-destructive">{{ errors.sshKeyId[0] }}</p>
         </div>
         <div class="grid gap-2">
-          <Label for="node_ip">User</Label>
-          <Input id="node_ip" v-model="newNode.user" placeholder="e.g. 192.168.1.100" required />
+          <Label for="node_user">User</Label>
+          <Input id="node_user" v-model="newNode.user" placeholder="e.g. root" required />
           <p v-if="errors.user" class="text-sm text-destructive">{{ errors.user }}</p>
         </div>
         <div v-if="newNode.type === 'proxy'" class="grid gap-2">

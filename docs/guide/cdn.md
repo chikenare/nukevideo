@@ -12,11 +12,13 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 
 - Validates Akamai-style stream tokens (HMAC) on incoming requests.
 - Reads the pre-packaged CMAF segments from S3 using AWS authentication.
-- Caches segments locally so repeat requests don't hit S3 every time; **manifests bypass the cache** to stay fresh.
+- Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests bypass the cache** to stay fresh, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
+- Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` in ClickHouse — the operator's cost, never a customer's usage.
+- Answers CORS itself, for any origin: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site.
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to ClickHouse through a Vector.dev pipeline.
 
-Token validation and cache behavior are configured in **CDN Settings** under the `self_hosted` provider (token secret, stream/query token expiry, cache size and inactivity). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, stream/query token expiry). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 

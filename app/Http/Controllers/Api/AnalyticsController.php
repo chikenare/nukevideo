@@ -6,6 +6,7 @@ use App\Data\Analytics\AnalyticsCardData;
 use App\Data\Analytics\AnalyticsData;
 use App\Data\Analytics\BandwidthByVideoData;
 use App\Data\Analytics\BandwidthPointData;
+use App\Data\Analytics\EdgeDeliveryData;
 use App\Data\Analytics\EncodingPointData;
 use App\Data\Analytics\TopExternalUserData;
 use App\Data\Analytics\TopIpData;
@@ -45,6 +46,23 @@ class AnalyticsController extends Controller
         }
 
         return response()->json(['data' => $queue]);
+    }
+
+    /**
+     * Per-node delivery for the nodes page. Admin-only, unlike the rest of this controller: it
+     * names the operator's infrastructure and its origin egress, which no project key has any
+     * business reading.
+     */
+    public function edges(Request $request): JsonResponse
+    {
+        $request->validate([
+            'from' => 'required|date_format:Y-m-d',
+            'to' => 'required|date_format:Y-m-d',
+        ]);
+
+        return response()->json([
+            'data' => EdgeDeliveryData::collect($this->analyticsService->edgeDelivery($request->input('from'), $request->input('to'))),
+        ]);
     }
 
     public function index(Request $request): JsonResponse

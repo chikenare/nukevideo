@@ -7,6 +7,9 @@ Schedule::command('videos:dispatch')->everyFiveSeconds()->withoutOverlapping(1);
 Schedule::command('videos:reap')->everyMinute()->withoutOverlapping(10);
 Schedule::command('videos:prune')->everyThirtyMinutes();
 
+// No-op unless the self-hosted CDN is active and a proxy is deployed.
+Schedule::command('nodes:probe')->everyMinute()->withoutOverlapping(1);
+
 // No-op unless the Bunny CDN driver is active and its Logging API credentials are set.
 Schedule::command('bunny:ingest-logs')->everyFiveMinutes()->withoutOverlapping(10);
 

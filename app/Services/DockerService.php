@@ -26,6 +26,12 @@ class DockerService
         $this->run($node, "rm -f {$name}");
     }
 
+    public function removeVolume(Node $node, string $name): void
+    {
+        // A volume that never existed is not an error worth failing a delete over.
+        $this->run($node, "volume rm -f {$name} 2>/dev/null || true");
+    }
+
     public function listContainers(Node $node): array
     {
         $output = $this->run($node, 'ps -a --format "{{json .}}"');

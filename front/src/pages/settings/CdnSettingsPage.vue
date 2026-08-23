@@ -130,16 +130,10 @@ onMounted(fetchSettings)
             <Input id="sh_secure_query_expires" v-model="form.selfHosted.secureTokenQueryExpires" placeholder="e.g. 1h" />
             <p v-if="errors['selfHosted.secureTokenQueryExpires']" class="text-sm text-destructive">{{ errors['selfHosted.secureTokenQueryExpires'][0] }}</p>
           </div>
-          <div class="grid gap-2">
-            <Label for="sh_cache_max_size">Edge cache max size</Label>
-            <Input id="sh_cache_max_size" v-model="form.selfHosted.cacheMaxSize" placeholder="e.g. 10g" />
-            <p v-if="errors['selfHosted.cacheMaxSize']" class="text-sm text-destructive">{{ errors['selfHosted.cacheMaxSize'][0] }}</p>
-          </div>
-          <div class="grid gap-2">
-            <Label for="sh_cache_inactive">Edge cache inactive</Label>
-            <Input id="sh_cache_inactive" v-model="form.selfHosted.cacheInactive" placeholder="e.g. 1h" />
-            <p v-if="errors['selfHosted.cacheInactive']" class="text-sm text-destructive">{{ errors['selfHosted.cacheInactive'][0] }}</p>
-          </div>
+          <p class="text-xs text-muted-foreground">
+            The edge cache is not sized here: each proxy node caches into its own disk pool and
+            sizes the cache to it when it starts.
+          </p>
         </CardContent>
       </Card>
 

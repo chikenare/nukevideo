@@ -7,7 +7,7 @@
  * traffic actually happened; this pins that, the metric each zone lands under, the account
  * attribution resolved from the video, and the input filtering that protects the batch.
  *
- * Row shape, once and for all: [date, user_id, metric, external_user_id, video_ulid, ip, tid, value]
+ * Row shape, once and for all: [date, user_id, metric, external_user_id, video_ulid, ip, tid, node_id, cache, value]
  */
 
 use App\Jobs\IngestBandwidthJob;
@@ -66,7 +66,7 @@ it('dates a row by the traffic, not by the moment it was ingested', function () 
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 500, 'date' => '2026-01-31'],
     ]);
 
-    expect($rows)->toBe([['2026-01-31', $video->user_id, 'bandwidth_bytes', '', $video->ulid, '1.2.3.4', '', 500]]);
+    expect($rows)->toBe([['2026-01-31', $video->user_id, 'bandwidth_bytes', '', $video->ulid, '1.2.3.4', '', 0, '', 500]]);
 });
 
 it('accepts a full timestamp and keeps only its day', function () {
@@ -103,7 +103,7 @@ it('drops a single unusable row rather than losing the whole batch to it', funct
     ]);
 
     expect($rows)->toHaveCount(1)
-        ->and($rows[0][7])->toBe(700);
+        ->and($rows[0][9])->toBe(700);
 });
 
 it('attributes traffic for a video that no longer exists to no user', function () {
@@ -157,7 +157,7 @@ it('books each zone under its own metric, and an unknown one under the generic',
 
     expect(array_column($rows, 2))->toBe([
         'streaming_bytes', 'download_bytes', 'asset_bytes', 'bandwidth_bytes', 'bandwidth_bytes',
-    ])->and(array_sum(array_column($rows, 7)))->toBe(150);
+    ])->and(array_sum(array_column($rows, 9)))->toBe(150);
 });
 
 it('attributes every row to the integrator customer that owns the video', function () {
@@ -180,5 +180,42 @@ it('leaves the customer empty for a video that no longer exists, without losing 
 
     expect($rows[0][1])->toBe(0)
         ->and($rows[0][3])->toBe('')
-        ->and($rows[0][7])->toBe(42);
+        ->and($rows[0][9])->toBe(42);
+});
+
+it('records which edge served the bytes and whether its cache had them', function () {
+    $video = videoOwnedBySomeone();
+
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'play', 'node' => 3, 'cache' => 'miss'],
+        // An edge from before the fields existed, and a word nginx never emits.
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'zone' => 'play'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 40, 'zone' => 'play', 'node' => 3, 'cache' => "HIT'); DROP"],
+    ]);
+
+    expect(array_column($rows, 7))->toBe([3, 3, 0, 3])
+        ->and(array_column($rows, 8))->toBe(['HIT', 'MISS', '', '']);
+});
+
+it('books what the edge fetched from the origin as its own metric, under nobody\'s account', function () {
+    // `value` is the one summed column, so the origin bytes cannot ride on the delivery row. They
+    // are the operator's cost, not the customer's usage: account 0 is what `/api/usage` can never
+    // be asked for, and the metric keeps them out of every bandwidth query.
+    $video = videoOwnedBySomeone('cliente-77');
+
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'MISS', 'origin' => 1010, 'tid' => 'abc'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT', 'origin' => 0],
+    ]);
+
+    expect($rows)->toHaveCount(3)
+        ->and($rows[1][1])->toBe(0)
+        ->and($rows[1][2])->toBe(IngestBandwidthJob::ORIGIN_METRIC)
+        ->and($rows[1][3])->toBe('')
+        ->and($rows[1][4])->toBe($video->ulid)
+        ->and($rows[1][6])->toBe('')
+        ->and($rows[1][7])->toBe(3)
+        ->and($rows[1][9])->toBe(1010)
+        ->and($rows[2][2])->toBe('streaming_bytes');
 });

@@ -37,7 +37,7 @@ describe('worker deploy drain', function () {
         expect($script)->toContain("DRAIN={$grace}")
             ->and($script)->toContain('docker stop -t "$DRAIN"')
             ->and(strpos($script, 'docker stop -t'))
-            ->toBeLessThan(strpos($script, 'docker rm -f nukevideo_worker_'));
+            ->toBeLessThan(strpos($script, 'docker rm -f "$SERVICE_CONTAINER"'));
     });
 
     it('lets a run opt out of the drain', function () {

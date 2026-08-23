@@ -47,6 +47,10 @@ class StartNodeServicesJob implements ShouldQueue
             timeout: 60,
         ));
 
+        // Reactivation is an operator saying the node is back. The probe confirms or reverts it
+        // within minutes; until then the node must not sit out on stale failures.
+        $node->markHealthy();
+
         Log::info('Node services started', [
             'node_id' => $node->id,
             'started' => $started ?: '(nothing to start — deploy the node first)',

@@ -19,6 +19,8 @@ class UpdateNodeData extends RequestData
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isActive,
         #[MapInputName(CamelCaseMapper::class)]
+        public bool|Optional $isDraining,
+        #[MapInputName(CamelCaseMapper::class)]
         public int|Optional|null $sshKeyId,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isStorageServer,
@@ -39,6 +41,7 @@ class UpdateNodeData extends RequestData
             'ipAddress' => 'sometimes|ip',
             'hostname' => 'nullable|max:255',
             'isActive' => 'sometimes|boolean',
+            'isDraining' => 'sometimes|boolean',
             'sshKeyId' => 'nullable|exists:ssh_keys,id',
             'isStorageServer' => [
                 'sometimes', 'boolean',

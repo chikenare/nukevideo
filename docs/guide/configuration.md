@@ -52,7 +52,9 @@ The **Used in** column indicates where each variable is used:
 
 ## Proxy Node Delivery
 
-These values control token validation and local segment caching on self-hosted proxy nodes, which serve the pre-packaged CMAF from S3. They are **not** set in `.env` — they live in the **CDN Settings** panel (the `self_hosted` provider) and are injected into the proxy's nginx container at deploy time under the names below. Leaving one empty falls back to the container's default.
+These values control token validation on self-hosted proxy nodes, which serve the pre-packaged CMAF from S3. They are **not** set in `.env` — they live in the **CDN Settings** panel (the `self_hosted` provider) and are injected into the proxy's nginx container at deploy time under the names below. Leaving one empty falls back to the container's default.
+
+The segment cache itself is not configured: the node's deploy builds it from the host's spare disks and the edge sizes it to that pool on boot. See [Cache disks](/guide/nodes#cache-disks).
 
 | Variable | Default | Used in | Description |
 |----------|---------|---------|-------------|
@@ -60,8 +62,6 @@ These values control token validation and local segment caching on self-hosted p
 | `VOD_TOKEN_NAME` | `__hdnea__` | Proxy | Query argument carrying the token. Lowercase, digits and `_` only; changing it requires redeploying the proxy, and links already signed with the old name stop validating |
 | `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | Stream token expiration (e.g., `100d`, `24h`) |
 | `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | Query/segment token expiration |
-| `VOD_CACHE_MAX_SIZE` | `10g` | Proxy | Max size for the local segment cache |
-| `VOD_CACHE_INACTIVE` | `1h` | Proxy | Evict cached segments not accessed within this period |
 
 ## CDN
 
@@ -119,7 +119,7 @@ Variables for proxy and worker nodes are managed through the UI or API at `/api/
 
 ### Proxy Nodes
 
-Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packaged CMAF from the bucket) plus the token and cache settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel.
+Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packaged CMAF from the bucket) plus the token settings from [Proxy Node Delivery](#proxy-node-delivery), which are sourced from the CDN Settings panel.
 
 ### Worker Nodes
 

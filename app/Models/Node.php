@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Log;
 
 #[ObservedBy(NodeObserver::class)]
 class Node extends Model
@@ -21,6 +22,10 @@ class Node extends Model
         'accel',
         'hostname',
         'is_active',
+        'is_draining',
+        // Written by the probe and the deploy, never by the API: the Data objects do not expose them.
+        'health_failures',
+        'last_healthy_at',
         'is_storage_server',
         'storage_endpoint',
         'ssh_key_id',
@@ -34,7 +39,9 @@ class Node extends Model
             'type' => NodeType::class,
             'accel' => NodeAccel::class,
             'is_active' => 'boolean',
+            'is_draining' => 'boolean',
             'is_storage_server' => 'boolean',
+            'last_healthy_at' => 'datetime',
         ];
     }
 
@@ -125,14 +132,78 @@ class Node extends Model
         return $query->where('type', 'worker');
     }
 
+    /**
+     * Consecutive failed probes before a proxy stops receiving new playback links. The probe
+     * runs every minute, so this is three minutes of silence — long enough that a single
+     * slow answer or a restart does not move a node's whole catalogue, cold, onto its
+     * neighbours, short enough that a dead node stops being handed viewers.
+     */
+    public const HEALTH_FAILURE_THRESHOLD = 3;
+
+    public function scopeHealthy($query)
+    {
+        return $query->where('health_failures', '<', self::HEALTH_FAILURE_THRESHOLD);
+    }
+
+    /**
+     * A proxy the resolver may put in a playback URL: active, answering probes, not being
+     * drained, and with a hostname to put there at all — a proxy without one was being
+     * chosen and rendered as `https:///...`.
+     */
+    public function scopeRoutable($query)
+    {
+        return $query->proxy()->active()->healthy()->where('is_draining', false)->whereNotNull('hostname');
+    }
+
+    public function isHealthy(): bool
+    {
+        return $this->health_failures < self::HEALTH_FAILURE_THRESHOLD;
+    }
+
+    /**
+     * Query-builder writes on purpose: the observer reacts to `is_active`, and health must
+     * never start or stop containers — and the probe updates many nodes a minute.
+     */
+    public function markHealthy(): void
+    {
+        static::whereKey($this->id)->update(['health_failures' => 0, 'last_healthy_at' => now()]);
+        $this->health_failures = 0;
+        $this->last_healthy_at = now();
+    }
+
+    public function markProbeFailed(): void
+    {
+        // Capped so a node that is down for a week is not a node that needs a week of good
+        // probes — one success is what clears it.
+        $failures = min($this->health_failures + 1, 255);
+        static::whereKey($this->id)->update(['health_failures' => $failures]);
+        $this->health_failures = $failures;
+    }
+
     private const HASH_RING_REPLICAS = 150;
 
+    /**
+     * The proxy that serves this video, by consistent hashing over the routable proxies. Every
+     * node shares the token secret, so any of them can serve any video; what the ring buys is
+     * that a video's segments are cached on one node rather than on all of them.
+     *
+     * Falls back to every active proxy when none is routable: that is the probe being wrong
+     * for the whole fleet (the API host losing its own network, say), and a link to a node
+     * that may be down beats no link at all.
+     */
     public static function findProxyForVideo(string $videoUlid): ?self
     {
-        $nodes = static::proxy()->active()->orderBy('id')->get();
+        $nodes = static::routable()->orderBy('id')->get();
 
         if ($nodes->isEmpty()) {
-            return null;
+            // Draining stays honoured: it is the operator's word, the probe's is only a guess.
+            $nodes = static::proxy()->active()->where('is_draining', false)->whereNotNull('hostname')->orderBy('id')->get();
+
+            if ($nodes->isEmpty()) {
+                return null;
+            }
+
+            Log::warning('No routable proxy node; falling back to every active one', ['count' => $nodes->count()]);
         }
 
         if ($nodes->count() === 1) {

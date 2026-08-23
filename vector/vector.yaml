@@ -25,6 +25,9 @@ transforms:
       .video = parsed.video
       .zone = parsed.zone
       .tid = parsed.tid
+      .cache = parsed.cache
+      .origin = parsed.origin
+      .node = parsed.node
 
       if .bytes <= 0 { abort }
 
@@ -65,6 +68,18 @@ transforms:
       zone = to_string(.zone) ?? ""
       if zone == "-" { zone = "" }
 
+      # What the edge's cache did with the request and what it cost at the origin, for the
+      # per-node hit ratio. `origin` is `-` on a HIT (nginx never opened an upstream), which is
+      # the zero it means. An edge from before these fields sends nothing, which reads as null:
+      # an empty cache status and no origin bytes, never a wrong number.
+      cache = to_string(.cache) ?? ""
+      if cache == "-" { cache = "" }
+
+      origin = to_int(.origin) ?? 0
+      if origin < 0 { origin = 0 }
+
+      node = to_int(.node) ?? 0
+
       . = {}
       .video_ulid = video
       .ip = ip
@@ -72,6 +87,9 @@ transforms:
       .date = date
       .tid = tid
       .zone = zone
+      .cache = cache
+      .origin = origin
+      .node = node
 
   aggregate_bandwidth_logs:
     type: reduce
@@ -88,8 +106,13 @@ transforms:
       # which metric the bytes land under.
       - tid
       - zone
+      # Both decide which row the bytes land in: the hit ratio is hits over everything served,
+      # and it is read per node.
+      - cache
+      - node
     merge_strategies:
       bytes: sum
+      origin: sum
 
 sinks:
   stdout:

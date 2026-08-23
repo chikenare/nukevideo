@@ -89,6 +89,16 @@ defineExpose({ show })
           <Label for="edit_node_active">Active</Label>
           <Switch id="edit_node_active" v-model="node.isActive" @update:checked="node.isActive = $event" />
         </div>
+        <div v-if="node.type === 'proxy'" class="grid gap-2">
+          <div class="flex items-center justify-between">
+            <Label for="edit_node_draining">Draining</Label>
+            <Switch id="edit_node_draining" v-model="node.isDraining" @update:checked="node.isDraining = $event" />
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Keeps the node out of new playback links while it goes on serving the sessions it has.
+            Use it before maintenance; deactivating stops the containers at once.
+          </p>
+        </div>
         <div v-if="node.type === 'worker'" class="grid gap-2">
           <Label for="edit_node_accel">GPU Acceleration</Label>
           <Select v-model="node.accel">

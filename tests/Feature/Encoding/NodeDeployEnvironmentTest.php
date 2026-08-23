@@ -118,7 +118,8 @@ describe('development and production deploys on one host', function () {
         asLocalEnvironment();
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->toContain('docker build --target api-prod -t chikenare/nukevideo-api:node-dev "$SOURCE_DIR"')
+        expect($script)->toContain("IMAGE='chikenare/nukevideo-api:node-dev'")
+            ->and($script)->toContain("BUILD_TARGET='api-prod'")
             // Compose's own tag, the one with no code in it, must never be what a node runs.
             ->and($script)->not->toContain('chikenare/nukevideo-api:dev');
     });
@@ -145,7 +146,8 @@ describe('development and production deploys on one host', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        expect($script)->toContain('docker build --target proxy-prod -t chikenare/nukevideo-proxy:node-dev');
+        expect($script)->toContain("IMAGE='chikenare/nukevideo-proxy:node-dev'")
+            ->and($script)->toContain("BUILD_TARGET='proxy-prod'");
     });
 
     it('falls back to the published image on a node that has no working copy', function () {
@@ -156,9 +158,10 @@ describe('development and production deploys on one host', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
         expect($script)->toContain('if [ -n "$SOURCE_DIR" ]; then')
-            ->and($script)->toContain('docker build --target api-prod -t 10.0.0.240:5000/nukevideo-api:node-dev')
-            ->and($script)->toContain('docker push 10.0.0.240:5000/nukevideo-api:node-dev')
-            ->and($script)->toContain('pull_image 10.0.0.240:5000/nukevideo-api:node-dev');
+            ->and($script)->toContain("IMAGE='10.0.0.240:5000/nukevideo-api:node-dev'")
+            ->and($script)->toContain("PUSH_IMAGE='1'")
+            // The half that pulls: what an external test node runs when there is no working copy.
+            ->and($script)->toContain('pull_image "$image"');
     });
 
     it('never pushes a development build when the registry is docker hub', function () {
@@ -167,14 +170,14 @@ describe('development and production deploys on one host', function () {
         asLocalEnvironment();
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->toContain('chikenare/nukevideo-api:node-dev')
-            ->and($script)->not->toContain('docker push');
+        expect($script)->toContain("IMAGE='chikenare/nukevideo-api:node-dev'")
+            ->and($script)->toContain("PUSH_IMAGE=''");
     });
 
     it('leaves production on docker hub when no registry is configured', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->toContain('pull_image chikenare/nukevideo-api:'.config('app.version'));
+        expect($script)->toContain("IMAGE='chikenare/nukevideo-api:".config('app.version')."'");
     });
 
     it('pulls production from the configured registry', function () {
@@ -182,7 +185,7 @@ describe('development and production deploys on one host', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
         // Trailing slash trimmed — the name would otherwise carry a double separator.
-        expect($script)->toContain('pull_image registry.example.com:5000/nukevideo-api:'.config('app.version'))
+        expect($script)->toContain("IMAGE='registry.example.com:5000/nukevideo-api:".config('app.version')."'")
             ->and($script)->not->toContain('chikenare/');
     });
 
@@ -190,9 +193,9 @@ describe('development and production deploys on one host', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
         $image = 'chikenare/nukevideo-api:'.config('app.version');
 
-        expect($script)->toContain("pull_image {$image}")
-            ->and($script)->not->toContain('docker build')
-            ->and($script)->not->toContain('SOURCE_DIR');
+        // An empty build target is what makes `ensure_image` pull instead of build.
+        expect($script)->toContain("IMAGE='{$image}'")
+            ->and($script)->toContain("BUILD_TARGET=''");
     });
 });
 
@@ -203,7 +206,7 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        expect($script)->toContain('docker run -d --name nukevideo_vector')
+        expect($script)->toContain("VECTOR_RUN_ARGS='--name nukevideo_vector")
             ->and($script)->toContain('/etc/vector/vector.yaml');
     });
 
@@ -213,9 +216,8 @@ describe('vector placement', function () {
         fakeCdnProvider('self_hosted');
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->not->toContain('docker run -d --name nukevideo_dev_vector')
-            ->and($script)->not->toContain('docker run -d --name nukevideo_vector')
-            ->and($script)->toContain('docker rm -f nukevideo_vector');
+        expect($script)->toContain("VECTOR_RUN_ARGS=''")
+            ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
     });
 
     it('does not run vector behind bunny, whose logs come from its own API', function () {
@@ -226,8 +228,8 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        expect($script)->not->toContain('docker run -d --name nukevideo_vector')
-            ->and($script)->toContain('docker rm -f nukevideo_vector');
+        expect($script)->toContain("VECTOR_RUN_ARGS=''")
+            ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
     });
 
     it('hands vector only the two variables its config reads', function () {
@@ -236,7 +238,7 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        preg_match('/^docker run -d --name nukevideo_vector .*$/m', $script, $matches);
+        preg_match('/^VECTOR_RUN_ARGS=.*$/m', $script, $matches);
 
         expect($matches)->not->toBeEmpty()
             ->and($matches[0])->toContain('INTERNAL_API_URL=')

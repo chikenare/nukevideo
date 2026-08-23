@@ -34,6 +34,9 @@ function stubAnalyticsService(): void
         $mock->shouldReceive('encodingUsage')->andReturn(['cpu' => 0]);
         $mock->shouldReceive('usageSummary')->andReturn(['upload_bytes' => 0, 'encoding_cpu' => 0]);
         $mock->shouldReceive('bandwidthOverTime', 'topIps', 'topVideos', 'topExternalUsers', 'bandwidthByTrackingId', 'bandwidthByVideo', 'encodingUsageOverTime')->andReturn([]);
+        $mock->shouldReceive('edgeDelivery')->andReturn([
+            ['node_id' => 3, 'delivered_bytes' => 1000.0, 'origin_bytes' => 100.0, 'hit_ratio' => 0.9],
+        ]);
     }));
 }
 
@@ -81,7 +84,20 @@ it('did not open the admin surfaces alongside it', function (string $endpoint) {
     $this->getJson($endpoint)->assertForbidden();
 })->with([
     'nodes' => '/api/nodes',
+    // Names the operator's edges and their origin egress: infrastructure, not metrics.
+    'per-node delivery' => '/api/analytics/edges?from=2026-01-01&to=2026-01-31',
     'users' => '/api/users',
     'CDN settings' => '/api/cdn-settings',
     'the node environment' => '/api/node-environment',
 ]);
+
+it('reports per-node delivery to an admin', function () {
+    stubAnalyticsService();
+    Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+    $this->getJson('/api/analytics/edges?from=2026-01-01&to=2026-01-31')
+        ->assertOk()
+        ->assertJsonPath('data.0.nodeId', 3)
+        ->assertJsonPath('data.0.hitRatio', 0.9)
+        ->assertJsonPath('data.0.originBytes', 100);
+});

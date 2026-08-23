@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Data\Stream\DownloadStreamData;
+use App\Jobs\IngestBandwidthJob;
 use ClickHouseDB\Client;
 
 class AnalyticsService
@@ -218,6 +219,49 @@ class AnalyticsService
         );
 
         return $result->rows();
+    }
+
+    /**
+     * Per proxy node: bytes served, bytes fetched from S3 and the cache hit ratio. The three
+     * numbers that say whether a node needs more disk (ratio falling with a full pool) or the
+     * fleet needs another node (ratio fine, egress at the node's limit).
+     *
+     * The ratio counts only the lookups the cache was asked about: `BYPASS` (manifests), `OFF`
+     * (downloads) and '' (an edge from before the field) are left out rather than counted as
+     * misses, or a node serving many downloads would look like it had no cache at all. Origin
+     * bytes live under account 0 and their own metric ({@see IngestBandwidthJob}), so
+     * the join is on the node alone. Node 0 — rows that predate the dimension — is dropped.
+     *
+     * @return array<int, array{node_id: int, delivered_bytes: float, origin_bytes: float, hit_ratio: float|null}>
+     */
+    public function edgeDelivery(string $from, string $to): array
+    {
+        $result = $this->client->select(
+            'SELECT
+                node_id,
+                sumIf(value, metric IN ('.self::BANDWIDTH_METRICS.')) AS delivered_bytes,
+                sumIf(value, metric = {origin:String}) AS origin_bytes,
+                sumIf(value, metric IN ('.self::BANDWIDTH_METRICS.") AND cache = 'HIT') AS hit_bytes,
+                sumIf(value, metric IN (".self::BANDWIDTH_METRICS.") AND cache NOT IN ('', 'BYPASS', 'OFF')) AS cached_bytes
+             FROM usage
+             WHERE date >= {from:Date} AND date <= {to:Date} AND node_id > 0
+             GROUP BY node_id
+             ORDER BY node_id",
+            ['from' => $from, 'to' => $to, 'origin' => IngestBandwidthJob::ORIGIN_METRIC]
+        );
+
+        $edges = [];
+        foreach ($result->rows() as $row) {
+            $cached = (float) $row['cached_bytes'];
+            $edges[] = [
+                'node_id' => (int) $row['node_id'],
+                'delivered_bytes' => (float) $row['delivered_bytes'],
+                'origin_bytes' => (float) $row['origin_bytes'],
+                'hit_ratio' => $cached > 0 ? round((float) $row['hit_bytes'] / $cached, 4) : null,
+            ];
+        }
+
+        return $edges;
     }
 
     public function encodingUsage(string $from, string $to): array

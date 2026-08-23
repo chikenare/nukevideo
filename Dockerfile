@@ -183,8 +183,7 @@ RUN apk add --no-cache \
 COPY --from=proxy-builder /usr/local/nginx /usr/local/nginx
 RUN mkdir -p /var/cache/nginx/vod
 
-ENV VOD_CACHE_MAX_SIZE=10g
-ENV VOD_CACHE_INACTIVE=15d
+# No cache sizing baked in: the entrypoint sizes the cache to the filesystem it is given.
 
 COPY vod/nginx/nginx.conf.template /usr/local/nginx/conf/nginx.conf.template
 COPY vod/nginx/cloudflare-realip.conf /usr/local/nginx/conf/cloudflare-realip.conf
