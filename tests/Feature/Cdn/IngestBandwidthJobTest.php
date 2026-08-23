@@ -7,7 +7,7 @@
  * traffic actually happened; this pins that, the metric each zone lands under, the account
  * attribution resolved from the video, and the input filtering that protects the batch.
  *
- * Row shape, once and for all: [date, user_id, metric, external_user_id, video_ulid, ip, tid, node_id, cache, value]
+ * Row shape, once and for all: [date, user_id, metric, external_user_id, video_ulid, ip, tracking_id, node_id, cache, value]
  */
 
 use App\Jobs\IngestBandwidthJob;
@@ -120,8 +120,8 @@ it('keeps traffic from different tracking ids in separate rows', function () {
     // `tid` is part of the sorting key of a SummingMergeTree, so two customers' bytes must arrive
     // as distinct rows; collapsing them here would be indistinguishable from a merge later.
     $rows = insertedRows([
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => 'customer-a'],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'date' => '2026-08-13', 'tid' => 'customer-b'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'customer-a'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'date' => '2026-08-13', 'tracking_id' => 'customer-b'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'date' => '2026-08-13'],
     ]);
 
@@ -134,8 +134,8 @@ it('blanks a tracking id that did not survive the round trip intact', function (
     // The value is echoed into a URL by an API client and read back out of a CDN log line, so it
     // reaches here as untrusted text and is clamped to the alphabet the request validation accepts.
     $rows = insertedRows([
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => 'a&b=c'],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tid' => str_repeat('x', 65)],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'a&b=c'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => str_repeat('x', 65)],
     ]);
 
     expect(array_column($rows, 6))->toBe(['', '']);
@@ -205,7 +205,7 @@ it('books what the edge fetched from the origin as its own metric, under nobody\
     $video = videoOwnedBySomeone('cliente-77');
 
     $rows = insertedRows([
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'MISS', 'origin' => 1010, 'tid' => 'abc'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'MISS', 'origin' => 1010, 'tracking_id' => 'abc'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT', 'origin' => 0],
     ]);
 
@@ -218,4 +218,14 @@ it('books what the edge fetched from the origin as its own metric, under nobody\
         ->and($rows[1][7])->toBe(3)
         ->and($rows[1][9])->toBe(1010)
         ->and($rows[2][2])->toBe('streaming_bytes');
+});
+
+it('still reads the tracking id under the key an older edge sends', function () {
+    $video = videoOwnedBySomeone();
+
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'tid' => 'legacy-9'],
+    ]);
+
+    expect($rows[0][6])->toBe('legacy-9');
 });

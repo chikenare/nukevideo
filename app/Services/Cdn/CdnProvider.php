@@ -12,8 +12,14 @@ interface CdnProvider
      * Build the fully-qualified, signed manifest URL.
      *
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file}), provider-agnostic
+     * @param  string|null  $trackingId  the caller's own label for this viewer, carried so the
+     *                                   traffic can be attributed. Only the self-hosted edge can
+     *                                   honour it for playback: it signs the id into the path and
+     *                                   every segment inherits it. Bunny's directory token leaves
+     *                                   no room for it, and its segments would carry nothing
+     *                                   anyway, so that provider ignores it here
      */
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): string;
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?string $trackingId = null): string;
 
     /**
      * Build the fully-qualified, UNSIGNED URL of a thumbnail or storyboard.

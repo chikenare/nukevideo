@@ -10,7 +10,25 @@ http {
     sendfile on;
     tcp_nopush on;
 
-    map $uri $video_ulid {
+    # A playback or download link may carry the caller's tracking id as its FIRST path segment:
+    # `/{trackingId}/{videoUlid}/play/manifest.mpd`. In the path rather than the query because the
+    # path is what the token signs and what relative segment URLs inherit — a query parameter
+    # would cover the manifest and nothing after it. The id is recognised by what follows it (a
+    # 26-character ULID), so a link without one parses as it always did.
+    map $uri $tracking_id {
+        "~^/(?<t>[A-Za-z0-9_-]{1,64})/[0-9A-Za-z]{26}/"  $t;
+        default                                          "";
+    }
+
+    # The object behind the link: the URI with the tracking id stripped. This — not $uri — is the
+    # cache key and the upstream path, so a thousand ids share one cached copy of a segment and
+    # the bucket never sees the prefix.
+    map $uri $object_uri {
+        "~^/[A-Za-z0-9_-]{1,64}(?<o>/[0-9A-Za-z]{26}/.*)$"  $o;
+        default                                              $uri;
+    }
+
+    map $object_uri $video_ulid {
         "~^/(?<v>[0-9A-Za-z]{26})/"  $v;
         default                      -;
     }
@@ -18,20 +36,12 @@ http {
     # The zone directory that follows the ULID — `play`, `download`, `assets`. It is what separates
     # streaming bytes from downloaded ones once the line reaches ClickHouse; nothing downstream can
     # recover it from anywhere else.
-    map $uri $video_zone {
+    map $object_uri $video_zone {
         "~^/[0-9A-Za-z]{26}/(?<z>[a-z]+)/"  $z;
         default                             "";
     }
 
-    # An identity map, purely so the variable always EXISTS. nginx renders a variable it cannot
-    # find as `-`, so a plain `$arg_tid` logged `tid=-` on every request that carried no id — and
-    # `-` is inside the alphabet a tracking id is allowed to use, so it was stored as if it were
-    # one. Through a map the variable is always found, and an absent argument renders as empty.
-    map $arg_tid $bandwidth_tid {
-        default  $arg_tid;
-    }
-
-    map $uri $is_manifest {
+    map $object_uri $is_manifest {
         "~\.(mpd|m3u8)$"  1;
         default           0;
     }
@@ -47,13 +57,17 @@ http {
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
-    # `tid` is the caller's tracking id, carried on download links so a transfer can be attributed
-    # to the integrator's own customer. Empty for playback and for links that carried none — the
-    # token itself is stripped before this runs, so it never leaks into the log.
+    # `tracking_id` is the caller's tracking id, the leading path segment of a link that carried one, so a
+    # transfer can be attributed to the integrator's own customer. Empty for links without one —
+    # the token itself is stripped before this runs, so it never leaks into the log.
     # `cache` and `origin` are what decides whether a node needs more disk or the fleet needs
     # another node: bytes served against bytes fetched from S3 for them. Vector ignores keys it
     # was not told about, so an older pipeline reads these lines as before.
-    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid zone=$video_zone tid=$bandwidth_tid cache=$cache_status origin=$upstream_bytes_received node=${NODE_ID}';
+    # `tracking_id` is quoted because it is the one value that is usually empty, and an empty
+    # unquoted value makes the key-value parser swallow the next pair as its value
+    # (`tracking_id= cache=HIT` read as tracking_id="cache=HIT"). Quoting it is what lets it sit
+    # anywhere in the line.
+    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid zone=$video_zone tracking_id="$tracking_id" cache=$cache_status origin=$upstream_bytes_received node=${NODE_ID}';
 
     access_log off;
     error_log  stderr warn;
@@ -117,7 +131,7 @@ http {
         # This works because `akamai_token_validate` is declared inside `location /` below rather
         # than at server level: a sibling location does not inherit it. Moving it back up here
         # silently re-locks these, and moving it down further silently unlocks everything.
-        location ~ "^/[0-9A-Za-z]{26}/assets/" {
+        location ~ "^(/[A-Za-z0-9_-]{1,64})?/[0-9A-Za-z]{26}/assets/" {
             # `return` runs in the rewrite phase, before token validation: a bodyless 204 without a
             # token is the point, a preflight never carries one. nginx inherits add_header from
             # the enclosing level only when a block declares none, so the block is spelled out.
@@ -132,7 +146,7 @@ http {
             }
 
             proxy_cache vod_cache;
-            proxy_cache_key "$uri";
+            proxy_cache_key "$object_uri";
             proxy_cache_valid 200 30d;
             proxy_cache_valid 404 1m;
             proxy_cache_lock on;
@@ -159,7 +173,7 @@ http {
         # resume into a full re-fetch of a multi-GB file, stored as one cache object. Without
         # buffering to disk (proxy_max_temp_file_size 0) the upstream read is paced by the client
         # and nothing is spooled onto the OS disk.
-        location ~ "^/[0-9A-Za-z]{26}/download/" {
+        location ~ "^(/[A-Za-z0-9_-]{1,64})?/[0-9A-Za-z]{26}/download/" {
             # `return` runs in the rewrite phase, before token validation: a bodyless 204 without a
             # token is the point, a preflight never carries one. nginx inherits add_header from
             # the enclosing level only when a block declares none, so the block is spelled out.
@@ -225,7 +239,7 @@ http {
             # copy of every segment, and Vary is ignored for the same reason: the response no
             # longer differs by origin once the CORS headers below replace the bucket's.
             proxy_cache vod_cache;
-            proxy_cache_key "$uri";
+            proxy_cache_key "$object_uri";
             proxy_cache_use_stale error timeout updating;
             proxy_cache_lock on;
             proxy_no_cache $is_manifest;
@@ -257,7 +271,7 @@ http {
         access_log off;
 
         location / {
-            rewrite "^.*$" "/${AWS_BUCKET}$uri?" break;
+            rewrite "^.*$" "/${AWS_BUCKET}$object_uri?" break;
 
             proxy_pass ${AWS_ENDPOINT};
             proxy_http_version 1.1;

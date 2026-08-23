@@ -93,7 +93,7 @@ class IngestBunnyLogs extends Command
      * Aggregated events keyed by video + ip + tracking id + day, or null on API failure so the
      * cursor stays put and the whole window is retried next run.
      *
-     * @return array<string, array{video_ulid: string, ip: string, bytes: int, date: string, tid: string, zone: string}>|null
+     * @return array<string, array{video_ulid: string, ip: string, bytes: int, date: string, tracking_id: string, zone: string}>|null
      */
     private function fetch(BunnyConfigData $config, Carbon $from, Carbon $to): ?array
     {
@@ -166,7 +166,7 @@ class IngestBunnyLogs extends Command
                     'ip' => $ip,
                     'bytes' => 0,
                     'date' => $date,
-                    'tid' => $tid,
+                    'tracking_id' => $tid,
                     'zone' => $zone,
                 ];
                 $events[$key]['bytes'] += $bytes;

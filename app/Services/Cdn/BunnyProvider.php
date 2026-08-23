@@ -23,8 +23,10 @@ class BunnyProvider implements CdnProvider
 {
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): string
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?string $trackingId = null): string
     {
+        // $trackingId is not carried: the directory token is the path prefix, and the segments
+        // the player fetches afterwards would not carry a query parameter anyway.
         $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
         // Directory scope: the manifest and the relative segments it lists share a prefix, so one

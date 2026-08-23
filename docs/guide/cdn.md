@@ -13,6 +13,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Validates Akamai-style stream tokens (HMAC) on incoming requests.
 - Reads the pre-packaged CMAF segments from S3 using AWS authentication.
 - Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests bypass the cache** to stay fresh, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
+- Carries a caller's tracking id as the first path segment of a playback or download link, signed with it and inherited by every segment; stripped before the cache, so it costs nothing. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` in ClickHouse — the operator's cost, never a customer's usage.
 - Answers CORS itself, for any origin: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site.
 - Resolves the real client IP behind Cloudflare or another reverse proxy.

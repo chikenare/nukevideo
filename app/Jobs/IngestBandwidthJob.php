@@ -67,7 +67,7 @@ class IngestBandwidthJob implements ShouldQueue
      */
     private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tid?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tracking_id?: string, tid?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
     public function __construct(public array $events) {}
 
     /**
@@ -80,9 +80,10 @@ class IngestBandwidthJob implements ShouldQueue
      */
     private function trackingId(array $event): string
     {
-        $tid = (string) ($event['tid'] ?? '');
+        // `tid` is the key an edge or a batch from before the rename still sends.
+        $id = (string) ($event['tracking_id'] ?? $event['tid'] ?? '');
 
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
+        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $id) === 1 ? $id : '';
     }
 
     /** @param array<string, mixed> $event */
@@ -152,7 +153,7 @@ class IngestBandwidthJob implements ShouldQueue
         // partition key, so that slice is misattributed permanently. Prefer a date carried on the
         // event; the fallback is only for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tid', 'node_id', 'cache', 'value'];
+        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
         $rows = [];
 
         foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid, $metric, $nodeId, $cache, $origin]) {

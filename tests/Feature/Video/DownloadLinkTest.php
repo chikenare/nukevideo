@@ -152,20 +152,18 @@ it('carries the caller tracking id into the link on Bunny', function () {
     expect($url)->toContain('tid=client-42');
 });
 
-it('carries the tracking id on the self-hosted edge too, unsigned', function () {
+it('carries the tracking id on the self-hosted edge as the leading path segment', function () {
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
     $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tid' => 'client-42'])
         ->assertOk()->json('data.url');
 
-    // Appended rather than signed: this edge compares its ACL against the request URI, which
-    // excludes the query, so the parameter neither strengthens nor breaks the token. It exists to
-    // reach the `bandwidth` log line, which is what attributes the transfer.
-    // Also pins the separator: with no token secret configured `sign()` returns a URL with no
-    // query at all, and appending `&` there would produce a malformed one.
-    expect($url)->toContain('tid=client-42')
-        ->and(parse_url($url, PHP_URL_QUERY))->toContain('tid=client-42');
+    // In the path, not the query: the edge's ACL is compared against the request URI, so this
+    // is what puts the id inside the signature — and what the edge strips again before its cache
+    // and the bucket, so the file is cached once however many ids point at it.
+    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/client-42/{$video->ulid}/download/audio/")
+        ->and((string) parse_url($url, PHP_URL_QUERY))->not->toContain('tid=');
 });
 
 it('rejects a tracking id that could reshape the signed parameters', function () {

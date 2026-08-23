@@ -38,6 +38,15 @@ POST /api/outputs/{ulid}
 
 The response contains the signed URL for the requested format (HLS or DASH). The URL points at whichever delivery layer is configured (a proxy node host or the Bunny pull-zone host) and carries the access token.
 
+**Request body** (all optional):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `format` | `dash` \| `hls` | Defaults to the output's first available format. |
+| `resolution` | integer | Caps the ladder at this height. |
+| `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
+| `tid` | string | Your own tracking id for this viewer — a customer, a campaign. On a self-hosted edge it becomes the first segment of the signed path (`/{tid}/{videoUlid}/play/...`), so every segment the player fetches carries it and the bytes land against it in the [bandwidth analytics](/api/users#bandwidth-by-tracking-id). Up to 64 characters of `A-Z a-z 0-9 _ -`. Bunny ignores it here: its directory token leaves no room for it, and segments would not carry it. |
+
 ## Token-Based Access Control
 
 Playback URLs are signed with a time-limited token so segments can't be fetched without authorization:
@@ -52,7 +61,7 @@ The exact signing scheme depends on the delivery layer:
 
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. On a self-hosted proxy node the local segment cache is configurable; when the node sits behind a CDN, local caching can be turned off so the edge handles it. See [Nodes: CDN Mode](/guide/nodes#cdn-mode).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks). A tracking id in the path costs no cache space: the edge strips it before the cache and the bucket, so one cached copy of a segment serves every id.
 
 ## Bandwidth Monitoring
 

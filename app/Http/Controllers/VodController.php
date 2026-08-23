@@ -46,6 +46,7 @@ class VodController extends Controller
             ip: $data->ip ?? $request->ip(),
             format: $format,
             cap: $output->resolveCap($data->resolution),
+            trackingId: $data->tid,
         );
 
         return response()->json(['data' => $link]);
@@ -57,6 +58,7 @@ class VodController extends Controller
         string $ip,
         string $format,
         ?int $cap = null,
+        ?string $trackingId = null,
     ): VodOutputData {
         try {
             $url = $this->cdn->manifestUrl(
@@ -64,6 +66,7 @@ class VodController extends Controller
                 $output->manifestPath($format, $cap),
                 $ip,
                 app()->isLocal(),
+                $trackingId,
             );
         } catch (NoCdnNodeAvailableException) {
             abort(503, 'No node available');

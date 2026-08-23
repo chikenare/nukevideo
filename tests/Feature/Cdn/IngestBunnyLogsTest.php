@@ -39,7 +39,7 @@ function eventsWithoutDate(IngestBandwidthJob $job): array
     // `tid` and `zone` are dropped alongside `date`: these assertions are about aggregation shape,
     // and each is covered by its own case below.
     return array_map(
-        fn (array $event) => collect($event)->except(['date', 'tid', 'zone'])->all(),
+        fn (array $event) => collect($event)->except(['date', 'tracking_id', 'zone'])->all(),
         array_values($job->events),
     );
 }
@@ -180,8 +180,8 @@ it('dates every event by its own log line, so a window that straddles midnight s
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
         return array_values($job->events) === [
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'tid' => '', 'zone' => ''],
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'tid' => '', 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'tracking_id' => '', 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'tracking_id' => '', 'zone' => ''],
         ];
     });
 });
@@ -232,7 +232,7 @@ it('attributes traffic to the tracking id carried in the logged query string', f
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        $byTid = collect($job->events)->keyBy('tid')->map->bytes;
+        $byTid = collect($job->events)->keyBy('tracking_id')->map->bytes;
 
         return $byTid->get('customer-a') === 100
             && $byTid->get('customer-b') === 50

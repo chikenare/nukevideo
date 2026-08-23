@@ -56,10 +56,11 @@ List a video's tracks first with `GET /api/videos/{ulid}`, then request a link p
 |-------|------|-------|
 | `tid` | string \| null | Your own tracking id — a customer, a tenant. Echoed into the link so the CDN's request log attributes the transfer to it, and the bytes land against that id in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
 
-On Bunny the id is part of the token signature, so it can be neither altered nor added after the
-fact — both answer `403`. On a self-hosted edge it rides alongside the token instead, because that
-edge scopes its signature to the path; treat it as a label you chose, never as an authorization
-input. Traffic with no id is still recorded, under an empty one.
+The id is inside the signature on both delivery layers, so it can be neither altered nor added
+after the fact — both answer `403`. On Bunny it is a signed query parameter; on a self-hosted edge
+it is the first segment of the signed path (`/{tid}/{videoUlid}/download/...`), which the edge
+strips again before its cache and the bucket. Either way, treat it as a label you chose, never as
+an authorization input. Traffic with no id is still recorded, under an empty one.
 
 Read the bytes back per id with `topTrackingIds` on the
 [Analytics API](/api/users#bandwidth-by-tracking-id), optionally narrowed to one video. The id is

@@ -34,7 +34,7 @@ class AnalyticsService
      * The metric constraint is not optional: without it these queries would read upload volume and
      * encoding seconds as if they were delivered bytes.
      *
-     * The filters are optional and every one is bound, never interpolated — `video_ulid` and `tid`
+     * The filters are optional and every one is bound, never interpolated — `video_ulid` and `tracking_id`
      * are written from CDN access logs, so their values are caller-controlled text that must never
      * reach the statement itself.
      *
@@ -63,7 +63,7 @@ class AnalyticsService
         // that carried no tracking id" — so the filter is applied on `!== null`, not on emptiness.
         // Asking for it is how a caller isolates its unattributed traffic.
         if ($tid !== null) {
-            $where[] = 'tid = {tid:String}';
+            $where[] = 'tracking_id = {tid:String}';
             $params['tid'] = $tid;
         }
 
@@ -80,7 +80,7 @@ class AnalyticsService
                 sum(value) AS total_bytes,
                 uniqExact(video_ulid) AS unique_videos,
                 uniqExact(ip) AS unique_ips,
-                uniqExact(tid) AS unique_tracking_ids
+                uniqExact(tracking_id) AS unique_tracking_ids
              FROM usage
              WHERE {$where}",
             $params
@@ -152,13 +152,13 @@ class AnalyticsService
 
         $result = $this->client->select(
             "SELECT
-                tid,
+                tracking_id AS tid,
                 sum(value) AS bytes,
                 uniqExact(video_ulid) AS videos,
                 uniqExact(ip) AS unique_ips
              FROM usage
              WHERE {$where}
-             GROUP BY tid
+             GROUP BY tracking_id
              ORDER BY bytes DESC
              LIMIT {limit:UInt8}",
             $params

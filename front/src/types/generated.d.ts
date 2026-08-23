@@ -181,6 +181,7 @@ external_resource_id: string | null,
 external_user_id: string | null,
 ip: string | null,
 format: string | null,
+tid: string | null,
 };
 export type VodOutputData = {
 url: string,

@@ -144,3 +144,20 @@ it('refuses to sign a bucket-wide ACL', function () {
 
     app(SelfHostedProvider::class)->manifestUrl($video, 'manifest.mpd', '1.2.3.4', true);
 })->throws(InvalidArgumentException::class);
+
+describe('a tracking id on a playback link', function () {
+    it('leads the path and is inside the ACL, so the segments inherit it and the token pins it', function () {
+        [$video, $output] = signedVideo();
+
+        $url = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false, 'campaign-7');
+
+        expect(parse_url($url, PHP_URL_PATH))->toStartWith("/campaign-7/{$video->ulid}/play/")
+            ->and(signedAclPrefix($url))->toBe("/campaign-7/{$video->ulid}/play/");
+    });
+
+    it('refuses an id that is not a path segment', function () {
+        [$video, $output] = signedVideo();
+
+        app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false, 'a/b');
+    })->throws(InvalidArgumentException::class);
+});
