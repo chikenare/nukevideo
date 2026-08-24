@@ -51,7 +51,17 @@ class BunnyProvider implements CdnProvider
         // carries the query string — which is what makes per-caller bandwidth attribution possible
         // ({@see \App\Console\Commands\IngestBunnyLogs}). `tid` is not one of Bunny's reserved
         // parameter names.
-        $parameters = $trackingId === null ? [] : ['tid' => $trackingId];
+        //
+        // Re-checked here, not just at the request boundary, and mirroring
+        // {@see SelfHostedProvider::trackedPath()}: the signature serialises the parameters as
+        // `key=value` joined by `&`, so an `&` or `=` that slipped past validation would let the
+        // value reshape the signed parameter set. Refusing beats escaping — the value also has to
+        // survive a log line intact to be attributable at all.
+        if ($trackingId !== null && $trackingId !== '' && preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) !== 1) {
+            throw new \InvalidArgumentException('Tracking id is not a valid signed parameter.');
+        }
+
+        $parameters = $trackingId === null || $trackingId === '' ? [] : ['tid' => $trackingId];
 
         if ($config->tokenKey === '') {
             $query = $parameters === [] ? '' : '?'.$this->joinParams($parameters, rawEncode: true);

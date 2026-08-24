@@ -2,7 +2,7 @@
 
 /**
  * The bandwidth series can be narrowed to one video and/or one download tracking id, which is how
- * an external integrator reads back the `tid` it minted its links with
+ * an external integrator reads back the tracking id it minted its links with
  * ({@see DownloadStreamData}). Both values are matched against ClickHouse
  * columns written from CDN access logs, so their shape is validated here and bound — never
  * interpolated — in the service.
@@ -30,7 +30,7 @@ const BANDWIDTH_QUERIES = ['summary', 'bandwidthOverTime', 'topIps', 'topVideos'
 beforeEach(fn () => Sanctum::actingAs(User::factory()->create(['is_admin' => true])));
 
 /**
- * Stubs the service and hands back a collector that fills with `method => [video, tid, metric]` as
+ * Stubs the service and hands back a collector that fills with `method => [video, tracking_id, metric]` as
  * the controller calls it. An ArrayObject, not an array: a returned array is a copy, so the stub would
  * be writing to one the caller never sees.
  */
@@ -68,7 +68,7 @@ function recordAnalyticsFilters(): ArrayObject
 it('passes the video and tracking id filters into every bandwidth query', function () {
     $seen = recordAnalyticsFilters();
 
-    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&video='.VIDEO_ULID.'&tid=customer-42&metric=download_bytes')
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&video='.VIDEO_ULID.'&tracking_id=customer-42&metric=download_bytes')
         ->assertOk()
         ->assertJsonPath('data.topTrackingIds', []);
 
@@ -77,7 +77,7 @@ it('passes the video and tracking id filters into every bandwidth query', functi
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([VIDEO_ULID, 'customer-42', 'download_bytes']);
 });
 
-it('treats an absent tid as no filter at all', function () {
+it('treats an absent tracking_id as no filter at all', function () {
     $seen = recordAnalyticsFilters();
 
     $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31')->assertOk();
@@ -85,13 +85,13 @@ it('treats an absent tid as no filter at all', function () {
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, null, null]);
 });
 
-it('treats an empty tid as a filter for unattributed traffic', function () {
-    // `?tid=` is a real question — "what was never attributed to a customer" — and the empty
+it('treats an empty tracking_id as a filter for unattributed traffic', function () {
+    // `?tracking_id=` is a real question — "what was never attributed to a customer" — and the empty
     // string is exactly what those rows carry. Flattening it into "no filter" would answer a
     // different one, with everyone's bytes in it.
     $seen = recordAnalyticsFilters();
 
-    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&tid=')->assertOk();
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&tracking_id=')->assertOk();
 
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, '', null]);
 });
@@ -101,8 +101,8 @@ it('rejects a filter that could not have come out of the log columns', function 
 })->with([
     'a video that is not a ULID' => 'video=not-a-ulid',
     'a ULID with the letters Crockford excludes' => 'video=01HZXW3V5N8Q9R2T4Y6B8D0FIL',
-    'a tracking id outside the URL-safe alphabet' => 'tid=customer%2042',
-    'a tracking id past the column width' => 'tid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'a tracking id outside the URL-safe alphabet' => 'tracking_id=customer%2042',
+    'a tracking id past the column width' => 'tracking_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'a metric that is not a delivery metric' => 'metric=encoding_cpu',
     'a metric that does not exist' => 'metric=made_up',
 ]);

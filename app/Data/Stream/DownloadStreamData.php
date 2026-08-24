@@ -19,19 +19,29 @@ class DownloadStreamData extends RequestData
          * split it into parameters of its own and let a caller reshape the signed parameter set.
          * Anything outside the URL-safe alphabet is rejected rather than escaped, because the value
          * also has to survive a log line intact to be worth anything.
+         *
+         * `tracking_id` on the wire, like `external_user_id`. Inside a Bunny URL it still rides
+         * as `tid` ({@see BunnyProvider::downloadUrl}) — that name is not part of the API surface.
          */
-        public ?string $tid = null,
+        public ?string $trackingId = null,
     ) {}
 
     /**
      * Written out here rather than as property attributes: an explicit `rules()` entry REPLACES the
      * inferred and attribute-derived rules for that key, so a `#[Max]` alongside this would silently
      * never run. Only Bunny carries the value ({@see BunnyProvider::downloadUrl}).
+     *
+     * Both spellings, deliberately: Spatie also binds the bare property name (`trackingId`) as a
+     * fallback, so a payload using it would reach the property WITHOUT passing through a rule
+     * keyed only on the mapped name — and this value's whole validation story is the charset.
      */
     public static function rules(): array
     {
+        $trackingId = ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+\z/'];
+
         return [
-            'tid' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+\z/'],
+            'tracking_id' => $trackingId,
+            'trackingId' => $trackingId,
         ];
     }
 }

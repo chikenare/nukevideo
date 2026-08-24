@@ -41,7 +41,7 @@ class AnalyticsService
      * @param  array<string, mixed>  $params  filled in place with the bindings this clause adds
      * @return string the WHERE body, without the `WHERE` keyword
      */
-    private function bandwidthFilter(string $from, string $to, ?string $video, ?string $tid, array &$params, ?string $metric = null): string
+    private function bandwidthFilter(string $from, string $to, ?string $video, ?string $trackingId, array &$params, ?string $metric = null): string
     {
         $where = ['date >= {from:Date}', 'date <= {to:Date}', 'metric IN ('.self::BANDWIDTH_METRICS.')'];
         $params += ['from' => $from, 'to' => $to];
@@ -62,18 +62,18 @@ class AnalyticsService
         // An empty string is a legitimate value here — it is the column default and means "traffic
         // that carried no tracking id" — so the filter is applied on `!== null`, not on emptiness.
         // Asking for it is how a caller isolates its unattributed traffic.
-        if ($tid !== null) {
-            $where[] = 'tracking_id = {tid:String}';
-            $params['tid'] = $tid;
+        if ($trackingId !== null) {
+            $where[] = 'tracking_id = {tracking_id:String}';
+            $params['tracking_id'] = $trackingId;
         }
 
         return implode(' AND ', $where);
     }
 
-    public function summary(string $from, string $to, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function summary(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = [];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         $result = $this->client->select(
             "SELECT
@@ -96,10 +96,10 @@ class AnalyticsService
         ];
     }
 
-    public function bandwidthOverTime(string $from, string $to, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function bandwidthOverTime(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = [];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         $result = $this->client->select(
             "SELECT
@@ -116,10 +116,10 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function topIps(string $from, string $to, int $limit = 10, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function topIps(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         $result = $this->client->select(
             "SELECT
@@ -142,17 +142,17 @@ class AnalyticsService
      * ({@see DownloadStreamData}). This is the read side of that feature:
      * without it the id is written to ClickHouse and never surfaces anywhere.
      *
-     * Traffic that carried no id is reported under an empty `tid` rather than dropped — it is real
-     * bandwidth, and hiding it would make the breakdown fail to add up to the total.
+     * Traffic that carried no id is reported under an empty tracking id rather than dropped — it
+     * is real bandwidth, and hiding it would make the breakdown fail to add up to the total.
      */
-    public function bandwidthByTrackingId(string $from, string $to, int $limit = 10, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function bandwidthByTrackingId(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         $result = $this->client->select(
             "SELECT
-                tracking_id AS tid,
+                tracking_id,
                 sum(value) AS bytes,
                 uniqExact(video_ulid) AS videos,
                 uniqExact(ip) AS unique_ips
@@ -167,10 +167,10 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function topVideos(string $from, string $to, int $limit = 10, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function topVideos(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         $result = $this->client->select(
             "SELECT
@@ -190,10 +190,10 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function bandwidthByVideo(string $from, string $to, int $limit = 5, ?string $video = null, ?string $tid = null, ?string $metric = null): array
+    public function bandwidthByVideo(string $from, string $to, int $limit = 5, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $tid, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
 
         // The top-N stays a subquery rather than a round-trip: video_ulid is written from the edge
         // logs unvalidated, so feeding those values back into a second statement would mean

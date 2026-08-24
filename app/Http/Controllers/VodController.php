@@ -9,6 +9,7 @@ use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Output;
 use App\Models\Video;
 use App\Services\Cdn\CdnProvider;
+use App\Support\TrackingId;
 use Illuminate\Http\Request;
 
 class VodController extends Controller
@@ -46,7 +47,7 @@ class VodController extends Controller
             ip: $data->ip ?? $request->ip(),
             format: $format,
             cap: $output->resolveCap($data->resolution),
-            trackingId: $data->tid,
+            trackingId: TrackingId::resolve($data->trackingId, $request->user()),
         );
 
         return response()->json(['data' => $link]);

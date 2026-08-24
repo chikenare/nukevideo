@@ -181,7 +181,7 @@ external_resource_id: string | null,
 external_user_id: string | null,
 ip: string | null,
 format: string | null,
-tid: string | null,
+tracking_id: string | null,
 };
 export type VodOutputData = {
 url: string,
@@ -235,7 +235,7 @@ bytes: number,
 sessions: number,
 };
 export type TopTrackingIdData = {
-tid: string,
+trackingId: string,
 bytes: number,
 videos: number,
 uniqueIps: number,
@@ -314,7 +314,7 @@ privateKey: string,
 }
 namespace Stream {
 export type DownloadStreamData = {
-tid: string | null,
+trackingId: string | null,
 };
 export type UpdateStreamData = {
 name: string,

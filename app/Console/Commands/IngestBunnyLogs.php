@@ -150,7 +150,7 @@ class IngestBunnyLogs extends Command
 
                 // The v2 log's `path` carries the query string, which is the only reason a
                 // download link's `tid` can be attributed at all ({@see \App\Services\Cdn\BunnyProvider::downloadUrl}).
-                $tid = $this->trackingId((string) ($line['path'] ?? ''));
+                $trackingId = $this->trackingId((string) ($line['path'] ?? ''));
 
                 // The zone directory that follows the ULID is what separates a playback segment
                 // from a downloaded master ({@see \App\Jobs\IngestBandwidthJob}); the log path is
@@ -160,13 +160,13 @@ class IngestBunnyLogs extends Command
                 // Everything that distinguishes one stored row from another joins the key, for the
                 // same reason it does in Vector's reduce: summing across zones, tracking ids or a
                 // midnight boundary would collapse rows that have to stay apart.
-                $key = "{$match[1]}|{$ip}|{$tid}|{$date}|{$zone}";
+                $key = "{$match[1]}|{$ip}|{$trackingId}|{$date}|{$zone}";
                 $events[$key] ??= [
                     'video_ulid' => $match[1],
                     'ip' => $ip,
                     'bytes' => 0,
                     'date' => $date,
-                    'tracking_id' => $tid,
+                    'tracking_id' => $trackingId,
                     'zone' => $zone,
                 ];
                 $events[$key]['bytes'] += $bytes;
@@ -210,9 +210,9 @@ class IngestBunnyLogs extends Command
     {
         parse_str((string) parse_url($path, PHP_URL_QUERY), $query);
 
-        $tid = (string) ($query['tid'] ?? '');
+        $trackingId = (string) ($query['tid'] ?? '');
 
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
+        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) === 1 ? $trackingId : '';
     }
 
     /**

@@ -75,7 +75,7 @@ class AnalyticsController extends Controller
             // against columns written from CDN access logs, so they are bound parameters in the
             // service, never interpolated; the shapes below are what those columns can hold.
             'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
-            'tid' => 'nullable|string|max:64|regex:/^[A-Za-z0-9_-]*$/',
+            'tracking_id' => 'nullable|string|max:64|regex:/^[A-Za-z0-9_-]*$/',
             // Which kind of delivery to report. Anything outside this list is refused rather than
             // passed through: `usage` also holds upload volume and encoding seconds in the same
             // `value` column, and letting one of those names reach the bandwidth queries would
@@ -88,14 +88,14 @@ class AnalyticsController extends Controller
         $userId = $request->input('user_id') ? (int) $request->input('user_id') : null;
         $video = $request->input('video');
 
-        // `has`, not `filled`: an empty `tid` is the value traffic with no tracking id carries, so
-        // `?tid=` is a meaningful request — "show me only what was never attributed" — and must not
-        // be flattened into "no filter at all".
-        $tid = $request->has('tid') ? (string) $request->input('tid', '') : null;
+        // `has`, not `filled`: an empty string is the value traffic with no tracking id carries,
+        // so `?tracking_id=` is a meaningful request — "show me only what was never attributed" —
+        // and must not be flattened into "no filter at all".
+        $trackingId = $request->has('tracking_id') ? (string) $request->input('tracking_id', '') : null;
         $metric = $request->input('metric');
 
         $encoding = $this->analyticsService->encodingUsage($from, $to);
-        $summary = $this->analyticsService->summary($from, $to, $video, $tid, $metric);
+        $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric);
         $usage = $this->analyticsService->usageSummary($from, $to, $userId);
 
         return response()->json([
@@ -109,12 +109,12 @@ class AnalyticsController extends Controller
                     ['label' => 'CPU Encoding', 'value' => $encoding['cpu'], 'format' => 'seconds'],
                     ['label' => 'Upload Volume', 'value' => $usage['upload_bytes'], 'format' => 'bytes'],
                 ]),
-                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $tid, $metric)),
-                topIps: TopIpData::collect($this->analyticsService->topIps($from, $to, video: $video, tid: $tid, metric: $metric)),
-                topVideos: TopVideoData::collect($this->analyticsService->topVideos($from, $to, video: $video, tid: $tid, metric: $metric)),
+                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $trackingId, $metric)),
+                topIps: TopIpData::collect($this->analyticsService->topIps($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
+                topVideos: TopVideoData::collect($this->analyticsService->topVideos($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
                 topExternalUsers: TopExternalUserData::collect($this->analyticsService->topExternalUsers($from, $to, $userId)),
-                topTrackingIds: TopTrackingIdData::collect($this->analyticsService->bandwidthByTrackingId($from, $to, video: $video, tid: $tid, metric: $metric)),
-                bandwidthByVideo: BandwidthByVideoData::collect($this->analyticsService->bandwidthByVideo($from, $to, video: $video, tid: $tid, metric: $metric)),
+                topTrackingIds: TopTrackingIdData::collect($this->analyticsService->bandwidthByTrackingId($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
+                bandwidthByVideo: BandwidthByVideoData::collect($this->analyticsService->bandwidthByVideo($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
                 encodingOverTime: EncodingPointData::collect($this->analyticsService->encodingUsageOverTime($from, $to)),
             ),
         ]);

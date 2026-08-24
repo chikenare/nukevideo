@@ -66,7 +66,7 @@ same `usage` table the self-hosted Vector pipeline feeds, so both providers answ
   metric the bytes land under. It is read from the logged path, the only place the distinction
   survives; a path whose zone cannot be read still counts, under the generic `bandwidth_bytes`.
 - **Tracking ids.** The v2 log's `path` carries the query string, which is what lets a download
-  link's `tid` be attributed. See [Download a Track](/api/streams#download-a-track). An id that
+  link's tracking id be attributed. See [Download a Track](/api/streams#download-a-track). An id that
   arrives malformed costs its label, never its bytes — the line is still counted, as unattributed.
 - **Client IPs.** If the pull zone has **Log IP Anonymization** enabled (Bunny's default), Bunny
   zeroes the last octet before you ever see the line. Bandwidth totals are unaffected, but the

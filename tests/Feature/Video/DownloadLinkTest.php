@@ -146,7 +146,7 @@ it('carries the caller tracking id into the link on Bunny', function () {
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tid' => 'client-42'])
+    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
         ->assertOk()->json('data.url');
 
     expect($url)->toContain('tid=client-42');
@@ -156,7 +156,7 @@ it('carries the tracking id on the self-hosted edge as the leading path segment'
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tid' => 'client-42'])
+    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
         ->assertOk()->json('data.url');
 
     // In the path, not the query: the edge's ACL is compared against the request URI, so this
@@ -171,8 +171,11 @@ it('rejects a tracking id that could reshape the signed parameters', function ()
     $stream = track($video, 'audio');
 
     // Bunny serialises the signed parameters as `key=value` joined by `&`; letting either character
-    // through would let a caller split its value into parameters of its own.
-    foreach (['a&b=c', 'a=b', 'has space', str_repeat('x', 65)] as $bad) {
-        $this->postJson("/api/streams/{$stream->ulid}/download", ['tid' => $bad])->assertStatus(422);
+    // through would let a caller split its value into parameters of its own. Both spellings, because
+    // Spatie also binds the bare property name — a payload using it must not skip the charset check.
+    foreach (['tracking_id', 'trackingId'] as $key) {
+        foreach (['a&b=c', 'a=b', 'has space', str_repeat('x', 65)] as $bad) {
+            $this->postJson("/api/streams/{$stream->ulid}/download", [$key => $bad])->assertStatus(422);
+        }
     }
 });

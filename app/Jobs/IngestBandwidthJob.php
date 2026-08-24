@@ -156,7 +156,7 @@ class IngestBandwidthJob implements ShouldQueue
         $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
         $rows = [];
 
-        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid, $metric, $nodeId, $cache, $origin]) {
+        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $trackingId, $metric, $nodeId, $cache, $origin]) {
             $video = $videos->get($videoUlid);
 
             $rows[] = [
@@ -166,7 +166,7 @@ class IngestBandwidthJob implements ShouldQueue
                 (string) ($video->external_user_id ?? ''),
                 $videoUlid,
                 $ip,
-                $tid,
+                $trackingId,
                 $nodeId,
                 $cache,
                 $bytes,

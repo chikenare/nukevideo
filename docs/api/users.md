@@ -103,7 +103,7 @@ backend holds a key for.
 Bandwidth, videos and viewer IPs are aggregated across the **whole instance**, not scoped to the
 calling project: a project key sees totals that include other projects' traffic. NukeVideo is meant
 to sit behind your own backend, reached server to server with a key that never leaves it — do not
-proxy this endpoint to a browser or to an untrusted tenant. Use the `video` and `tid` filters below
+proxy this endpoint to a browser or to an untrusted tenant. Use the `video` and `tracking_id` filters below
 to narrow a response to something you can safely pass on.
 :::
 
@@ -115,10 +115,10 @@ to narrow a response to something you can safely pass on.
 | `to` | date | Yes | End date (`YYYY-MM-DD`), inclusive |
 | `user_id` | integer | No | Whose *upload* volume to report in `topExternalUsers` and the Upload Volume card. Does not affect bandwidth |
 | `video` | string | No | Narrow every bandwidth series to one video ULID |
-| `tid` | string | No | Narrow every bandwidth series to one download tracking id. Pass it **empty** (`?tid=`) to isolate traffic that carried no id |
+| `tracking_id` | string | No | Narrow every bandwidth series to one tracking id. Pass it **empty** (`?tracking_id=`) to isolate traffic that carried no id |
 | `metric` | string | No | Narrow to one kind of delivery: `streaming_bytes`, `download_bytes`, `asset_bytes` or `bandwidth_bytes`. Omit for all of them |
 
-`video` and `tid` are matched against columns written from CDN access logs, so they are validated to
+`video` and `tracking_id` are matched against columns written from CDN access logs, so they are validated to
 what those columns can hold — a 26-character ULID and up to 64 characters of `A-Z a-z 0-9 _ -`
 respectively. `metric` only accepts the four delivery metrics above: the same table also stores
 upload volume and encoding seconds, and reporting those as bytes would be nonsense. Anything else
@@ -134,7 +134,7 @@ responds `422`.
     "topIps": [{ "ip": "203.0.113.7", "bytes": 734003200, "sessions": 3 }],
     "topVideos": [{ "video": "01J...", "externalResourceId": "", "bytes": 2147483648, "sessions": 88, "uniqueIps": 71 }],
     "topExternalUsers": [{ "externalUserId": "user-123", "bytes": 52428800 }],
-    "topTrackingIds": [{ "tid": "customer-42", "bytes": 943718400, "videos": 3, "uniqueIps": 11 }],
+    "topTrackingIds": [{ "trackingId": "customer-42", "bytes": 943718400, "videos": 3, "uniqueIps": 11 }],
     "bandwidthByVideo": [{ "date": "2026-04-16", "video": "01J...", "bytes": 536870912 }],
     "encodingOverTime": [{ "date": "2026-04-16", "device": "cpu", "seconds": 1820.5 }]
   }
@@ -143,13 +143,13 @@ responds `422`.
 
 ### Bandwidth by tracking id
 
-`topTrackingIds` is the read side of the `tid` you mint download links with
+`topTrackingIds` is the read side of the `tracking_id` you mint links with
 ([Download a Track](/api/streams#download-a-track)) — it is how an external project bills or
 reports the transfers it handed to each of its own customers.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `tid` | string | The id the link carried. **Empty** for traffic that carried none — playback, downloads minted without one, and ids that reached the log malformed. It is reported rather than dropped, so the rows add up to `Total Bandwidth` |
+| `trackingId` | string | The id the link carried. **Empty** for traffic that carried none — links minted by a project key without a `tracking_id`, Bunny playback (whose token leaves no room for one), and ids that reached the log malformed. Links minted from a session or personal token without a `tracking_id` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
 | `bytes` | number | Bytes served |
 | `videos` | integer | Distinct videos this id pulled |
 | `uniqueIps` | integer | Distinct client IPs. Approximate when the CDN anonymizes log IPs |
@@ -163,7 +163,7 @@ whatever happens to the labels on top of them.
 To read one customer's traffic on one video across a month:
 
 ```
-GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&tid=customer-42
+GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&tracking_id=customer-42
 ```
 
 Every bandwidth series in the response — the cards, `bandwidthOverTime`, `topIps`, `topVideos`,

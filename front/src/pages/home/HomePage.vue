@@ -237,9 +237,9 @@ function formatCardValue(card: AnalyticsCard): string {
           <TableBody>
             <!-- The empty id is real traffic, not a gap: playback, and downloads minted without
                  one. Labelled rather than hidden, so the rows add up to the total above. -->
-            <TableRow v-for="row in data.topTrackingIds" :key="row.tid || '__none__'">
+            <TableRow v-for="row in data.topTrackingIds" :key="row.trackingId || '__none__'">
               <TableCell class="font-mono text-xs">
-                <span v-if="row.tid">{{ row.tid }}</span>
+                <span v-if="row.trackingId">{{ row.trackingId }}</span>
                 <span v-else class="text-muted-foreground italic">Not attributed</span>
               </TableCell>
               <TableCell class="text-right text-xs">{{ row.videos }}</TableCell>
