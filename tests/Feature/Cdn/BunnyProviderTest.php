@@ -4,6 +4,7 @@ use App\Models\Video;
 use App\Services\Cdn\BunnyProvider;
 use App\Settings\CdnSettings;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Split a directory-mode Bunny URL into its token block and the trailing path.
@@ -119,3 +120,49 @@ it('signs the caller tracking id into the download token', function () {
 
     expect($query['token'])->toBe($expected);
 });
+
+it('records what a tracked playback token means, for the log ingest to resolve', function () {
+    fakeCdnSettings();
+
+    // The directory token cannot carry the id itself — an extra signed parameter is refused by
+    // the edge, an unsigned one would be viewer-editable — so the token IS the identifier: the
+    // mint records token → id, and `bunny:ingest-logs` reads it back off the logged path prefix.
+    $url = app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '1.2.3.4', false, 'customer-42');
+
+    [$parts] = bunnyDirParts($url);
+
+    expect(Cache::get(BunnyProvider::trackingCacheKey($parts['bcdn_token'])))->toBe('customer-42');
+});
+
+it('stores no mapping when the playback link names no viewer', function () {
+    fakeCdnSettings();
+
+    $url = app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '1.2.3.4', false);
+
+    [$parts] = bunnyDirParts($url);
+
+    expect(Cache::get(BunnyProvider::trackingCacheKey($parts['bcdn_token'])))->toBeNull();
+});
+
+it('mints distinct tokens for two viewers of the same video in the same second', function () {
+    fakeCdnSettings();
+
+    // The hash input is (token_path, expires): with the clock frozen, both mints would produce
+    // the same token and the second viewer's session would inherit the first one's label. The
+    // jitter on the expiry is what gives each mapping a token of its own.
+    $first = app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '1.2.3.4', false, 'customer-a');
+    $second = app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '5.6.7.8', false, 'customer-b');
+
+    [$a] = bunnyDirParts($first);
+    [$b] = bunnyDirParts($second);
+
+    expect($a['bcdn_token'])->not->toBe($b['bcdn_token'])
+        ->and(Cache::get(BunnyProvider::trackingCacheKey($a['bcdn_token'])))->toBe('customer-a')
+        ->and(Cache::get(BunnyProvider::trackingCacheKey($b['bcdn_token'])))->toBe('customer-b');
+});
+
+it('refuses to record a tracking label outside the URL-safe alphabet', function () {
+    fakeCdnSettings();
+
+    app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '1.2.3.4', false, 'a&b=c');
+})->throws(InvalidArgumentException::class);

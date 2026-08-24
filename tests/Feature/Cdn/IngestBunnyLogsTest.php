@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\IngestBandwidthJob;
+use App\Services\Cdn\BunnyProvider;
 use App\Settings\CdnSettings;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -295,4 +296,29 @@ it('keeps the zones apart instead of summing them into one row', function () {
         'play' => 15,
         'download' => 20,
     ]);
+});
+
+it('attributes playback lines through the minted token mapping', function () {
+    fakeBunnySettings();
+
+    // Playback links carry no `tid` — the directory token leaves no room for one — but the token
+    // prefix itself reaches the log on every segment, and the mint recorded what it means
+    // ({@see \App\Services\Cdn\BunnyProvider::trackingCacheKey}). An unmapped token (expired,
+    // pre-feature, cache restart) costs the label, never the bytes.
+    Cache::put(BunnyProvider::trackingCacheKey('HS256-known_token'), 'customer-42', 600);
+
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 40, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00002.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-unknown&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
+        $byTid = collect($job->events)->keyBy('tracking_id')->map->bytes;
+
+        return $byTid->get('customer-42') === 140
+            && $byTid->get('') === 25;
+    });
 });

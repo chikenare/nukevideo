@@ -65,9 +65,14 @@ same `usage` table the self-hosted Vector pipeline feeds, so both providers answ
 - **Zones.** The directory after the video ULID — `play`, `download`, `assets` — decides which
   metric the bytes land under. It is read from the logged path, the only place the distinction
   survives; a path whose zone cannot be read still counts, under the generic `bandwidth_bytes`.
-- **Tracking ids.** The v2 log's `path` carries the query string, which is what lets a download
-  link's tracking id be attributed. See [Download a Track](/api/streams#download-a-track). An id that
-  arrives malformed costs its label, never its bytes — the line is still counted, as unattributed.
+- **Tracking ids.** Two carriers. A download link's id rides its query string, which the v2 log's
+  `path` keeps — see [Download a Track](/api/streams#download-a-track). A playback link cannot carry
+  one (the directory token leaves no room, and segments would not inherit a query), so the mint
+  records what each signed token means and the ingest resolves the `bcdn_token=` prefix every
+  segment inherits back to that id. The mapping lives in the cache for the token's lifetime plus a
+  margin: a token the ingest no longer recognises — expired, minted before the mapping existed, a
+  cache restart — costs the label, never the bytes. An id that arrives malformed is counted the
+  same way, as unattributed.
 - **Client IPs.** If the pull zone has **Log IP Anonymization** enabled (Bunny's default), Bunny
   zeroes the last octet before you ever see the line. Bandwidth totals are unaffected, but the
   "unique IPs" figures become an approximation. Turn it off in the Bunny panel if you need exact

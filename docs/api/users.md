@@ -149,7 +149,7 @@ reports the transfers it handed to each of its own customers.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `trackingId` | string | The id the link carried. **Empty** for traffic that carried none — links minted by a project key without a `tracking_id`, Bunny playback (whose token leaves no room for one), and ids that reached the log malformed. Links minted from a session or personal token without a `tracking_id` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
+| `trackingId` | string | The id the link carried. **Empty** for traffic that carried none — links minted by a project key without a `tracking_id`, Bunny playback whose token → id mapping was no longer available at ingest time, and ids that reached the log malformed. Links minted from a session or personal token without a `tracking_id` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
 | `bytes` | number | Bytes served |
 | `videos` | integer | Distinct videos this id pulled |
 | `uniqueIps` | integer | Distinct client IPs. Approximate when the CDN anonymizes log IPs |

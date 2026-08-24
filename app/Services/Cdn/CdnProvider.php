@@ -13,11 +13,12 @@ interface CdnProvider
      *
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file}), provider-agnostic
      * @param  string|null  $trackingId  the caller's own label for this viewer, carried so the
-     *                                   traffic can be attributed. Only the self-hosted edge can
-     *                                   honour it for playback: it signs the id into the path and
-     *                                   every segment inherits it. Bunny's directory token leaves
-     *                                   no room for it, and its segments would carry nothing
-     *                                   anyway, so that provider ignores it here
+     *                                   traffic can be attributed. Each provider has its own
+     *                                   mechanism: the self-hosted edge signs the id into the
+     *                                   path and every segment inherits it; Bunny cannot carry
+     *                                   it in the URL, so the mint records what the signed token
+     *                                   means and the log ingest resolves it back
+     *                                   ({@see BunnyProvider::trackingCacheKey()})
      */
     public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?string $trackingId = null): string;
 

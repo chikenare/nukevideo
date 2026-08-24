@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Data\BunnyConfigData;
 use App\Enums\CdnDriver;
 use App\Jobs\IngestBandwidthJob;
+use App\Services\Cdn\BunnyProvider;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -198,11 +199,17 @@ class IngestBunnyLogs extends Command
         return $slash === false ? '' : substr($rest, 0, $slash);
     }
 
+    /** Token → id resolutions memoised per run: a session logs hundreds of lines under one token. */
+    private array $tokenTracking = [];
+
     /**
-     * The `tid` query parameter of a logged request, or '' when the link carried none.
+     * The tracking id of a logged request, or '' when it carried none. Two carriers, tried in
+     * order: the `tid` query parameter of a download link ({@see BunnyProvider::downloadUrl}),
+     * and for playback the `bcdn_token=` path prefix, resolved through the token → id mapping
+     * recorded when the link was minted ({@see BunnyProvider::trackingCacheKey}).
      *
-     * Clamped to the alphabet the request validation accepts rather than trusted: the value is
-     * echoed into a URL by an API client and read back out of a log line. An id that did not
+     * Clamped to the alphabet the request validation accepts rather than trusted: the query value
+     * is echoed into a URL by an API client and read back out of a log line. An id that did not
      * survive that round trip intact is reported as unattributed — never dropped, because the
      * bytes behind it were really delivered and really cost money.
      */
@@ -212,7 +219,25 @@ class IngestBunnyLogs extends Command
 
         $trackingId = (string) ($query['tid'] ?? '');
 
+        if ($trackingId === '') {
+            $trackingId = $this->tokenTrackingId($path);
+        }
+
         return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) === 1 ? $trackingId : '';
+    }
+
+    /**
+     * A playback line's tracking id, from the token its path carries. A token with no mapping —
+     * expired, minted before the mapping existed, or lost to a cache restart — costs the label,
+     * never the bytes: the line still counts, as unattributed.
+     */
+    private function tokenTrackingId(string $path): string
+    {
+        if (preg_match('#^/bcdn_token=([A-Za-z0-9_-]+)#', $path, $match) !== 1) {
+            return '';
+        }
+
+        return $this->tokenTracking[$match[1]] ??= (string) Cache::get(BunnyProvider::trackingCacheKey($match[1]), '');
     }
 
     /**
