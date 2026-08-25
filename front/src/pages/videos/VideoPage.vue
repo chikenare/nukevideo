@@ -476,6 +476,7 @@ onUnmounted(stopPolling)
                 :stream="stream"
                 :codec-label="codecLabel"
                 :editable="canManageStreams"
+                :downloadable="video.status === 'completed'"
                 @on-deleted="() => onStreamDeleted(stream)"
                 @on-edit="s => editStreamDialog?.show(s)"
               />

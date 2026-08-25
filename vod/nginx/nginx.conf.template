@@ -196,6 +196,11 @@ http {
             proxy_max_temp_file_size 0;
 
             add_header X-Cache-Status "OFF" always;
+            # A download is meant to land on disk, not in a player tab. The panel lives on another
+            # origin, and browsers ignore the anchor's `download` attribute cross-origin, so only
+            # this header makes them save the file. No filename: the browser falls back to the last
+            # path segment, which is the stored name (ULID plus extension) — unique and safe.
+            add_header Content-Disposition "attachment" always;
             # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
             # dropped so one cached copy serves every embedding origin, and `*` is safe because
             # nothing here is authorised by the origin — the token is, on every request.
@@ -204,7 +209,7 @@ http {
             proxy_hide_header Access-Control-Allow-Headers;
             proxy_hide_header Access-Control-Expose-Headers;
             add_header Access-Control-Allow-Origin "*" always;
-            add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
+            add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges, Content-Disposition" always;
 
             proxy_pass http://127.0.0.1:8080;
             proxy_http_version 1.1;
