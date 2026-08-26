@@ -1,7 +1,7 @@
 # A proxy node: the cache pool, the edge container, and Traefik in front of it in production.
 
 echo "=== Proxy image ==="
-ensure_image "$IMAGE" "$BUILD_TARGET"
+pull_image "$IMAGE"
 
 # Where the edge caches: the pool's directory, or the fallback docker volume when the host has
 # no pool — and only then is the cache capped, because a volume shares the OS disk. With a

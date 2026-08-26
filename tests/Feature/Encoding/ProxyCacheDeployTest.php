@@ -41,6 +41,8 @@ function inProduction(): void
 function inDevelopment(): void
 {
     app()->detectEnvironment(fn () => 'local');
+    // A development deploy pulls `node-dev` from a registry, and is refused without one.
+    config(['nuke.registry' => '10.0.0.240:5000']);
 }
 
 beforeEach(function () {

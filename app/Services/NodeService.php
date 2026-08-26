@@ -293,17 +293,24 @@ class NodeService
     }
 
     /**
-     * Production pulls the released tag; development builds it on the node from the working copy
-     * (see `ensure_image` in common.sh for why the node decides). The push only happens with a
-     * registry configured: without one the name resolves to Docker Hub, and a development build
-     * has no business being pushed to the place releases are published.
+     * A node only ever pulls. Production pulls the released tag; development pulls the
+     * `node-dev` tag that `bin/push-node-dev` built from the working copy and pushed to the
+     * configured registry. Nodes used to build that tag themselves, from the checkout the panel
+     * runs from — which meant the deploy user had to read the developer's home, a build ran
+     * inside the deploy window, and an external node got a different image than the local one.
+     * One producer, one tag, and a node never needs the source.
      */
     private function imageVars(string $type): array
     {
+        if (app()->isLocal() && ! config('nuke.registry')) {
+            // Without a registry the name resolves to Docker Hub, where no `node-dev` tag exists
+            // (and must never exist: that namespace is where releases are published). Failing here
+            // beats a node reporting "image not found" at the end of an SSH session.
+            throw new \RuntimeException('Deploying a node from a development panel needs DOCKER_REGISTRY: build and push the image with bin/push-node-dev first.');
+        }
+
         return [
             'IMAGE' => $this->resolveImage($type),
-            'BUILD_TARGET' => app()->isLocal() ? "{$type}-prod" : '',
-            'PUSH_IMAGE' => app()->isLocal() && config('nuke.registry') ? '1' : '',
         ];
     }
 
@@ -611,9 +618,8 @@ class NodeService
      * A node image built in development gets its own tag, never `:dev`. That one belongs to
      * compose — it builds it from the `api-dev` target, which is the runtime with no application
      * code in it, and the next `docker compose up --build` would rebuild it from under a node that
-     * needs the opposite. This tag is built from the release targets, so what a node runs in
-     * development is shaped exactly like production and can be pushed or copied to an external test
-     * node as it stands.
+     * needs the opposite. This tag is built from the release targets by `bin/push-node-dev`, so
+     * what a node runs in development is shaped exactly like production.
      */
     private const DEV_NODE_TAG = 'node-dev';
 

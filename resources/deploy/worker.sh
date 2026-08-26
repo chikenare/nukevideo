@@ -29,7 +29,7 @@ case "$NODE_ACCEL" in
 esac
 
 echo "=== Worker image ==="
-ensure_image "$IMAGE" "$BUILD_TARGET"
+pull_image "$IMAGE"
 
 echo "=== Deploying worker ==="
 # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit reserved

@@ -79,7 +79,28 @@ Behind Cloudflare, `/healthz` must reach the edge: exempt it from any WAF, bot o
 
 ### Prerequisites
 
-Before adding a node, you need an SSH key registered in NukeVideo:
+**The SSH user.** The deploy runs over SSH with no terminal, so whatever it needs root for
+(installing Docker, enabling the service, the cache-disk setup on a proxy) has to work without a
+password prompt. Either:
+
+- connect as `root` (with `PermitRootLogin prohibit-password` and the key below in
+  `/root/.ssh/authorized_keys`) — the usual choice on a server, and what production is expected
+  to use; or
+- a dedicated user with passwordless sudo:
+  `echo 'nukevideo ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nukevideo` (mode `0440`).
+  Membership of the `sudo` group alone is not enough: that rule asks for a password.
+
+The deploy adds the user to the `docker` group itself. Note that this group is root-equivalent —
+anyone in it can start a privileged container over the host filesystem — so a restricted user
+buys no isolation over root here; it only satisfies a "no root login" policy. The script checks
+`sudo -n` first and aborts with the fix if the host would have prompted.
+
+**The images.** A node never builds; it pulls `nukevideo-api` / `nukevideo-proxy` at the tag the
+panel decides: the released version in production, `node-dev` from `DOCKER_REGISTRY` in
+development. For a development node, build and push that tag from the checkout first —
+`bin/push-node-dev` — then deploy; repeat after every change you want the node to run.
+
+**The SSH key.** Before adding a node, you need an SSH key registered in NukeVideo:
 
 ```
 POST /api/ssh-keys
@@ -97,7 +118,7 @@ POST /api/nodes
 {
   "name": "worker-us-east-1",
   "ip_address": "203.0.113.10",
-  "user": "deploy",
+  "user": "root",
   "type": "worker",
   "ssh_key_id": 1,
   "hostname": "worker-1.nukevideo.com"
