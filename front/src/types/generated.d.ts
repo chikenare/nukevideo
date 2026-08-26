@@ -359,6 +359,15 @@ isAdmin?: boolean,
 };
 }
 namespace Video {
+export type IndexVideosData = {
+search: string | null,
+externalUserId: string | null,
+externalResourceId: string | null,
+status: string | null,
+sort: string,
+direction: string,
+perPage: number,
+};
 export type UpdateVideoData = {
 name: string,
 externalUserId?: string | null,
