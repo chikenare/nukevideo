@@ -8,6 +8,7 @@ class DockerService
 {
     public function __construct(
         private SSHService $ssh,
+        private SshKeyService $sshKeys,
     ) {}
 
     public function run(Node $node, string $command, int $timeout = 30): string
@@ -15,7 +16,7 @@ class DockerService
         return trim($this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: $this->sshKeys->privateKey(),
             command: "docker {$command}",
             timeout: $timeout,
         ));
@@ -24,6 +25,12 @@ class DockerService
     public function removeContainer(Node $node, string $name): void
     {
         $this->run($node, "rm -f {$name}");
+    }
+
+    public function removeVolume(Node $node, string $name): void
+    {
+        // A volume that never existed is not an error worth failing a delete over.
+        $this->run($node, "volume rm -f {$name} 2>/dev/null || true");
     }
 
     public function listContainers(Node $node): array

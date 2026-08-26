@@ -4,21 +4,17 @@ use App\Http\Controllers\Api\NodeController;
 use App\Jobs\StartNodeServicesJob;
 use App\Jobs\StopNodeServicesJob;
 use App\Models\Node;
-use App\Models\SshKey;
 use App\Services\DockerService;
 use App\Services\SSHService;
+use App\Settings\AppSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
 uses(RefreshDatabase::class);
 
 function lifecycleNode(array $attributes = []): Node
 {
-    $key = SshKey::create([
-        'name' => 'test',
-        'public_key' => 'ssh-ed25519 AAAA',
-        'private_key' => 'PRIVATE',
-        'fingerprint' => 'SHA256:test',
-    ]);
+    // The panel's one key, as any SSH-backed call reads it ({@see \App\Services\SshKeyService}).
+    AppSettings::fake(['ssh_private_key' => 'PRIVATE', 'ssh_public_key' => 'ssh-ed25519 AAAA nukevideo', 'ssh_fingerprint' => 'ff']);
 
     return Node::create([
         'ip_address' => '10.0.0.99',
@@ -28,7 +24,6 @@ function lifecycleNode(array $attributes = []): Node
         'is_active' => true,
         'is_storage_server' => true,
         'storage_endpoint' => 'http://10.0.0.99:9000',
-        'ssh_key_id' => $key->id,
         ...$attributes,
     ]);
 }

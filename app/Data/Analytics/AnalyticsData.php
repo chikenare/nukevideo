@@ -17,6 +17,8 @@ class AnalyticsData extends Data
         public array $topVideos,
         /** @var TopExternalUserData[] */
         public array $topExternalUsers,
+        /** @var TopTrackingIdData[] */
+        public array $topTrackingIds,
         /** @var BandwidthByVideoData[] */
         public array $bandwidthByVideo,
         /** @var EncodingPointData[] */

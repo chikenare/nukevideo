@@ -17,6 +17,8 @@ services:
         condition: service_healthy
       rustfs:
         condition: service_started
+    ports:
+      - 8089:8080
   nukevideo-schedule:
     image: ${DOCKER_REGISTRY:-chikenare}/nukevideo-api:dev
     command: ["php", "/var/www/html/artisan", "schedule:work"]

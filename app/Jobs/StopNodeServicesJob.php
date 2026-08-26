@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Node;
+use App\Services\SshKeyService;
 use App\Services\SSHService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -23,7 +24,7 @@ class StopNodeServicesJob implements ShouldQueue
 
     public function handle(SSHService $ssh): void
     {
-        $node = $this->node->load('sshKey');
+        $node = $this->node;
         $containers = implode(' ', $node->deployedContainerNames());
 
         // Everything the deploy raised for this node — on a proxy that is Traefik and Vector too,
@@ -39,7 +40,7 @@ class StopNodeServicesJob implements ShouldQueue
         $stopped = trim($ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: app(SshKeyService::class)->privateKey(),
             command: "docker stop {$containers} 2>/dev/null || true",
             timeout: 60,
         ));

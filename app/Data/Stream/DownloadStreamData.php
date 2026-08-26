@@ -3,35 +3,43 @@
 namespace App\Data\Stream;
 
 use App\Data\RequestData;
-use App\Services\Cdn\BunnyProvider;
-use Spatie\LaravelData\Attributes\Validation\Max;
+use App\Services\Cdn\TrackingRegistry;
+use App\Support\TrackingId;
 
 class DownloadStreamData extends RequestData
 {
     public function __construct(
         /**
-         * Caller-supplied tracking id, echoed into the signed URL so the CDN's request log can
-         * attribute the transfer back to whatever the integrator is counting — an end user, a
-         * session, an invoice.
+         * Caller-supplied tracking id: whatever the integrator is counting — an end user, a
+         * session, an invoice. It never enters the URL; the mint records it against the link's
+         * token ({@see TrackingRegistry}) and the log ingest attributes the
+         * transfer through that.
          *
-         * The charset is deliberately narrow. Bunny folds every query parameter into the token
-         * signature as `key=value` pairs joined by `&`, so an `&` or an `=` in this value would
-         * split it into parameters of its own and let a caller reshape the signed parameter set.
-         * Anything outside the URL-safe alphabet is rejected rather than escaped, because the value
-         * also has to survive a log line intact to be worth anything.
+         * The charset is deliberately narrow: the value is a label in a cache and a column in the
+         * analytics, and it used to be a URL component — keeping the alphabet stable means an
+         * integrator's ids never have to change shape.
+         *
+         * `tracking_id` on the wire, like `external_user_id`.
          */
-        public ?string $tid = null,
+        public ?string $trackingId = null,
     ) {}
 
     /**
      * Written out here rather than as property attributes: an explicit `rules()` entry REPLACES the
      * inferred and attribute-derived rules for that key, so a `#[Max]` alongside this would silently
-     * never run. Only Bunny carries the value ({@see BunnyProvider::downloadUrl}).
+     * never run.
+     *
+     * Both spellings, deliberately: Spatie also binds the bare property name (`trackingId`) as a
+     * fallback, so a payload using it would reach the property WITHOUT passing through a rule
+     * keyed only on the mapped name — and this value's whole validation story is the charset.
      */
     public static function rules(): array
     {
+        $trackingId = TrackingId::rules();
+
         return [
-            'tid' => ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+\z/'],
+            'tracking_id' => $trackingId,
+            'trackingId' => $trackingId,
         ];
     }
 }

@@ -15,16 +15,18 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { ApiException } from '@/exceptions/ApiException'
 import StreamService from '@/services/StreamService'
 type Stream = App.Data.StreamData
-import { MoreVertical, Pencil, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk } from '@lucide/vue'
+import { MoreVertical, Pencil, Trash2, Video, Music, Subtitles, ChevronDown, Asterisk, Download } from '@lucide/vue'
 import StorageSize from '@/components/StorageSize.vue'
 import { toast } from 'vue-sonner'
 
-const { stream, codecLabel, editable } = defineProps<{
+const { stream, codecLabel, editable, downloadable } = defineProps<{
   stream: Stream
   /** Resolves an ffmpeg codec name (e.g. `libx264`) to its display label; falls back to the raw name. */
   codecLabel: (codec?: string | null) => string | null
   /** False while the video is still processing — the API rejects edits until then. */
   editable?: boolean
+  /** False until the video is completed — the API only mints download links after that. */
+  downloadable?: boolean
 }>()
 const emit = defineEmits<{ onDeleted: []; onEdit: [stream: Stream] }>()
 
@@ -34,6 +36,35 @@ const isForced = computed(() => stream.type === 'subtitle' && stream.forced)
 
 // Only audio and text tracks carry a name, language or forced flag in a manifest.
 const canEdit = computed(() => editable && ['audio', 'subtitle'].includes(stream.type))
+
+// A null fileSize means the raw track was not retained (the template dropped processed files),
+// so there is no object to hand out and the API would answer 404. `original` is never
+// downloadable through this endpoint, but it also never renders through this component.
+const canDownload = computed(() => downloadable && stream.fileSize != null)
+
+const isDownloading = ref(false)
+
+const handleDownload = async () => {
+  if (isDownloading.value) return
+  isDownloading.value = true
+  try {
+    const link = await StreamService.download(stream.ulid)
+    // An anchor click rather than window.open: opening a window after an await trips popup
+    // blockers, while a programmatic click on a same-document anchor does not.
+    const a = document.createElement('a')
+    a.href = link.url
+    a.download = link.filename
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } catch (e) {
+    if (e instanceof ApiException) toast.error(e.message)
+    console.error(e)
+  } finally {
+    isDownloading.value = false
+  }
+}
 
 const handleDelete = async () => {
   try {
@@ -132,6 +163,9 @@ const details = computed(() => {
           <DropdownMenuContent align="end">
             <DropdownMenuItem v-if="canEdit" @click="emit('onEdit', stream)">
               <Pencil :size="14" class="mr-2" /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem v-if="canDownload" :disabled="isDownloading" @click="handleDownload">
+              <Download :size="14" class="mr-2" /> Download
             </DropdownMenuItem>
             <DropdownMenuItem @click="isDeleteDialogOpen = true" class="text-destructive">
               <Trash2 :size="14" class="mr-2" /> Delete

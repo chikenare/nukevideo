@@ -23,16 +23,17 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 │   ├── Http/Controllers/   # plus Controllers/Api for admin and account endpoints
 │   ├── Http/Middleware/    # ResolveProject, DenyProjectKey, EnsureAdmin, Verify*
 │   ├── Jobs/ + Jobs/Concerns/
-│   ├── Models/             # Video, Output, Stream, Template, Node, Project, User, SshKey
+│   ├── Models/             # Video, Output, Stream, Template, Node, Project, User
 │   ├── Observers/          # registered with #[ObservedBy] on the model
 │   ├── Rules/              # rules used inside the Data objects' rules()
 │   ├── Services/           # plus Services/Cdn (providers) and Services/Concerns (traits)
-│   ├── Settings/           # spatie/laravel-settings
+│   ├── Settings/           # spatie/laravel-settings (AppSettings holds the one SSH key)
 │   └── Support/            # stateless helpers: Cpu, Gpu, MediaDuration, MediaSource
 ├── database/
 │   ├── migrations/             # MariaDB in production, SQLite in tests
 │   ├── clickhouse-migrations/  # php artisan clickhouse:migrate
 │   └── settings/               # spatie/laravel-settings migrations
+├── resources/deploy/       # the node deploy, as bash; NodeService only prepends a variable header
 ├── docs/                   # VitePress (guide/ + api/)
 ├── front/                  # Vue 3 + Vite SPA (its own pnpm project)
 ├── vod/                    # delivery edge nginx (secure_token)
@@ -202,11 +203,14 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - **The database is MariaDB**, whatever the global guide says about PostgreSQL. Write migrations
   for MySQL.
 - Worker containers run a baked image with no code mount: testing a change there means `docker cp`
-  plus `horizon:terminate`. Deploying while `APP_ENV=local` builds that image on the node instead of
-  pulling it (release targets, from the compose project's directory, tagged `:node-dev` — `:dev` is
-  compose's own runtime-only image and must not be reused), so a redeploy ships the working copy. A
-  node with no working copy on it pulls that tag instead, which is how an external test node gets
-  it; that needs `DOCKER_REGISTRY` set, and only then does a development build get pushed anywhere.
+  plus `horizon:terminate`. Nodes never build: a deploy pulls `nukevideo-{api,proxy}:node-dev`
+  from `DOCKER_REGISTRY` while `APP_ENV=local` (the released tag otherwise), so shipping the
+  working copy to a node is `bin/push-node-dev` (builds the release targets on the host and pushes
+  them) followed by a redeploy from the panel. `:dev` is compose's own runtime-only image and must
+  not be reused. A development panel refuses to deploy without `DOCKER_REGISTRY`.
+- The deploy runs over SSH with no terminal, so the node user is either root or has passwordless
+  sudo (`NOPASSWD`); the script checks that first and aborts with the fix. A user in the `docker`
+  group is root-equivalent anyway, so there is nothing to gain from a restricted one.
 - Everything a deploy names is prefixed `nukevideo_dev_` in local and `nukevideo_` otherwise
   (`Node::containerPrefix()`). Both environments number their nodes from their own database, so
   without that a dev deploy would replace the production containers on the same host. Vector is

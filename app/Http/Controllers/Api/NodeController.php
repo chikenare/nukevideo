@@ -2,19 +2,24 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Data\CacheDiskData;
+use App\Data\Node\DeployNodeData;
 use App\Data\Node\StoreNodeData;
 use App\Data\Node\UpdateNodeData;
 use App\Data\NodeData;
 use App\Data\ValidationCheckData;
+use App\Enums\NodeType;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Services\DockerService;
 use App\Services\NodeService;
+use App\Services\ProxyCacheService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
+use Spatie\LaravelData\Optional;
 
 class NodeController extends Controller
 {
@@ -51,14 +56,28 @@ class NodeController extends Controller
         ]);
     }
 
-    public function deploy(Node $node)
+    public function deploy(DeployNodeData $data, Node $node)
     {
-        $node->load('sshKey');
-
         // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
         $drain = request()->boolean('drain', true);
 
-        return response()->stream(function () use ($node, $drain) {
+        // Which spare disks to format into the cache pool, as the panel listed them. An empty
+        // list means none — keep the cache off the disks and in a volume. The list is mandatory
+        // for a production proxy ({@see DeployNodeData}): the service reads a missing one as
+        // "every spare disk", and a missing list must never mean that by accident. A development
+        // panel's deploy target is often the developer's own machine, where "every spare disk"
+        // is a backup drive, so there an absent list means none.
+        $disks = $data->disks instanceof Optional ? null : $data->disks;
+
+        if ($disks === null && app()->isLocal()) {
+            $disks = [];
+        }
+
+        // Belt and braces over the validation: null past this point is "all", and only a
+        // worker (whose deploy ignores the list) may get there without having chosen.
+        abort_if($disks === null && $node->type === NodeType::PROXY, 422, 'A proxy deploy needs the list of disks to format (an empty list formats none).');
+
+        return response()->stream(function () use ($node, $drain, $disks) {
             $send = function (string $type, string $data = '') {
                 echo 'data: '.json_encode(['type' => $type, 'data' => $data])."\n\n";
                 if (ob_get_level()) {
@@ -74,7 +93,7 @@ class NodeController extends Controller
 
                 $this->nodeService->runFullDeploy($node, function ($output) use ($send) {
                     $send('output', $output);
-                }, $drain);
+                }, $drain, $disks);
                 $send('done');
             } catch (\Throwable $e) {
                 $send('error', $e->getMessage());
@@ -89,16 +108,32 @@ class NodeController extends Controller
 
     public function validateNode(Node $node)
     {
-        $node->load('sshKey');
-
         $checks = $this->nodeService->runValidation($node);
 
         return response()->json(['checks' => ValidationCheckData::collect($checks)]);
     }
 
+    /**
+     * What a deploy would do to the node's disks, so the panel can show it before running one.
+     * Only a proxy has a cache pool; a worker gets an empty list.
+     */
+    public function cacheDisks(Node $node, ProxyCacheService $cache)
+    {
+        if ($node->type !== NodeType::PROXY) {
+            return response()->json(['data' => ['preselect' => false, 'disks' => []]]);
+        }
+
+        return response()->json(['data' => [
+            // Whether the panel ticks the spare disks by default. Not from a development panel,
+            // whose deploy target is often the developer's own machine.
+            'preselect' => ! app()->isLocal(),
+            'disks' => CacheDiskData::collect($cache->inventory($node)),
+        ]]);
+    }
+
     public function destroy(string $id)
     {
-        $node = Node::with('sshKey')->findOrFail($id);
+        $node = Node::findOrFail($id);
 
         try {
             $docker = app(DockerService::class);
@@ -106,7 +141,7 @@ class NodeController extends Controller
             // Through the model: the names carry an environment prefix, and a hand-built one here
             // would either miss this environment's containers or match the other environment's.
             $owned = $node->deployedContainerNames();
-            if ($node->type->value === 'worker') {
+            if ($node->type === NodeType::WORKER) {
                 // Only on delete. The node is gone for good, so its chunk store goes with it —
                 // and if this was the storage server, another node has to be flagged as one.
                 $owned[] = $node->storageContainerName();
@@ -120,6 +155,13 @@ class NodeController extends Controller
                 if (in_array($name, $owned, true)) {
                     $docker->removeContainer($node, $name);
                 }
+            }
+
+            if ($node->type === NodeType::PROXY) {
+                // The fallback cache volume is the node's alone and is otherwise never reclaimed.
+                // A cache pool directory on a dedicated disk is not touched: the pool belongs to
+                // the host and is what the next node deployed there picks up.
+                $docker->removeVolume($node, ProxyCacheService::volumeFor($node));
             }
         } catch (\Throwable $e) {
             Log::error('Failed to remove containers for node', [
@@ -147,7 +189,7 @@ class NodeController extends Controller
 
     public function generateBootstrapToken(Node $node)
     {
-        if ($node->type->value !== 'worker') {
+        if ($node->type !== NodeType::WORKER) {
             return response()->json(['message' => 'Bootstrap tokens are only available for worker nodes.'], 422);
         }
 

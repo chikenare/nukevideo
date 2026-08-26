@@ -13,12 +13,17 @@ use App\Settings\CdnSettings;
 /**
  * Our own CDN: the URL points at a per-video proxy node (edge nginx) and carries an Akamai
  * `__hdnea__` token. The edge validates it and re-signs the segment URLs in the manifest body.
+ *
+ * The URL names no viewer. Attribution rides on the token: the edge logs the `__hdnea__` value
+ * of every request a link produces, and the mint records what that token means
+ * ({@see TrackingRegistry}). Relative segment URLs resolve under the manifest's directory, so
+ * they inherit the query the edge re-signs into the manifest body.
  */
 class SelfHostedProvider implements CdnProvider
 {
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): string
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
     {
         $node = Node::findProxyForVideo($video->ulid);
 
@@ -26,8 +31,7 @@ class SelfHostedProvider implements CdnProvider
             throw new NoCdnNodeAvailableException;
         }
 
-        $scheme = $local ? 'http://' : 'https://';
-        $url = "{$scheme}{$node->hostname}/".ltrim($path, '/');
+        $url = Node::proxyScheme($local)."{$node->hostname}/".ltrim($path, '/');
 
         return $this->sign($url, $ip);
     }
@@ -40,7 +44,7 @@ class SelfHostedProvider implements CdnProvider
             throw new NoCdnNodeAvailableException;
         }
 
-        return ($local ? 'http://' : 'https://').$node->hostname.'/'.ltrim($key, '/');
+        return Node::proxyScheme($local).$node->hostname.'/'.ltrim($key, '/');
     }
 
     /**
@@ -49,7 +53,7 @@ class SelfHostedProvider implements CdnProvider
      * against the running edge — the same token on a sibling rendition returns 403, which is the
      * whole point, since the renditions of one video are neighbours in `download/video/`.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string
+    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
     {
         $node = Node::findProxyForVideo($videoUlid);
 
@@ -59,37 +63,24 @@ class SelfHostedProvider implements CdnProvider
 
         $path = '/'.ltrim($key, '/');
 
-        $url = $this->sign(
-            ($local ? 'http://' : 'https://').$node->hostname.$path,
+        return $this->sign(
+            Node::proxyScheme($local).$node->hostname.$path,
             ip: null,
             acl: $path,
         );
-
-        // Appended, not signed — unlike Bunny, which folds every parameter into its token. The
-        // edge's ACL is compared against the request URI, which excludes the query, so a parameter
-        // here neither strengthens nor breaks the signature; the edge simply logs it
-        // (`log_format bandwidth`) for {@see \App\Jobs\IngestBandwidthJob} to attribute.
-        //
-        // That makes the id caller-alterable on this provider. It is the integrator's own label for
-        // its own traffic, so there is nothing to gain by changing it, but it must never be treated
-        // as an authorization input.
-        if ($trackingId === null) {
-            return $url;
-        }
-
-        // `sign()` returns the URL untouched when no token secret is configured, so the separator
-        // cannot be assumed: appending `&` to a URL with no query at all produces a malformed one.
-        $separator = str_contains($url, '?') ? '&' : '?';
-
-        return $url.$separator.'tid='.rawurlencode($trackingId);
     }
 
-    private function sign(string $url, ?string $ip, ?string $acl = null): string
+    /**
+     * The token handed back is the whole `__hdnea__` value (`exp=…~acl=…~hmac=…`), exactly as it
+     * sits in the URL and in the edge's log — that is what the ingest will hash to look the
+     * link up, so the two sides must agree on the bytes.
+     */
+    private function sign(string $url, ?string $ip, ?string $acl = null): SignedLink
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);
 
         if ($config->tokenSecret === '') {
-            return $url;
+            return new SignedLink($url, null);
         }
 
         $exp = now()->timestamp + $config->tokenWindow;
@@ -105,7 +96,7 @@ class SelfHostedProvider implements CdnProvider
 
         $separator = str_contains($url, '?') ? '&' : '?';
 
-        return "{$url}{$separator}{$config->tokenName}={$token}";
+        return new SignedLink("{$url}{$separator}{$config->tokenName}={$token}", $token);
     }
 
     /**

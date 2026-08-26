@@ -11,10 +11,17 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import UploadButton from '@/components/upload/UploadButton.vue';
-import { FileVideo } from '@lucide/vue';
+import { FileVideo, ArrowUp, ArrowDown, ArrowUpDown } from '@lucide/vue';
 import { ref, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import VideoService from '@/services/VideoService';
+import VideoService, { type VideoSort } from '@/services/VideoService';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useUploadStore } from '@/stores/upload';
 type Video = App.Data.VideoData
 import type { Pagination as ResPagination } from '@/types/Pagination';
@@ -41,10 +48,25 @@ const page = ref(Math.max(Number(route.query.page) || 1, 1));
 const search = ref(typeof route.query.q === 'string' ? route.query.q : '');
 let searchTimeout: ReturnType<typeof setTimeout>;
 
-/** Mirror the current state into the URL, leaving the defaults (page 1, no query) implicit. */
+const STATUSES: App.Enums.VideoStatus[] = ['pending', 'downloading', 'running', 'uploading', 'completed', 'failed'];
+const SORTS: VideoSort[] = ['created_at', 'name', 'size', 'duration', 'status'];
+
+const isStatus = (value: unknown): value is App.Enums.VideoStatus =>
+  typeof value === 'string' && (STATUSES as string[]).includes(value);
+const isSort = (value: unknown): value is VideoSort => typeof value === 'string' && (SORTS as string[]).includes(value);
+
+// 'all' rather than '' for the unfiltered choice: the select cannot represent an empty value.
+const status = ref<App.Enums.VideoStatus | 'all'>(isStatus(route.query.status) ? route.query.status : 'all');
+const sort = ref<VideoSort>(isSort(route.query.sort) ? route.query.sort : 'created_at');
+const direction = ref<'asc' | 'desc'>(route.query.dir === 'asc' ? 'asc' : 'desc');
+
+/** Mirror the current state into the URL, leaving the defaults (page 1, no query, newest first) implicit. */
 const syncQuery = () => {
   const query: Record<string, string> = {};
   if (search.value) query.q = search.value;
+  if (status.value !== 'all') query.status = status.value;
+  if (sort.value !== 'created_at') query.sort = sort.value;
+  if (direction.value !== 'desc') query.dir = direction.value;
   if (page.value > 1) query.page = String(page.value);
 
   // replace(), not push(): typing a search must not bury the previous page in the history stack.
@@ -65,6 +87,9 @@ const fetchVideos = async (options: { silent?: boolean } = {}) => {
     const result = await VideoService.index({
       page: page.value,
       search: search.value || undefined,
+      status: status.value === 'all' ? undefined : status.value,
+      sort: sort.value,
+      direction: direction.value,
     });
 
     if (requestId === latestRequest) videos.value = result;
@@ -101,6 +126,26 @@ const onSearch = () => {
   }, 300);
 };
 
+const onStatusChange = () => {
+  page.value = 1;
+  syncQuery();
+  fetchVideos();
+};
+
+/** Clicking the current column flips the direction; a new column starts descending — the
+ *  "biggest / latest first" reading is what a click on Size or Created is usually after. */
+const onSort = (column: VideoSort) => {
+  if (sort.value === column) {
+    direction.value = direction.value === 'desc' ? 'asc' : 'desc';
+  } else {
+    sort.value = column;
+    direction.value = column === 'name' || column === 'status' ? 'asc' : 'desc';
+  }
+  page.value = 1;
+  syncQuery();
+  fetchVideos();
+};
+
 const onPageChange = (newPage: number) => {
   if (newPage === page.value) return;
 
@@ -117,11 +162,20 @@ watch(() => route.query, (query) => {
 
   const urlPage = Math.max(Number(query.page) || 1, 1);
   const urlSearch = typeof query.q === 'string' ? query.q : '';
+  const urlStatus = isStatus(query.status) ? query.status : 'all';
+  const urlSort = isSort(query.sort) ? query.sort : 'created_at';
+  const urlDirection = query.dir === 'asc' ? 'asc' : 'desc';
 
-  if (urlPage === page.value && urlSearch === search.value) return;
+  if (
+    urlPage === page.value && urlSearch === search.value && urlStatus === status.value
+    && urlSort === sort.value && urlDirection === direction.value
+  ) return;
 
   page.value = urlPage;
   search.value = urlSearch;
+  status.value = urlStatus;
+  sort.value = urlSort;
+  direction.value = urlDirection;
   fetchVideos();
 });
 
@@ -169,17 +223,37 @@ onUnmounted(() => {
     <div class="flex justify-end">
       <UploadButton />
     </div>
-    <Input v-model="search" placeholder="Search videos..." @input="onSearch" />
+    <div class="flex gap-2">
+      <Input v-model="search" placeholder="Search videos..." class="flex-1" @input="onSearch" />
+      <Select v-model="status" @update:model-value="onStatusChange">
+        <SelectTrigger class="w-40">
+          <SelectValue placeholder="Status" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">All statuses</SelectItem>
+          <SelectItem v-for="s in STATUSES" :key="s" :value="s" class="capitalize">{{ s }}</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
     <div class="overflow-hidden rounded-lg border">
       <Table>
         <TableHeader class="bg-muted sticky top-0 z-10">
           <TableRow>
             <TableHead class="w-20"></TableHead>
-            <TableHead>Title</TableHead>
-            <TableHead>Duration</TableHead>
-            <TableHead>Size</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Created</TableHead>
+            <TableHead
+              v-for="column in ([['name', 'Title'], ['duration', 'Duration'], ['size', 'Size'], ['status', 'Status'], ['created_at', 'Created']] as [VideoSort, string][])"
+              :key="column[0]"
+              class="cursor-pointer select-none hover:text-foreground"
+              :aria-sort="sort === column[0] ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'"
+              @click="onSort(column[0])"
+            >
+              <span class="inline-flex items-center gap-1">
+                {{ column[1] }}
+                <ArrowUp v-if="sort === column[0] && direction === 'asc'" class="h-3 w-3" />
+                <ArrowDown v-else-if="sort === column[0]" class="h-3 w-3" />
+                <ArrowUpDown v-else class="h-3 w-3 opacity-30" />
+              </span>
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

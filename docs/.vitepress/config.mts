@@ -47,6 +47,7 @@ export default defineConfig({
             { text: 'Templates', link: '/api/templates' },
             { text: 'Nodes', link: '/api/nodes' },
             { text: 'Users', link: '/api/users' },
+            { text: 'Analytics', link: '/api/users#analytics' },
             { text: 'Usage', link: '/api/users#usage' },
             { text: 'Webhooks', link: '/api/webhooks' },
           ],

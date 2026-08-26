@@ -29,12 +29,12 @@ class CdnSettingsController extends Controller
 
             'selfHosted' => [Rule::requiredIf($selfHostedActive), 'array'],
             'selfHosted.tokenSecret' => ['nullable', 'string'],
-            'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string'],
+            'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
-            'selfHosted.secureTokenExpires' => [Rule::requiredIf($selfHostedActive), 'string'],
-            'selfHosted.secureTokenQueryExpires' => [Rule::requiredIf($selfHostedActive), 'string'],
-            'selfHosted.cacheMaxSize' => [Rule::requiredIf($selfHostedActive), 'string'],
-            'selfHosted.cacheInactive' => [Rule::requiredIf($selfHostedActive), 'string'],
+            // Both become nginx directive values through envsubst on the edge, so anything but
+            // an nginx time (`100d`, `1h`, `3600`) would break the config — or extend it.
+            'selfHosted.secureTokenExpires' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^\d+[smhd]?$/'],
+            'selfHosted.secureTokenQueryExpires' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^\d+[smhd]?$/'],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -53,8 +53,6 @@ class CdnSettingsController extends Controller
                 'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
                 'secure_token_expires' => $validated['selfHosted']['secureTokenExpires'] ?? null,
                 'secure_token_query_expires' => $validated['selfHosted']['secureTokenQueryExpires'] ?? null,
-                'cache_max_size' => $validated['selfHosted']['cacheMaxSize'] ?? null,
-                'cache_inactive' => $validated['selfHosted']['cacheInactive'] ?? null,
             ], fn ($v) => $v !== null));
         }
 

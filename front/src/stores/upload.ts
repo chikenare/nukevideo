@@ -18,6 +18,13 @@ export const useUploadStore = defineStore('upload', () => {
   const files = ref<FileUpload[]>([])
   const selectedTemplate = ref<string>('')
 
+  // True from the moment "Upload" is pressed until Uppy reports the first byte (or the first
+  // failure) of that batch. `isUploading` below keys off progress, so it stays false during the
+  // seconds the multipart handshake takes — long enough for a second press to queue the same
+  // files again, which is where the duplicated videos came from. This flag closes that window:
+  // `startUpload` is a no-op while it is set, and the button renders disabled.
+  const isStarting = ref(false)
+
   const uppy = markRaw(new Uppy<Meta, AwsBody>({
     debug: true,
     autoProceed: false,
@@ -74,6 +81,7 @@ export const useUploadStore = defineStore('upload', () => {
   }
 
   uppy.on('upload-progress', (uppyFile, progress) => {
+    isStarting.value = false
     const file = files.value.find(f => f.uppyFileId === uppyFile?.id)
     if (file && progress.bytesTotal) {
       file.progress = Math.round((progress.bytesUploaded / progress.bytesTotal) * 100)
@@ -91,6 +99,7 @@ export const useUploadStore = defineStore('upload', () => {
   })
 
   uppy.on('upload-error', (uppyFile, error) => {
+    isStarting.value = false
     const file = files.value.find(f => f.uppyFileId === uppyFile?.id)
     if (file) {
       file.status = 'error'
@@ -128,27 +137,43 @@ export const useUploadStore = defineStore('upload', () => {
   }
 
   function startUpload() {
+    if (isStarting.value) return
+
     const projectsStore = useProjectsStore()
 
     refreshCsrfHeader()
 
-    files.value.forEach(file => {
-      if (!file.uppyFileId && file.status === 'pending') {
-        const uppyFileId = uppy.addFile({
-          name: file.title,
-          data: file.file,
-          meta: {
-            template: selectedTemplate.value,
-            project: projectsStore.currentProject?.ulid,
-            externalUserId: file.externalUserId,
-            externalResourceId: file.externalResourceId,
-          }
-        })
-        file.uppyFileId = uppyFileId
-      }
-    })
+    isStarting.value = true
 
-    uppy.upload()
+    try {
+      files.value.forEach(file => {
+        if (!file.uppyFileId && file.status === 'pending') {
+          const uppyFileId = uppy.addFile({
+            name: file.title,
+            data: file.file,
+            meta: {
+              template: selectedTemplate.value,
+              project: projectsStore.currentProject?.ulid,
+              externalUserId: file.externalUserId,
+              externalResourceId: file.externalResourceId,
+            }
+          })
+          file.uppyFileId = uppyFileId
+        }
+      })
+    } catch (error) {
+      // A restriction error from `addFile` means nothing was handed over: release the button
+      // rather than leave it stuck on "Starting" with no upload behind it.
+      isStarting.value = false
+      throw error
+    }
+
+    // The promise settles when the whole batch is done; the flag is released much earlier, by
+    // the first progress or error event. `complete` is only the fallback for a batch that
+    // produced neither (nothing to upload).
+    uppy.upload().finally(() => {
+      isStarting.value = false
+    })
   }
 
   /**
@@ -235,6 +260,7 @@ export const useUploadStore = defineStore('upload', () => {
     // Computed
     hasFiles,
     isUploading,
+    isStarting,
     uploadSpeed,
 
     // Actions

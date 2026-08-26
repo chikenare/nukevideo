@@ -1,0 +1,108 @@
+<?php
+
+/**
+ * The bandwidth series can be narrowed to one video and/or one download tracking id, which is how
+ * an external integrator reads back the tracking id it minted its links with
+ * ({@see DownloadStreamData}). Both values are matched against ClickHouse
+ * columns written from CDN access logs, so their shape is validated here and bound — never
+ * interpolated — in the service.
+ *
+ * The service is stubbed: what these cases pin is the plumbing from request to query, not
+ * ClickHouse, which the suite has no fixture for.
+ */
+
+use App\Data\Stream\DownloadStreamData;
+use App\Models\User;
+use App\Services\AnalyticsService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Laravel\Sanctum\Sanctum;
+use Mockery\MockInterface;
+
+uses(RefreshDatabase::class);
+
+const VIDEO_ULID = '01HZXW3V5N8Q9R2T4Y6B8D0F1G';
+
+// Every query that reads delivery metrics out of `usage`. A series that quietly dropped the
+// filter would put one
+// customer's chart next to everyone else's totals.
+const BANDWIDTH_QUERIES = ['summary', 'bandwidthOverTime', 'topIps', 'topVideos', 'bandwidthByTrackingId', 'bandwidthByVideo'];
+
+beforeEach(fn () => Sanctum::actingAs(User::factory()->create(['is_admin' => true])));
+
+/**
+ * Stubs the service and hands back a collector that fills with `method => [video, tracking_id, metric]` as
+ * the controller calls it. An ArrayObject, not an array: a returned array is a copy, so the stub would
+ * be writing to one the caller never sees.
+ */
+function recordAnalyticsFilters(): ArrayObject
+{
+    $seen = new ArrayObject;
+
+    // `app()->instance`, not the bare `mock()` helper: Mockery ships a global function of that
+    // name that builds a mock and never binds it, so the controller kept resolving the real
+    // service and the recorded calls stayed empty.
+    $mock = Mockery::mock(AnalyticsService::class, function (MockInterface $mock) use ($seen) {
+        foreach (BANDWIDTH_QUERIES as $method) {
+            // The three filters are the last parameters of every one of these signatures; the ones
+            // before them (from, to, limit) differ per method and are not what is under test.
+            $mock->shouldReceive($method)->once()->andReturnUsing(function (...$args) use ($seen, $method) {
+                $seen[$method] = array_slice($args, -3);
+
+                return $method === 'summary'
+                    ? ['total_bytes' => 0, 'unique_videos' => 0, 'unique_ips' => 0, 'unique_tracking_ids' => 0]
+                    : [];
+            });
+        }
+
+        $mock->shouldReceive('encodingUsage')->andReturn(['cpu' => 0]);
+        $mock->shouldReceive('usageSummary')->andReturn(['upload_bytes' => 0, 'encoding_cpu' => 0]);
+        $mock->shouldReceive('topExternalUsers')->andReturn([]);
+        $mock->shouldReceive('encodingUsageOverTime')->andReturn([]);
+    });
+
+    app()->instance(AnalyticsService::class, $mock);
+
+    return $seen;
+}
+
+it('passes the video and tracking id filters into every bandwidth query', function () {
+    $seen = recordAnalyticsFilters();
+
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&video='.VIDEO_ULID.'&tracking_id=customer-42&metric=download_bytes')
+        ->assertOk()
+        ->assertJsonPath('data.topTrackingIds', []);
+
+    // Every bandwidth query has to carry all three; a series that quietly ignored one would put
+    // one customer's chart next to the instance's totals.
+    expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([VIDEO_ULID, 'customer-42', 'download_bytes']);
+});
+
+it('treats an absent tracking_id as no filter at all', function () {
+    $seen = recordAnalyticsFilters();
+
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31')->assertOk();
+
+    expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, null, null]);
+});
+
+it('treats an empty tracking_id as a filter for unattributed traffic', function () {
+    // `?tracking_id=` is a real question — "what was never attributed to a customer" — and the empty
+    // string is exactly what those rows carry. Flattening it into "no filter" would answer a
+    // different one, with everyone's bytes in it.
+    $seen = recordAnalyticsFilters();
+
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&tracking_id=')->assertOk();
+
+    expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, '', null]);
+});
+
+it('rejects a filter that could not have come out of the log columns', function (string $query) {
+    $this->getJson("/api/analytics?from=2026-01-01&to=2026-01-31&{$query}")->assertStatus(422);
+})->with([
+    'a video that is not a ULID' => 'video=not-a-ulid',
+    'a ULID with the letters Crockford excludes' => 'video=01HZXW3V5N8Q9R2T4Y6B8D0FIL',
+    'a tracking id outside the URL-safe alphabet' => 'tracking_id=customer%2042',
+    'a tracking id past the column width' => 'tracking_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'a metric that is not a delivery metric' => 'metric=encoding_cpu',
+    'a metric that does not exist' => 'metric=made_up',
+]);

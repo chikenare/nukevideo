@@ -9,11 +9,16 @@ use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Output;
 use App\Models\Video;
 use App\Services\Cdn\CdnProvider;
+use App\Services\Cdn\TrackingRegistry;
+use App\Support\TrackingId;
 use Illuminate\Http\Request;
 
 class VodController extends Controller
 {
-    public function __construct(private CdnProvider $cdn) {}
+    public function __construct(
+        private CdnProvider $cdn,
+        private TrackingRegistry $tracking,
+    ) {}
 
     public function getOutputLink(Request $request, VodData $data, string $ulid)
     {
@@ -40,12 +45,15 @@ class VodController extends Controller
         $link = $this->buildLink(
             output: $output,
             video: $video,
-            // The token is bound to the IP that will actually fetch the manifest. An integrator
-            // calling this from its own backend must name the end viewer, or the edge would
-            // compare the viewer's address against the integrator's server and refuse playback.
+            // The address that will actually fetch the manifest, so an integrator calling this
+            // from its own backend must name the end viewer. Bunny binds the token to it and
+            // refuses playback from any other address; the self-hosted edge signs it into the
+            // token but never checks it ({@see \App\Services\Cdn\SelfHostedProvider::sign}), so
+            // there a wrong address costs nothing — and buys nothing either.
             ip: $data->ip ?? $request->ip(),
             format: $format,
             cap: $output->resolveCap($data->resolution),
+            trackingId: TrackingId::resolve($data->trackingId, $request->user()),
         );
 
         return response()->json(['data' => $link]);
@@ -57,9 +65,10 @@ class VodController extends Controller
         string $ip,
         string $format,
         ?int $cap = null,
+        ?string $trackingId = null,
     ): VodOutputData {
         try {
-            $url = $this->cdn->manifestUrl(
+            $link = $this->cdn->manifestUrl(
                 $video,
                 $output->manifestPath($format, $cap),
                 $ip,
@@ -69,6 +78,10 @@ class VodController extends Controller
             abort(503, 'No node available');
         }
 
-        return VodOutputData::fromOutput($output, $url, $video->ulid);
+        // Attribution is a side effect of the mint, not of the URL: the token inside the link is
+        // what every segment request logs, and this is the only moment anyone knows whose it is.
+        $this->tracking->record($link, $trackingId);
+
+        return VodOutputData::fromOutput($output, $link, $video->ulid);
     }
 }

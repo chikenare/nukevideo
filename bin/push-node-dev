@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Build the node images from the working copy and push them to the development registry.
+#
+# Nodes never build: a deploy pulls `nukevideo-api:node-dev` and `nukevideo-proxy:node-dev` from
+# DOCKER_REGISTRY, so this is what puts the code as it is right now onto a development node — run
+# it, then redeploy the node from the panel. The tag is `node-dev`, never `:dev`: that one is
+# compose's own runtime-only image (target `api-dev`, no application code in it).
+#
+# Runs on the host, not in a container: it needs the docker daemon and the checkout. Reads
+# DOCKER_REGISTRY from the environment, else from .env.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+REGISTRY="${DOCKER_REGISTRY:-$(grep -E '^DOCKER_REGISTRY=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' || true)}"
+REGISTRY="${REGISTRY%/}"
+
+if [ -z "$REGISTRY" ]; then
+    echo "DOCKER_REGISTRY is not set (environment or .env). A development build must not go to Docker Hub." >&2
+    exit 1
+fi
+
+for type in api proxy; do
+    image="${REGISTRY}/nukevideo-${type}:node-dev"
+    echo "=== Building ${image} (target ${type}-prod) ==="
+    docker build --target "${type}-prod" -t "$image" .
+    echo "=== Pushing ${image} ==="
+    docker push "$image"
+done
+
+echo "Done. Redeploy the node(s) from the panel to pick the new images up."

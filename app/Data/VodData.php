@@ -2,6 +2,8 @@
 
 namespace App\Data;
 
+use App\Data\Stream\DownloadStreamData;
+use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapName;
 use Spatie\LaravelData\Attributes\Validation\In;
 use Spatie\LaravelData\Attributes\Validation\IP;
@@ -23,5 +25,25 @@ class VodData extends RequestData
         public ?string $ip,
         #[In(['dash', 'hls'])]
         public ?string $format,
+        // The caller's own label for this viewer — a customer, a campaign — so the playback
+        // traffic can be attributed to it. Never part of the URL: the mint records it against the
+        // link's token ({@see \App\Services\Cdn\TrackingRegistry}). Same alphabet as the download
+        // links'. `tracking_id` on the wire, like `external_user_id`. Validated in rules(), not here.
+        public ?string $trackingId,
     ) {}
+
+    /**
+     * Both spellings, deliberately ({@see DownloadStreamData::rules()}): Spatie
+     * also binds the bare property name as a fallback, and this value's whole validation story is
+     * the charset.
+     */
+    public static function rules(): array
+    {
+        $trackingId = TrackingId::rules();
+
+        return [
+            'tracking_id' => $trackingId,
+            'trackingId' => $trackingId,
+        ];
+    }
 }

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Console\Commands\IngestBunnyLogs;
+use App\Data\Node\DeployNodeData;
 use App\Data\NodeData;
 use App\Data\SelfHostedConfigData;
 use App\Enums\CdnDriver;
@@ -12,9 +13,12 @@ use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
 use App\Support\Cpu;
+use Illuminate\Support\Facades\Log;
 
 class NodeService
 {
+    public function __construct(private SshKeyService $sshKeys) {}
+
     public function index(): array
     {
         return [
@@ -93,7 +97,7 @@ class NodeService
 
     public function getEnvironmentVariables(Node $node): array
     {
-        $scheme = app()->isLocal() ? 'http://' : 'https://';
+        $scheme = Node::proxyScheme();
         $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
         $base = [
@@ -128,14 +132,15 @@ class NodeService
 
         // VOD/edge env now lives in CdnSettings (UI-editable), no longer host env. The nginx
         // container on proxy nodes still consumes these names; empty values are skipped so its
-        // entrypoint defaults apply.
+        // entrypoint defaults apply. Cache sizing is deliberately not among them: the edge sizes
+        // its cache to the filesystem it is given ({@see vod/entrypoint.sh}), and the one case
+        // that needs a cap — no pool, caching on the OS disk — is set by the deploy script.
         $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
         $cdnEnv = [
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
+            'VOD_TOKEN_NAME' => $cdn->tokenName,
             'SECURE_TOKEN_EXPIRES_TIME' => $cdn->secureTokenExpires,
             'SECURE_TOKEN_QUERY_EXPIRES_TIME' => $cdn->secureTokenQueryExpires,
-            'VOD_CACHE_MAX_SIZE' => $cdn->cacheMaxSize,
-            'VOD_CACHE_INACTIVE' => $cdn->cacheInactive,
         ];
         foreach ($cdnEnv as $key => $value) {
             if ($value !== '') {
@@ -146,11 +151,46 @@ class NodeService
         $settings = $this->parseEnvText(app(NodeSettings::class)->environment);
         $nodeOverrides = $this->parseEnvText($node->env ?? '');
 
+        // Overrides still win — for everything but the deploy-owned keys, which are stripped
+        // from them (and logged) rather than honoured. Node overrides used to win outright, so a line in
+        // one node's env — a text field anyone with the admin panel can edit — could point that
+        // edge's INTERNAL_API_URL at a host of its own choosing, swap its S3 credentials, or
+        // replace VOD_TOKEN_SECRET with one it knows and mint its own playback tokens. Those keys
+        // are the deploy's to set; the override field is for tuning, not for re-plumbing.
+        $overrides = array_merge($settings, $nodeOverrides);
+        foreach (array_intersect_key($overrides, array_flip(self::DEPLOY_OWNED_ENV)) as $key => $line) {
+            if (isset($base[$key]) && $base[$key] !== $line) {
+                Log::warning('Ignoring a node env override of a deploy-owned variable', ['node_id' => $node->id, 'key' => $key]);
+            }
+        }
+
         return array_values(array_filter(
-            array_merge($base, $settings, $nodeOverrides),
+            array_merge($base, array_diff_key($overrides, array_flip(self::DEPLOY_OWNED_ENV))),
             fn ($v) => ! in_array(explode('=', $v, 2)[0], self::DOCKER_RUN_FLAGS)
         ));
     }
+
+    /**
+     * Variables the deploy sets and neither the global node environment nor a node's own `env`
+     * may replace: the credentials and the endpoints that make a node part of *this*
+     * installation. See {@see getEnvironmentVariables()} for what an override of one would buy.
+     */
+    private const DEPLOY_OWNED_ENV = [
+        'APP_KEY',
+        'APP_URL',
+        'API_UPSTREAM_HOST',
+        'NODE_ID',
+        'NODE_TYPE',
+        'INTERNAL_API_URL',
+        'INTERNAL_API_SECRET',
+        'WEBHOOK_SECRET',
+        'VOD_TOKEN_SECRET',
+        'VOD_TOKEN_NAME',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_BUCKET',
+        'AWS_ENDPOINT',
+    ];
 
     /**
      * Reads the same merged chain the environment does, node overriding settings. It used to look
@@ -214,183 +254,168 @@ class NodeService
         return app()->environment(self::UNDRAINED_ENVIRONMENTS) ? 0 : self::WORKER_STOP_GRACE;
     }
 
-    public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true): void
+    /**
+     * @param  array<int, string>|null  $disks  spare disks to format into the cache pool (proxies);
+     *                                          null formats every spare disk, [] formats none.
+     *                                          The controller never passes null for a proxy
+     *                                          ({@see DeployNodeData}).
+     */
+    public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true, ?array $disks = null): void
     {
-        $script = $this->buildDeployScript($node);
+        $script = $this->buildDeployScript($node, $disks);
         $grace = $drain ? self::drainGrace() : 0;
 
         // SSH timeout covers the worst case: the drain window plus image pull and startup.
         // The old flat 300s cut the session mid-drain and left no container at all.
         $this->ssh($node, 'bash -s'.($drain ? '' : ' -- --no-drain'), $grace + 600, $script, $onOutput);
+
+        // A deploy that returned is a stronger signal than any probe: the host answered over SSH
+        // and the script reached its last line. Without this a redeployed proxy stayed out of
+        // rotation until the next probe cycle confirmed it.
+        $node->markHealthy();
     }
 
-    public function buildDeployScript(Node $node): string
+    /**
+     * The deploy is bash that lives in `resources/deploy/*.sh`, unchanged from node to node. What
+     * this composes is the header in front of it: one assignment per variable, every value
+     * quoted, and nothing a shell would read as code. The PHP side decides (which image, which
+     * containers, which disks); the shell side acts. Keeping the two apart is what makes the
+     * scripts readable and lintable as scripts, and keeps every node-supplied value from ever
+     * being interpolated into one.
+     */
+    public function buildDeployScript(Node $node, ?array $disks = null): string
     {
-        $workdir = self::workdir($node);
-        // The path embeds `$node->user`, which is validated as a POSIX login name — quoted here
-        // as well so a value that ever slipped past validation can only produce a bad path, not
-        // a second command. (Every other free-text value reaches the script through
-        // buildDockerRunArgs, which escapes it already.)
-        $workdirArg = escapeshellarg($workdir);
-        $drainGrace = self::drainGrace();
-        $nodeType = $node->type->value;
-        $nodeId = $node->id;
-        // The name is free text and lands on a `#` comment line, which a newline would end —
+        $type = $node->type->value;
+
+        $vars = [
+            'NODE_ID' => $node->id,
+            'NODE_TYPE' => $type,
+            'WORKDIR' => self::workdir($node),
+            'DRAIN' => self::drainGrace(),
+            'SERVICE_CONTAINER' => $node->serviceContainerName(),
+            ...$this->imageVars($node->type === NodeType::PROXY ? 'proxy' : 'api'),
+            ...match ($node->type) {
+                NodeType::WORKER => $this->workerVars($node),
+                NodeType::PROXY => $this->proxyVars($node, $disks),
+            },
+            ...$this->vectorVars($node),
+        ];
+
+        // The name is free text and lands on a comment line, which a newline would end —
         // everything after it would run on the node as part of the script.
-        $nodeName = preg_replace('/[^\w .\-]/u', '', $node->name);
+        $name = preg_replace('/[^\w .\-]/u', '', $node->name);
 
-        $nodeSection = match ($nodeType) {
-            'worker' => $this->workerScript($node),
-            'proxy' => $this->proxyScript($node),
-            default => throw new \RuntimeException("Unknown node type: {$nodeType}"),
-        };
-
-        $vectorSection = $this->vectorScript($node, $workdir);
-
-        return <<<BASH
-        #!/bin/bash
-        set -e
-
-        # Nukevideo Node Deployment — {$nodeName} ({$nodeType}, ID: {$nodeId})
-
-        WORKDIR={$workdirArg}
-        SUDO=""
-        [ "\$(id -u)" -ne 0 ] && SUDO="sudo"
-
-        # Seconds the old worker gets to finish in-flight jobs before it is killed. The default
-        # covers one full chunk pass, and is 0 in development and staging, where the wait buys
-        # nothing; docker stop returns the moment Horizon exits, so an idle worker drains in
-        # seconds either way. Override per run in both directions (killed jobs sit reserved in
-        # Redis for ~31 min before redelivery):
-        #   curl ... | bash -s -- --no-drain
-        #   curl ... | bash -s -- --drain=60
-        DRAIN={$drainGrace}
-        for arg in "\$@"; do
-            case "\$arg" in
-                --no-drain) DRAIN=0 ;;
-                --drain=*) DRAIN="\${arg#--drain=}" ;;
-            esac
-        done
-
-        pull_image() {
-            docker pull "\$1" 2>/dev/null || docker image inspect "\$1" &>/dev/null \
-                || { echo "Image \$1 not found locally or in registry"; exit 1; }
+        $header = "#!/bin/bash\n# Nukevideo Node Deployment — {$name} ({$type}, ID: {$node->id})\n\n";
+        foreach ($vars as $key => $value) {
+            // Integers bare, everything else single-quoted by escapeshellarg: a value can only
+            // ever be a value. A null leaves the variable unset, which the scripts test for.
+            if ($value === null) {
+                continue;
+            }
+            $header .= $key.'='.(is_int($value) ? $value : escapeshellarg((string) $value))."\n";
         }
 
-        # ---- 1. Docker ----
-        echo "=== Installing Docker ==="
-        if ! command -v docker &>/dev/null; then
-            curl -fsSL https://get.docker.com | \$SUDO sh
-            \$SUDO systemctl enable --now docker
-            echo "Docker installed"
-        else
-            \$SUDO systemctl enable --now docker 2>/dev/null || true
-            echo "Docker already installed: \$(docker --version)"
-        fi
-        \$SUDO usermod -aG docker "\$(id -un)" 2>/dev/null || true
+        // sudo.sh first: everything after it leans on $SUDO having been settled or the run aborted.
+        $sections = ['sudo', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $type, 'vector'];
 
-        # ---- 2. Network & workdir ----
-        \$SUDO docker network create nukevideo_default 2>/dev/null && echo "Network created" || echo "Network already exists"
-        mkdir -p "\$WORKDIR/config" "\$WORKDIR/data" "\$WORKDIR/certs"
-
-        # ---- 3-4. Node-specific: image + deploy ----
-        {$nodeSection}
-
-        # ---- 5. Vector ----
-        {$vectorSection}
-
-        echo ""
-        echo "=== Deployment complete — node {$nodeId} is running ==="
-        BASH;
+        return $header."\n".implode("\n", array_map(
+            fn ($section) => self::deployScript($section),
+            array_filter($sections),
+        ))."\necho \"\"\necho \"=== Deployment complete — node {$node->id} is running ===\"\n";
     }
 
-    private function workerScript(Node $node): string
+    public static function deployScript(string $name): string
+    {
+        return "# --- {$name}.sh ---\n".file_get_contents(resource_path("deploy/{$name}.sh"));
+    }
+
+    /**
+     * A node only ever pulls. Production pulls the released tag; development pulls the
+     * `node-dev` tag that `bin/push-node-dev` built from the working copy and pushed to the
+     * configured registry. Nodes used to build that tag themselves, from the checkout the panel
+     * runs from — which meant the deploy user had to read the developer's home, a build ran
+     * inside the deploy window, and an external node got a different image than the local one.
+     * One producer, one tag, and a node never needs the source.
+     */
+    private function imageVars(string $type): array
+    {
+        if (app()->isLocal() && ! config('nuke.registry')) {
+            // Without a registry the name resolves to Docker Hub, where no `node-dev` tag exists
+            // (and must never exist: that namespace is where releases are published). Failing here
+            // beats a node reporting "image not found" at the end of an SSH session.
+            throw new \RuntimeException('Deploying a node from a development panel needs DOCKER_REGISTRY: build and push the image with bin/push-node-dev first.');
+        }
+
+        return [
+            'IMAGE' => $this->resolveImage($type),
+        ];
+    }
+
+    private function workerVars(Node $node): array
     {
         if (! Node::where('is_storage_server', true)->whereNotNull('storage_endpoint')->exists()) {
             throw new \RuntimeException('No storage server configured. Flag one worker as the storage server (with an endpoint) before deploying.');
         }
 
-        $image = $this->resolveImage('api');
-        $name = $node->serviceContainerName();
-        $stopGrace = self::WORKER_STOP_GRACE;
-
         $dockerFlags = $this->extractDockerFlags($node);
 
-        $runArgs = $this->buildDockerRunArgs($name, $image, [
+        $runArgs = $this->buildDockerRunArgs($node->serviceContainerName(), $this->resolveImage('api'), [
             'env' => $this->getEnvironmentVariables($node),
             'labels' => ['vector.enable='.Node::containerPrefix()],
             'sysctls' => self::WORKER_SYSCTLS,
             // So a plain `docker stop` (host reboot included) also drains instead of killing at 10s.
-            'stop_timeout' => $stopGrace,
+            'stop_timeout' => self::WORKER_STOP_GRACE,
             'command' => 'php /var/www/html/artisan horizon',
             'healthcheck' => 'healthcheck-horizon',
             'cpuset' => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
             'memory' => $dockerFlags['DOCKER_MEMORY'] ?? null,
-            // $RENDER_GID is resolved by the deploy script below, on the node itself.
+            // $RENDER_GID is resolved by worker.sh, on the node itself.
             'devices' => $node->accel === NodeAccel::INTEL ? ['/dev/dri:/dev/dri'] : [],
             'group_add' => $node->accel === NodeAccel::INTEL ? '"${RENDER_GID:-44}"' : null,
             'gpus' => $node->accel === NodeAccel::NVIDIA,
         ]);
 
-        $chunkStore = $node->is_storage_server ? $this->chunkStoreScript($node) : '';
-        $gpuSetup = $this->gpuSetupScript($node);
-
-        return <<<BASH
-        {$gpuSetup}
-
-        echo "=== Worker image ==="
-        {$this->imageStep($image, 'api-prod')}
-
-        echo "=== Deploying worker ==="
-        # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit
-        # reserved in Redis for ~31 minutes with the new container idle. Returns as soon as
-        # Horizon exits — the cap only bites with a job mid-flight. `-t`, not `--time`/`--timeout`:
-        # the long forms flipped between docker CLI generations, the short one never did.
-        if [ "\$DRAIN" -gt 0 ] && docker inspect {$name} &>/dev/null; then
-            echo "Draining running jobs (up to \${DRAIN}s)..."
-            docker stop -t "\$DRAIN" {$name} || true
-        fi
-        docker rm -f {$name} 2>/dev/null || true
-        docker run -d {$runArgs}
-
-        {$chunkStore}
-        BASH;
+        return [
+            'NODE_ACCEL' => $node->accel?->value ?? '',
+            'RUN_ARGS' => $runArgs,
+            ...$this->chunkStoreVars($node),
+        ];
     }
 
-    /**
-     * Host-side GPU prep, ran before the worker container starts. Intel only needs the render
-     * group's GID (the container user joins it to open /dev/dri). NVIDIA needs the container
-     * toolkit so `--gpus all` works; the kernel driver itself must already be on the host.
-     */
-    private function gpuSetupScript(Node $node): string
+    private function chunkStoreVars(Node $node): array
     {
-        return match ($node->accel) {
-            NodeAccel::INTEL => <<<'BASH'
-            echo "=== Intel GPU ==="
-            [ -e /dev/dri/renderD128 ] || { echo "No /dev/dri render node found — is the GPU driver loaded?"; exit 1; }
-            RENDER_GID=$(getent group render | cut -d: -f3)
-            echo "Render node present, render GID: ${RENDER_GID:-44 (fallback)}"
-            BASH,
-            NodeAccel::NVIDIA => <<<'BASH'
-            echo "=== NVIDIA GPU ==="
-            command -v nvidia-smi &>/dev/null || { echo "nvidia-smi not found — install the NVIDIA driver first"; exit 1; }
-            nvidia-smi --query-gpu=name --format=csv,noheader
-            if ! command -v nvidia-ctk &>/dev/null; then
-                echo "Installing NVIDIA container toolkit"
-                curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-                curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-                    | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-                    | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list > /dev/null
-                $SUDO apt-get update -qq && $SUDO apt-get install -y -qq nvidia-container-toolkit
-                $SUDO nvidia-ctk runtime configure --runtime=docker
-                $SUDO systemctl restart docker
-            fi
-            BASH,
-            default => '',
-        };
+        if (! $node->is_storage_server) {
+            return ['STORAGE_RUN_ARGS' => ''];
+        }
+
+        $disk = config('filesystems.disks.chunks');
+        $port = (int) (parse_url((string) $node->storage_endpoint, PHP_URL_PORT) ?: 9000);
+        $storeName = $node->storageContainerName();
+
+        $runArgs = $this->buildDockerRunArgs($storeName, 'rustfs/rustfs:latest', [
+            'env' => [
+                'RUSTFS_ACCESS_KEY='.$disk['key'],
+                'RUSTFS_SECRET_KEY='.$disk['secret'],
+                'RUSTFS_ADDRESS=:9000',
+                'RUSTFS_CONSOLE_ENABLE=false',
+            ],
+            'labels' => ['vector.enable='.Node::containerPrefix()],
+            'ports' => ["{$port}:9000"],
+            // Prefixed like the containers: a development store must never be handed the volume
+            // holding the fleet's mirrored sources and chunks.
+            'volumes' => [Node::containerPrefix().'_chunks:/data'],
+            'command' => '/data',
+        ]);
+
+        return [
+            'STORAGE_CONTAINER' => $storeName,
+            'STORAGE_RUN_ARGS' => $runArgs,
+            'STORAGE_MC_HOST' => sprintf('MC_HOST_rfs=http://%s:%s@127.0.0.1:%d', $disk['key'], $disk['secret'], $port),
+            'STORAGE_MC_CMD' => "mc mb --ignore-existing rfs/{$disk['bucket']}",
+        ];
     }
 
-    private function proxyScript(Node $node): string
+    private function proxyVars(Node $node, ?array $disks): array
     {
         // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
         // container crashloops on an emerg. Fail here with a message that names the fix instead.
@@ -400,11 +425,7 @@ class NodeService
             throw new \RuntimeException('CDN token secret is empty. Set it in CDN Settings before deploying a proxy node.');
         }
 
-        $image = $this->resolveImage('proxy');
-        $name = $node->serviceContainerName();
-
         $labels = ['vector.enable='.Node::containerPrefix()];
-
         $isProduction = ! app()->isLocal();
 
         if ($node->hostname) {
@@ -427,83 +448,61 @@ class NodeService
             }
         }
 
-        $runArgs = $this->buildDockerRunArgs($name, $image, [
+        $runArgs = $this->buildDockerRunArgs($node->serviceContainerName(), $this->resolveImage('proxy'), [
             'env' => $this->getEnvironmentVariables($node),
             'labels' => $labels,
             'network' => 'nukevideo_default',
+            // Resolved on the node by proxy.sh: CACHE_MOUNT is the pool's directory, or the
+            // fallback volume when the host has no pool — and only then is the cache capped,
+            // because a volume shares the OS disk. With a pool, CACHE_EXPECT_POOL tells the
+            // entrypoint to look for the marker cache-disks.sh left on it, so a container that
+            // comes back on a host booted without the pool caps itself instead of sizing the
+            // cache to the OS disk ({@see vod/entrypoint.sh}).
+            'raw' => [
+                '-v "$CACHE_MOUNT:'.ProxyCacheService::CONTAINER_PATH.'"',
+                '${CACHE_MAX_SIZE:+-e "VOD_CACHE_MAX_SIZE=$CACHE_MAX_SIZE"}',
+                '${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}',
+            ],
+            'log_opts' => self::PROXY_LOG_OPTS,
         ]);
 
-        $traefik = $isProduction ? $this->traefikScript() : '';
-
-        return <<<BASH
-        echo "=== Proxy image ==="
-        {$this->imageStep($image, 'proxy-prod')}
-
-        echo "=== Deploying proxy ==="
-        docker rm -f {$name} 2>/dev/null || true
-        docker run -d {$runArgs}
-
-        {$traefik}
-        BASH;
+        return [
+            'RUN_ARGS' => $runArgs,
+            'CACHE_DIRECTORY' => ProxyCacheService::directoryFor($node),
+            'CACHE_VOLUME' => ProxyCacheService::volumeFor($node),
+            'CACHE_FALLBACK_MAX_SIZE' => ProxyCacheService::FALLBACK_MAX_SIZE,
+            // Unset means every spare disk; a list (possibly empty) means exactly those.
+            'CHOSEN_DISKS' => $disks === null ? null : implode(' ', $disks),
+            'TRAEFIK_RUN_ARGS' => $this->traefikRunArgs($isProduction),
+        ];
     }
 
-    private function traefikScript(): string
+    /**
+     * The reverse proxy in front of the edge, on every proxy node — proxy.sh skips it when
+     * another container already holds port 80, which is a host with its own reverse proxy (the
+     * development machine, say). Development terminates no TLS: the edge is plain HTTP behind a
+     * hostname; production adds the ACME resolver the proxy's router labels name.
+     */
+    private function traefikRunArgs(bool $tls): string
     {
-        $runArgs = $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
-            'ports' => ['80:80', '443:443', '8080:8080'],
+        $command = '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
+            .' --entrypoints.web.address=:80';
+
+        if ($tls) {
+            $command .= ' --entrypoints.websecure.address=:443'
+                .' --certificatesresolvers.le.acme.httpchallenge.entrypoint=web'
+                .' --certificatesresolvers.le.acme.storage=/certs/acme.json';
+        }
+
+        return $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
+            'ports' => $tls ? ['80:80', '443:443', '8080:8080'] : ['80:80', '8080:8080'],
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
                 'traefik_certs:/certs',
             ],
-            'command' => '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
-                .' --entrypoints.web.address=:80 --entrypoints.websecure.address=:443'
-                .' --certificatesresolvers.le.acme.httpchallenge.entrypoint=web'
-                .' --certificatesresolvers.le.acme.storage=/certs/acme.json',
+            'command' => $command,
             'network' => 'nukevideo_default',
         ]);
-
-        return <<<BASH
-        echo "=== Deploying Traefik ==="
-        docker rm -f nukevideo_traefik 2>/dev/null || true
-        docker run -d {$runArgs}
-        echo "Traefik deployed"
-        BASH;
-    }
-
-    private function chunkStoreScript(Node $node): string
-    {
-        $disk = config('filesystems.disks.chunks');
-        $port = (int) (parse_url((string) $node->storage_endpoint, PHP_URL_PORT) ?: 9000);
-        $storeName = $node->storageContainerName();
-        $mcHostArg = escapeshellarg(sprintf('MC_HOST_rfs=http://%s:%s@127.0.0.1:%d', $disk['key'], $disk['secret'], $port));
-        $mcCmd = escapeshellarg("mc mb --ignore-existing rfs/{$disk['bucket']}");
-
-        $runArgs = $this->buildDockerRunArgs($storeName, 'rustfs/rustfs:latest', [
-            'env' => [
-                'RUSTFS_ACCESS_KEY='.$disk['key'],
-                'RUSTFS_SECRET_KEY='.$disk['secret'],
-                'RUSTFS_ADDRESS=:9000',
-                'RUSTFS_CONSOLE_ENABLE=false',
-            ],
-            'labels' => ['vector.enable='.Node::containerPrefix()],
-            'ports' => ["{$port}:9000"],
-            // Prefixed like the containers: a development store must never be handed the volume
-            // holding the fleet's mirrored sources and chunks.
-            'volumes' => [Node::containerPrefix().'_chunks:/data'],
-            'command' => '/data',
-        ]);
-
-        return <<<BASH
-        echo "=== Deploying chunk store ==="
-        docker rm -f {$storeName} 2>/dev/null || true
-        docker run -d {$runArgs}
-        echo "Waiting for chunk store..."
-        n=0
-        until docker run --rm --network host -e {$mcHostArg} --entrypoint sh minio/mc -c {$mcCmd}; do
-          n=\$((n+1)); [ \$n -ge 30 ] && echo "Chunk store failed to start" && exit 1; sleep 2
-        done
-        echo "Chunk store ready"
-        BASH;
     }
 
     /**
@@ -515,10 +514,10 @@ class NodeService
      * into the very same pipeline instead. It was also the one deploy artifact with no node id in
      * its name, so every environment sharing a host fought over it.
      *
-     * Deploying anywhere else therefore removes it, including where a previous deploy or a previous
-     * CDN provider left one running.
+     * Deploying anywhere else therefore removes it (empty VECTOR_RUN_ARGS), including where a
+     * previous deploy or a previous CDN provider left one running.
      */
-    private function vectorScript(Node $node, string $workdir): string
+    private function vectorVars(Node $node): array
     {
         $name = Node::containerPrefix().'_vector';
 
@@ -526,20 +525,16 @@ class NodeService
             && app(CdnSettings::class)->provider === CdnDriver::SelfHosted->value;
 
         if (! $collectsEdgeLogs) {
-            return <<<BASH
-            echo "=== Vector not needed on this node — removing any leftover ==="
-            docker rm -f {$name} 2>/dev/null || true
-            BASH;
+            return ['VECTOR_CONTAINER' => $name, 'VECTOR_RUN_ARGS' => ''];
         }
 
         $image = 'timberio/vector:0.56.0-alpine';
-        $vectorYaml = file_get_contents(base_path('vector/vector.yaml'));
 
         $runArgs = $this->buildDockerRunArgs($name, $image, [
             // Only the two variables the config interpolates. Handing a third-party image the whole
             // node environment — database, S3 and webhook credentials — bought nothing. Filtered
-            // out of the merged list rather than rebuilt, so a node or global override of the
-            // internal URL still reaches it.
+            // out of the merged list rather than rebuilt, so the two stay exactly what the edge
+            // itself was given (both are deploy-owned: no override can redirect the reports).
             'env' => array_merge(
                 array_values(array_filter(
                     $this->getEnvironmentVariables($node),
@@ -551,21 +546,16 @@ class NodeService
             ),
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
-                "{$workdir}/config/vector.yaml:/etc/vector/vector.yaml:ro",
+                self::workdir($node).'/config/vector.yaml:/etc/vector/vector.yaml:ro',
             ],
         ]);
 
-        return <<<BASH
-        echo "=== Writing Vector config ==="
-        cat > "\$WORKDIR/config/vector.yaml" << '__VECTOR_EOF__'
-        {$vectorYaml}
-        __VECTOR_EOF__
-
-        echo "=== Deploying Vector ==="
-        pull_image {$image}
-        docker rm -f {$name} 2>/dev/null || true
-        docker run -d {$runArgs}
-        BASH;
+        return [
+            'VECTOR_CONTAINER' => $name,
+            'VECTOR_IMAGE' => $image,
+            'VECTOR_RUN_ARGS' => $runArgs,
+            'VECTOR_CONFIG' => file_get_contents(base_path('vector/vector.yaml')),
+        ];
     }
 
     public function runValidation(Node $node): array
@@ -581,6 +571,10 @@ class NodeService
             $checks[] = ['key' => 'gpu', 'label' => 'GPU Encode'];
         }
 
+        if ($node->type === NodeType::PROXY) {
+            $checks[] = ['key' => 'cache', 'label' => 'Cache Pool'];
+        }
+
         $results = [];
 
         foreach ($checks as $check) {
@@ -591,6 +585,7 @@ class NodeService
                     'containers' => $this->ssh($node, 'docker ps --filter '.escapeshellarg('name='.$this->containerFilter()).' --format "{{.Names}}\t{{.Status}}"', 15),
                     'disk' => $this->ssh($node, 'df -h / | tail -1', 15),
                     'gpu' => $this->ssh($node, $this->gpuProbeCommand($node), 120),
+                    'cache' => $this->ssh($node, $this->cachePoolCommand(), 15),
                 };
 
                 $results[] = [
@@ -626,6 +621,26 @@ class NodeService
     }
 
     /**
+     * Usage of the cache pool and the state of the array beneath it. Pool-aware: a host that was
+     * never given one (no device carrying the label, no array) is caching on a capped docker
+     * volume by design, and says so. A pool that exists but is not mounted is the error — the
+     * edge is then caching into whatever is at the path, the OS disk, which is exactly the
+     * regression the check exists to surface.
+     */
+    private function cachePoolCommand(): string
+    {
+        $mount = ProxyCacheService::MOUNT;
+        $md = ProxyCacheService::MD_DEVICE;
+        $label = ProxyCacheService::FS_LABEL;
+
+        return "if ! mountpoint -q {$mount}; then"
+            ." if [ -e {$md} ] || blkid -L {$label} >/dev/null 2>&1; then echo 'Cache pool exists but is NOT mounted at {$mount} — the edge is caching on the OS disk'; exit 1; fi;"
+            ." echo 'no cache pool provisioned, edge caches on a docker volume'; exit 0; fi;"
+            ." df -h {$mount} | tail -1 | awk '{ print \$2 \" total, \" \$3 \" used (\" \$5 \"), \" \$4 \" free\" }';"
+            ." [ -e {$md} ] && grep -A1 '^md' /proc/mdstat | head -2 || echo 'single disk, no array'";
+    }
+
+    /**
      * A real hardware encode of a synthetic second inside the worker image — proof the GPU,
      * its driver and the container flags all line up, not just that a device file exists.
      */
@@ -650,9 +665,8 @@ class NodeService
      * A node image built in development gets its own tag, never `:dev`. That one belongs to
      * compose — it builds it from the `api-dev` target, which is the runtime with no application
      * code in it, and the next `docker compose up --build` would rebuild it from under a node that
-     * needs the opposite. This tag is built from the release targets, so what a node runs in
-     * development is shaped exactly like production and can be pushed or copied to an external test
-     * node as it stands.
+     * needs the opposite. This tag is built from the release targets by `bin/push-node-dev`, so
+     * what a node runs in development is shaped exactly like production.
      */
     private const DEV_NODE_TAG = 'node-dev';
 
@@ -677,45 +691,6 @@ class NodeService
         return rtrim((string) config('nuke.registry'), '/') ?: 'chikenare';
     }
 
-    /**
-     * Production pulls the released tag. Development builds it, because there is nothing published
-     * to pull and the point of deploying a development node is to run the code as it is right now.
-     *
-     * Which of the two happens is decided on the node, not here, because that is where the answer
-     * is: the build context is the compose project's directory, read back from the label docker
-     * wrote on the containers running the panel — `base_path()` cannot answer it, that is the path
-     * *inside* the API container. A node that is the development machine has the working copy and
-     * builds; an external test node does not, and pulls what the last build pushed. Same script,
-     * and the deploy prints which of the two it did and from where.
-     *
-     * The push is what joins the two halves, so it only happens with a registry configured. Without
-     * one the name resolves to Docker Hub, and a development build has no business being pushed to
-     * the place releases are published.
-     */
-    private function imageStep(string $image, string $target): string
-    {
-        if (! app()->isLocal()) {
-            return "pull_image {$image}";
-        }
-
-        $push = config('nuke.registry')
-            ? "    docker push {$image}"
-            : "    echo \"No DOCKER_REGISTRY set — {$image} stays on this host\"";
-
-        return <<<BASH
-        SOURCE_DIR=\$(docker ps -a --filter label=com.docker.compose.service=nukevideo-api \
-            --format '{{.Label "com.docker.compose.project.working_dir"}}' | head -n1)
-        if [ -n "\$SOURCE_DIR" ]; then
-            echo "Building {$image} (target {$target}) from \$SOURCE_DIR"
-            docker build --target {$target} -t {$image} "\$SOURCE_DIR"
-        {$push}
-        else
-            echo "No working copy on this host — using {$image} as last published"
-            pull_image {$image}
-        fi
-        BASH;
-    }
-
     private function ssh(Node $node, string $command, int $timeout = 30, ?string $input = null, ?\Closure $onOutput = null): string
     {
         $sshService = app(SSHService::class);
@@ -723,7 +698,7 @@ class NodeService
         return $sshService->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: $this->sshKeys->privateKey(),
             command: $command,
             timeout: $timeout,
             input: $input,
@@ -731,9 +706,26 @@ class NodeService
         );
     }
 
+    /**
+     * Every container's json-file log is capped. The edge writes one access-log line per segment
+     * to stdout for Vector to read, and once its cache survives redeploys there is nothing that
+     * ever truncates that file: a busy node wrote gigabytes onto the OS disk. Horizon and Traefik
+     * are quieter, but nothing bounds them either, and one rule is easier to trust than three.
+     */
+    private const LOG_OPTS = '--log-opt max-size=100m --log-opt max-file=5';
+
+    /**
+     * The edge keeps far less. Every access-log line it writes carries the raw playback token
+     * (Vector hashes it downstream, the file on disk does not), and every token in that file is
+     * a replayable playback link until its `exp` — the provider's token window. Sixty megabytes is a
+     * few hours of a busy node: enough for Vector to catch up after a restart, not enough to
+     * hand whoever reads the OS disk a week of live links.
+     */
+    private const PROXY_LOG_OPTS = '--log-opt max-size=20m --log-opt max-file=3';
+
     private function buildDockerRunArgs(string $name, string $image, array $options): string
     {
-        $cmd = "--name {$name} --restart unless-stopped";
+        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS);
 
         foreach ($options['env'] ?? [] as $env) {
             $cmd .= ' -e '.escapeshellarg($env);
@@ -779,6 +771,11 @@ class NodeService
 
         if (isset($options['healthcheck'])) {
             $cmd .= ' --health-cmd '.escapeshellarg($options['healthcheck']);
+        }
+
+        // Raw on purpose, like group_add: these carry shell expansions resolved on the node.
+        foreach ($options['raw'] ?? [] as $arg) {
+            $cmd .= " {$arg}";
         }
 
         $cmd .= isset($options['command']) ? " {$image} {$options['command']}" : " {$image}";

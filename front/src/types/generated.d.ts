@@ -22,12 +22,23 @@ createdAt: string,
 expiresAt: string | null,
 token?: string,
 };
+export type AppSettingsData = {
+sshPublicKey: string | null,
+sshFingerprint: string | null,
+};
 export type BunnyConfigData = {
 host: string,
 tokenKey: string,
 tokenWindow: number,
 apiKey: string,
 pullZoneId: string,
+};
+export type CacheDiskData = {
+device: string,
+size: number,
+model: string,
+state: string,
+detail: string,
 };
 export type CdnSettingsData = {
 provider: App.Enums.CdnDriver,
@@ -51,9 +62,12 @@ type: App.Enums.NodeType,
 accel: App.Enums.NodeAccel | null,
 hostname: string | null,
 isActive: boolean,
+isDraining: boolean,
+isHealthy: boolean,
+healthFailures: number,
+lastHealthyAt: string | null,
 isStorageServer: boolean,
 storageEndpoint: string | null,
-sshKeyId: number | null,
 services: App.Data.ServiceStatusData[],
 log: string | null,
 env: string | null,
@@ -86,21 +100,12 @@ tokenName: string,
 tokenWindow: number,
 secureTokenExpires: string,
 secureTokenQueryExpires: string,
-cacheMaxSize: string,
-cacheInactive: string,
 };
 export type ServiceStatusData = {
 name: string,
 running: number,
 desired: number | null,
 state: string,
-};
-export type SshKeyData = {
-id: number,
-name: string,
-publicKey: string,
-fingerprint: string | null,
-createdAt: string,
 };
 export type StreamData = {
 ulid: string,
@@ -172,6 +177,7 @@ external_resource_id: string | null,
 external_user_id: string | null,
 ip: string | null,
 format: string | null,
+tracking_id: string | null,
 };
 export type VodOutputData = {
 url: string,
@@ -190,6 +196,7 @@ bandwidthOverTime: App.Data.Analytics.BandwidthPointData[],
 topIps: App.Data.Analytics.TopIpData[],
 topVideos: App.Data.Analytics.TopVideoData[],
 topExternalUsers: App.Data.Analytics.TopExternalUserData[],
+topTrackingIds: App.Data.Analytics.TopTrackingIdData[],
 bandwidthByVideo: App.Data.Analytics.BandwidthByVideoData[],
 encodingOverTime: App.Data.Analytics.EncodingPointData[],
 };
@@ -202,6 +209,16 @@ export type BandwidthPointData = {
 date: string,
 bytes: number,
 sessions: number,
+};
+export type EdgeDeliveryData = {
+nodeId: number,
+deliveredBytes: number,
+originBytes: number,
+hitRatio: number | null,
+};
+export type EdgeDeliveryQueryData = {
+from: string,
+to: string,
 };
 export type EncodingPointData = {
 date: string,
@@ -217,6 +234,12 @@ ip: string,
 bytes: number,
 sessions: number,
 };
+export type TopTrackingIdData = {
+trackingId: string,
+bytes: number,
+videos: number,
+uniqueIps: number,
+};
 export type TopVideoData = {
 video: string,
 externalResourceId: string | null,
@@ -230,6 +253,21 @@ export type StoreApiTokenData = {
 name: string,
 };
 }
+namespace AppSettings {
+export type NodeRotationData = {
+id: number,
+name: string,
+ok: boolean,
+error: string | null,
+};
+export type SshKeyRotationData = {
+rotated: boolean,
+nodes: App.Data.AppSettings.NodeRotationData[],
+};
+export type UpdateSshKeyData = {
+privateKey: string | null,
+};
+}
 namespace Auth {
 export type LoginData = {
 email: string,
@@ -237,6 +275,9 @@ password: string,
 };
 }
 namespace Node {
+export type DeployNodeData = {
+disks?: Array<any> | null,
+};
 export type StoreNodeData = {
 name: string,
 ipAddress: string,
@@ -245,7 +286,6 @@ accel: string | null,
 user?: string,
 isStorageServer?: boolean,
 hostname: string | null,
-sshKeyId: number | null,
 storageEndpoint: string | null,
 };
 export type UpdateNodeData = {
@@ -254,7 +294,7 @@ user?: string | null,
 ipAddress?: string,
 hostname?: string | null,
 isActive?: boolean,
-sshKeyId?: number | null,
+isDraining?: boolean,
 isStorageServer?: boolean,
 storageEndpoint?: string | null,
 accel?: string | null,
@@ -281,16 +321,9 @@ name?: string,
 settings?: App.Data.ProjectSettingsData,
 };
 }
-namespace SshKey {
-export type StoreSshKeyData = {
-name: string,
-publicKey: string,
-privateKey: string,
-};
-}
 namespace Stream {
 export type DownloadStreamData = {
-tid: string | null,
+trackingId: string | null,
 };
 export type UpdateStreamData = {
 name: string,
@@ -333,6 +366,15 @@ isAdmin?: boolean,
 };
 }
 namespace Video {
+export type IndexVideosData = {
+search: string | null,
+externalUserId: string | null,
+externalResourceId: string | null,
+status: string | null,
+sort: string,
+direction: string,
+perPage: number,
+};
 export type UpdateVideoData = {
 name: string,
 externalUserId?: string | null,

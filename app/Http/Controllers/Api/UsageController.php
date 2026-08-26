@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\Project;
 use ClickHouseDB\Client;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -20,7 +21,7 @@ class UsageController extends Controller
 
         $where = ['user_id = {user_id:UInt32}', 'date >= {from:Date}', 'date <= {to:Date}'];
         $params = [
-            'user_id' => $request->user()->id,
+            'user_id' => $this->accountId($request),
             'from' => $request->input('from'),
             'to' => $request->input('to'),
         ];
@@ -47,5 +48,21 @@ class UsageController extends Controller
         )->rows();
 
         return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * The account whose usage this token may read.
+     *
+     * `usage` is keyed by `user_id` in ClickHouse, and a project API key authenticates AS the
+     * project — `$request->user()` is a Project, whose `id` is a project id from a different
+     * sequence entirely. Reading it as a user id would not fail; it would quietly answer with
+     * whichever account happens to share that number, or with an empty result. Resolve the owner
+     * instead.
+     */
+    private function accountId(Request $request): int
+    {
+        $caller = $request->user();
+
+        return $caller instanceof Project ? (int) $caller->user_id : (int) $caller->id;
     }
 }

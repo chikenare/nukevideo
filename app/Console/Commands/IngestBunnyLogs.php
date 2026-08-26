@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Data\BunnyConfigData;
 use App\Enums\CdnDriver;
 use App\Jobs\IngestBandwidthJob;
+use App\Services\Cdn\BunnyProvider;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -13,7 +14,7 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * Pulls request logs from Bunny's Logging API into the same bandwidth pipeline the
- * self-hosted edges feed (IngestBandwidthJob → ClickHouse `video_usage`). Polling
+ * self-hosted edges feed (IngestBandwidthJob → ClickHouse `usage`). Polling
  * beats Bunny's UDP log forwarding here: no listener to run, and the API is a
  * complete record where UDP is best-effort.
  */
@@ -90,10 +91,10 @@ class IngestBunnyLogs extends Command
     }
 
     /**
-     * Aggregated events keyed by video + ip, or null on API failure so the cursor
-     * stays put and the whole window is retried next run.
+     * Aggregated events keyed by video + ip + token hash + day + zone, or null on API failure so
+     * the cursor stays put and the whole window is retried next run.
      *
-     * @return array<string, array{video_ulid: string, ip: string, bytes: int}>|null
+     * @return array<string, array{video_ulid: string, ip: string, bytes: int, date: string, token_hash: string, zone: string}>|null
      */
     private function fetch(BunnyConfigData $config, Carbon $from, Carbon $to): ?array
     {
@@ -122,31 +123,53 @@ class IngestBunnyLogs extends Command
                 $bytes = (int) ($line['bytesSent'] ?? 0);
                 $ip = (string) ($line['remoteIp'] ?? '');
 
+                // `status=2xx` above is a server-side filter, and it is the only thing standing
+                // between an error page's bytes and a customer's bill. Re-check it here: Bunny
+                // hands us `statusCode` on every line, and a parameter the API someday renames or
+                // ignores would otherwise book every 403 from an expired token as delivered
+                // traffic — into a SummingMergeTree, so nothing takes it back.
+                $status = (int) ($line['statusCode'] ?? 0);
+
+                if ($status < 200 || $status >= 300) {
+                    continue;
+                }
+
                 // The ULID sits between slashes; the bcdn_token prefix segment contains `=`/`&`
                 // so it can never match. No ULID means the request wasn't for a video.
                 if ($bytes <= 0 || $ip === '' || ! preg_match('#/([0-9A-Za-z]{26})/#', (string) ($line['path'] ?? ''), $match)) {
                     continue;
                 }
 
-                // Dated by the window, not by the moment of ingestion. This sweep runs every five
-                // minutes over a window ending two minutes in the past, so the run just after
-                // midnight covers the tail of the previous day — and `date` is what the analytics
-                // group on, the partition key and the TTL key, inside a SummingMergeTree no later
-                // correction can take back. The window is minutes wide, so its start stands in
-                // unambiguously for every event within it.
-                // The v2 log's `path` carries the query string, which is the only reason a
-                // download link's `tid` can be attributed at all ({@see \App\Services\Cdn\BunnyProvider::downloadUrl}).
-                // It is part of the grouping key: summing across tracking ids would merge two
-                // customers' traffic into one row and lose exactly what the id was added for.
-                $tid = $this->trackingId((string) ($line['path'] ?? ''));
+                // Dated by the line's own timestamp, not by the window or the moment of ingestion.
+                // `date` is what the analytics group on, the partition key and the TTL key, inside
+                // a SummingMergeTree no later correction can take back — and a window CAN straddle
+                // midnight (the sweep runs every five minutes, and `--from` or a cursor recovered
+                // after an outage widens it to hours or days). Stamping the whole window with its
+                // start booked post-midnight traffic to the previous day, permanently. The edge
+                // pipeline already dates per line ({@see vector/vector.yaml}); this matches it.
+                $date = $this->eventDate($line) ?? $from->toDateString();
 
-                $key = "{$match[1]}|{$ip}|{$tid}";
+                // The hash of the token the request carried, the same way the self-hosted edge
+                // ships it ({@see vector/vector.yaml}): the job resolves it to the tracking id the
+                // link was minted for, and the token itself goes no further than this loop.
+                $tokenHash = $this->tokenHash((string) ($line['path'] ?? ''));
+
+                // The zone directory that follows the ULID is what separates a playback segment
+                // from a downloaded master ({@see \App\Jobs\IngestBandwidthJob}); the log path is
+                // the only place that distinction survives.
+                $zone = $this->zone((string) ($line['path'] ?? ''), $match[1]);
+
+                // Everything that distinguishes one stored row from another joins the key, for the
+                // same reason it does in Vector's reduce: summing across zones, tokens or a
+                // midnight boundary would collapse rows that have to stay apart.
+                $key = "{$match[1]}|{$ip}|{$tokenHash}|{$date}|{$zone}";
                 $events[$key] ??= [
                     'video_ulid' => $match[1],
                     'ip' => $ip,
                     'bytes' => 0,
-                    'date' => $from->toDateString(),
-                    'tid' => $tid,
+                    'date' => $date,
+                    'token_hash' => $tokenHash,
+                    'zone' => $zone,
                 ];
                 $events[$key]['bytes'] += $bytes;
             }
@@ -157,13 +180,68 @@ class IngestBunnyLogs extends Command
         return $events;
     }
 
-    /** The `tid` query parameter of a logged request, or '' when the link carried none. */
-    private function trackingId(string $path): string
+    /**
+     * The zone directory a logged request sits in — `play`, `download`, `assets` — taken from the
+     * segment that follows the video ULID, or '' when the path has none. Anchored on the ULID's own
+     * position rather than searched for, so a directory named `play` further down a path (or inside
+     * the `bcdn_token=` prefix) cannot be mistaken for the zone.
+     */
+    private function zone(string $path, string $videoUlid): string
     {
+        $position = strpos($path, "/{$videoUlid}/");
+
+        if ($position === false) {
+            return '';
+        }
+
+        $rest = substr($path, $position + strlen($videoUlid) + 2);
+        $slash = strpos($rest, '/');
+
+        return $slash === false ? '' : substr($rest, 0, $slash);
+    }
+
+    /**
+     * The SHA-256 of the token a logged request carried, or '' when it carried none. Two
+     * carriers, one per link kind ({@see BunnyProvider}): a playback link's token is the
+     * `bcdn_token=` path prefix every segment inherits, a download link's is the `token` query
+     * parameter — and the v2 log's `path` keeps both. The bytes must match what the mint hashed,
+     * so the value is taken as it sits in the URL: Bunny's token alphabet is URL-safe, and a
+     * value outside it could not have come from our signer, so it is treated as no token rather
+     * than decoded into something the registry never saw.
+     */
+    private function tokenHash(string $path): string
+    {
+        if (preg_match('#^/bcdn_token=([A-Za-z0-9_-]+)#', $path, $match) === 1) {
+            return hash('sha256', $match[1]);
+        }
+
         parse_str((string) parse_url($path, PHP_URL_QUERY), $query);
+        $token = (string) ($query['token'] ?? '');
 
-        $tid = (string) ($query['tid'] ?? '');
+        return preg_match('/^[A-Za-z0-9_-]+\z/', $token) === 1 ? hash('sha256', $token) : '';
+    }
 
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
+    /**
+     * The UTC day a logged request happened, or null when the line carries no usable timestamp and
+     * the caller has to fall back to the window.
+     *
+     * Normalised to UTC rather than taken as written: Bunny stamps its lines with an offset
+     * (`2026-08-21T22:53:39.963+00:00`), and a zone-local reading would shift a day boundary that
+     * the partition key can never be corrected across.
+     *
+     * @param  array<string, mixed>  $line
+     */
+    private function eventDate(array $line): ?string
+    {
+        if (empty($line['timestamp'])) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse((string) $line['timestamp'])->utc()->toDateString();
+        } catch (\Throwable) {
+            // A line we cannot date is still a line we can count; the window date stands in.
+            return null;
+        }
     }
 }

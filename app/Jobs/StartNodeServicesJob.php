@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Models\Node;
 use App\Models\Template;
+use App\Services\SshKeyService;
 use App\Services\SSHService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -32,7 +33,7 @@ class StartNodeServicesJob implements ShouldQueue
 
     public function handle(SSHService $ssh): void
     {
-        $node = $this->node->load('sshKey');
+        $node = $this->node;
         $containers = implode(' ', $node->deployedContainerNames());
 
         // The same set {@see StopNodeServicesJob} stops, or reactivating a proxy would put it back
@@ -42,10 +43,14 @@ class StartNodeServicesJob implements ShouldQueue
         $started = trim($ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: app(SshKeyService::class)->privateKey(),
             command: "docker start {$containers} 2>&1 || true",
             timeout: 60,
         ));
+
+        // Reactivation is an operator saying the node is back. The probe confirms or reverts it
+        // within minutes; until then the node must not sit out on stale failures.
+        $node->markHealthy();
 
         Log::info('Node services started', [
             'node_id' => $node->id,

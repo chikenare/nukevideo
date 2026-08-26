@@ -12,7 +12,9 @@ import Spinner from '@/components/ui/spinner/Spinner.vue'
 import { ref, computed, nextTick } from 'vue'
 type Node = App.Data.NodeData
 type ValidationCheck = App.Data.ValidationCheckData
+type CacheDisk = App.Data.CacheDiskData
 import NodeService from '@/services/NodeService'
+import { formatBytes } from '@/utils/byteFormatter'
 import { CheckCircle2, XCircle, AlertTriangle, Terminal, Copy, Check } from '@lucide/vue'
 
 const emit = defineEmits<{
@@ -32,6 +34,27 @@ const showJobsWarning = ref(false)
 const pendingJobsCount = ref(0)
 const reservedJobsCount = ref(0)
 const totalJobs = computed(() => pendingJobsCount.value + reservedJobsCount.value)
+
+// Cache disks (proxy nodes). The deploy formats every spare disk on the host into the cache
+// pool, so what it found is shown — and anything holding data confirmed — before it runs.
+const disksLoading = ref(false)
+const disksError = ref<string | null>(null)
+const cacheDisks = ref<CacheDisk[]>([])
+const disksConfirmed = ref(false)
+const disksToFormat = computed(() => cacheDisks.value.filter(d => d.state === 'empty' || d.state === 'foreign'))
+const poolDisks = computed(() => cacheDisks.value.filter(d => d.state === 'nukevideo'))
+const needsDiskConfirmation = computed(() => disksToFormat.value.length > 0 && !disksConfirmed.value)
+// A proxy whose disks could not be listed cannot be deployed from here: the deploy needs an
+// explicit list, and the only list this panel could send is one it never got to show.
+const disksUnknown = computed(() => node.value?.type === 'proxy' && disksError.value !== null)
+// Every spare disk is ticked by default; unticking is for the one that would only drag a
+// stripe down or is kept for something else. Untouched disks stay exactly as they are.
+const selectedDisks = ref<string[]>([])
+const toggleDisk = (device: string, checked: boolean) => {
+  selectedDisks.value = checked
+    ? [...new Set([...selectedDisks.value, device])]
+    : selectedDisks.value.filter(d => d !== device)
+}
 
 // Validate tab
 const validating = ref(false)
@@ -78,7 +101,27 @@ const show = async (targetNode: Node) => {
   bootstrapLoading.value = false
   bootstrapCommand.value = null
   bootstrapCopied.value = false
+  disksLoading.value = false
+  disksError.value = null
+  cacheDisks.value = []
+  disksConfirmed.value = false
   open.value = true
+
+  if (targetNode.type === 'proxy') {
+    disksLoading.value = true
+    try {
+      const result = await NodeService.getCacheDisks(targetNode.id)
+      cacheDisks.value = result.disks
+      // A production panel ticks every spare disk; a development one ticks none, because its
+      // deploy target is often the developer's own machine.
+      selectedDisks.value = result.preselect
+        ? result.disks.filter(d => d.state === 'empty' || d.state === 'foreign').map(d => d.device)
+        : []
+    } catch (err) {
+      disksError.value = (err as Error).message
+    }
+    disksLoading.value = false
+  }
 
   // Check for active jobs on worker nodes
   if (targetNode.type === 'worker') {
@@ -129,7 +172,7 @@ const disableNode = async () => {
 }
 
 const runDeploy = async () => {
-  if (!node.value || deployRunning.value) return
+  if (!node.value || deployRunning.value || needsDiskConfirmation.value || disksLoading.value || disksUnknown.value) return
 
   deployRunning.value = true
   deployFinished.value = false
@@ -137,7 +180,13 @@ const runDeploy = async () => {
   deployLines.value = []
 
   try {
-    await NodeService.runDeploy(node.value.id, handleSSE)
+    // A proxy always gets an explicit list, `[]` included: the API reads an absent one as
+    // "every spare disk", and a list this dialog never showed is not one anyone agreed to.
+    await NodeService.runDeploy(
+      node.value.id,
+      handleSSE,
+      node.value.type === 'proxy' ? { disks: selectedDisks.value } : undefined,
+    )
   } catch (err) {
     deployLines.value.push(`ERROR: ${(err as Error).message}`)
     deployError.value = true
@@ -214,6 +263,58 @@ defineExpose({ show })
             </div>
           </div>
 
+          <!-- Cache disks -->
+          <div v-if="disksLoading" class="flex items-center gap-2 text-xs text-muted-foreground">
+            <Spinner class="h-3 w-3" />
+            <span>Reading the host's disks...</span>
+          </div>
+          <div v-else-if="disksError" class="flex items-start gap-3 rounded-md border border-red-500/30 bg-red-500/10 p-3">
+            <XCircle class="h-5 w-5 text-red-500 mt-0.5 shrink-0" />
+            <div class="flex flex-col gap-1 flex-1">
+              <span class="text-sm font-medium">Could not read the host's disks</span>
+              <span class="text-xs text-muted-foreground font-mono break-all">{{ disksError }}</span>
+              <span class="text-xs text-muted-foreground">Fix the SSH access or the sudo rule, then reopen this dialog: a proxy is not deployed without a look at its disks.</span>
+            </div>
+          </div>
+          <div v-else-if="disksToFormat.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
+            <AlertTriangle class="h-5 w-5 text-yellow-500 mt-0.5 shrink-0" />
+            <div class="flex flex-col gap-1 flex-1 min-w-0">
+              <span class="text-sm font-medium">
+                Spare disks to format into the cache pool
+              </span>
+              <span class="text-xs text-muted-foreground">
+                Everything on the ticked disks is erased; untick one to leave it alone. Disks holding the operating system are never touched.
+              </span>
+              <ul class="mt-1 flex flex-col gap-0.5 font-mono text-xs">
+                <li v-for="disk in disksToFormat" :key="disk.device" class="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    class="h-3.5 w-3.5 shrink-0 accent-yellow-500"
+                    :checked="selectedDisks.includes(disk.device)"
+                    :disabled="disksConfirmed"
+                    @change="toggleDisk(disk.device, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="w-28 shrink-0">{{ disk.device }}</span>
+                  <span class="w-16 shrink-0 text-right">{{ formatBytes(disk.size) }}</span>
+                  <span class="truncate text-muted-foreground">{{ disk.model }}</span>
+                  <span :class="disk.state === 'foreign' ? 'text-red-400' : 'text-muted-foreground'">{{ disk.detail || 'empty' }}</span>
+                </li>
+              </ul>
+              <div v-if="!disksConfirmed" class="flex gap-2 mt-2">
+                <Button v-if="selectedDisks.length > 0" variant="destructive" size="sm" @click="disksConfirmed = true">
+                  Format {{ selectedDisks.length }} {{ selectedDisks.length === 1 ? 'disk' : 'disks' }} and continue
+                </Button>
+                <Button v-else variant="outline" size="sm" @click="disksConfirmed = true">
+                  Skip the disks — cache in a volume
+                </Button>
+              </div>
+            </div>
+          </div>
+          <div v-else-if="poolDisks.length > 0" class="flex items-center gap-2 text-xs text-muted-foreground">
+            <CheckCircle2 class="h-4 w-4 text-emerald-500" />
+            <span>Existing cache pool on {{ poolDisks.map(d => d.device).join(', ') }} — kept as it is.</span>
+          </div>
+
           <div
             ref="deployTerminalEl"
             class="flex-1 min-h-75 max-h-100 overflow-y-auto rounded-md border bg-zinc-950 p-3 font-mono text-xs"
@@ -238,7 +339,7 @@ defineExpose({ show })
           </div>
 
           <div class="flex justify-end gap-2">
-            <Button v-if="!deployFinished || deployError" :disabled="deployRunning" @click="runDeploy">
+            <Button v-if="!deployFinished || deployError" :disabled="deployRunning || disksLoading || needsDiskConfirmation || disksUnknown" @click="runDeploy">
               {{ deployRunning ? 'Deploying...' : deployError ? 'Retry' : 'Deploy' }}
             </Button>
             <div v-if="deployFinished && !deployError" class="flex items-center gap-2 text-sm text-emerald-500">

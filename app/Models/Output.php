@@ -5,14 +5,17 @@ namespace App\Models;
 use App\Enums\VideoStatus;
 use App\Http\Controllers\VodController;
 use App\Jobs\PackageVideoJob;
+use App\Observers\OutputObserver;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
+use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 
+#[ObservedBy(OutputObserver::class)]
 class Output extends Model
 {
     protected $fillable = [

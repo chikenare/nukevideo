@@ -34,11 +34,17 @@ class NodeService {
         return res.data
     }
 
-    async runDeploy(id: number, onMessage: (event: { type: string; data: string }) => void): Promise<void> {
-        return this.streamSSE(`${this.BASE_PATH}/${id}/deploy`, onMessage)
+    async getCacheDisks(id: number): Promise<{ preselect: boolean; disks: App.Data.CacheDiskData[] }> {
+        const res = await this.api.get(`${this.BASE_PATH}/${id}/cache-disks`)
+        return res.data.data
     }
 
-    private async streamSSE(path: string, onMessage: (event: { type: string; data: string }) => void): Promise<void> {
+    /** `disks`: spare disks to format into a proxy's cache pool, [] for none. A production proxy deploy is refused without it. */
+    async runDeploy(id: number, onMessage: (event: { type: string; data: string }) => void, body?: { disks?: string[] }): Promise<void> {
+        return this.streamSSE(`${this.BASE_PATH}/${id}/deploy`, onMessage, body)
+    }
+
+    private async streamSSE(path: string, onMessage: (event: { type: string; data: string }) => void, body?: object): Promise<void> {
         const baseURL = import.meta.env.VITE_URL_API || '/api'
         const csrfToken = document.cookie
             .split('; ')
@@ -51,8 +57,10 @@ class NodeService {
             headers: {
                 'Accept': 'text/event-stream',
                 'X-Requested-With': 'XMLHttpRequest',
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
                 ...(csrfToken ? { 'X-XSRF-TOKEN': decodeURIComponent(csrfToken) } : {}),
             },
+            ...(body ? { body: JSON.stringify(body) } : {}),
         })
 
         if (!res.ok) {

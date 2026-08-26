@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\Video\IndexVideosData;
 use App\Data\Video\UpdateVideoData;
 use App\Data\VideoData;
+use App\Models\Stream;
 use App\Models\Video;
 use App\Services\VideoService;
 use Illuminate\Http\Request;
@@ -13,30 +15,38 @@ class VideoController extends Controller
 {
     public function __construct(protected VideoService $videoService) {}
 
-    public function index(Request $request)
+    public function index(Request $request, IndexVideosData $data)
     {
         $query = $request->project()->videos()
-            ->latest()
             ->with(['outputs.streams', 'streams']);
 
-        if ($search = $request->input('search')) {
-            $query->where('name', 'like', "%{$search}%");
+        if ($data->search) {
+            $query->where('name', 'like', "%{$data->search}%");
         }
 
-        if ($externalUserId = $request->input('external_user_id')) {
-            $query->where('external_user_id', $externalUserId);
+        if ($data->externalUserId) {
+            $query->where('external_user_id', $data->externalUserId);
         }
 
-        if ($externalResourceId = $request->input('external_resource_id')) {
-            $query->where('external_resource_id', $externalResourceId);
+        if ($data->externalResourceId) {
+            $query->where('external_resource_id', $data->externalResourceId);
         }
 
-        // `paginate()` never reads the request, so the documented `per_page` was silently ignored
-        // and every page came back at 15. Capped: the payload embeds each video's outputs and
-        // streams, so an unbounded page is a heavy query and a heavy response.
-        $perPage = min(max((int) $request->input('per_page', 15), 1), 100);
+        if ($statuses = $data->statuses()) {
+            $query->whereIn('status', $statuses);
+        }
 
-        $videos = $query->paginate($perPage);
+        // `size` is not a column: it is what the listing shows, the sum of every stream's package
+        // and file bytes ({@see VideoData::fromModel}), so it is ordered by the same sum as a
+        // correlated subquery. The others are plain columns. `id` is the tie-breaker on every
+        // sort: without it two equal names could swap between pages as the planner pleases.
+        $sort = $data->sort === 'size'
+            ? Stream::selectRaw('COALESCE(SUM(package_size + file_size), 0)')->whereColumn('video_id', 'videos.id')
+            : $data->sort;
+
+        $query->orderBy($sort, $data->direction)->orderBy('id', $data->direction);
+
+        $videos = $query->paginate($data->perPage);
 
         return [
             'data' => array_map(fn ($v) => VideoData::fromModel($v), $videos->items()),

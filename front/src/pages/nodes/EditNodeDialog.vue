@@ -29,12 +29,23 @@ const dialogOpen = ref(false)
 const loading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
-type EditableNode = Omit<Node, 'accel'> & { user: string; storageEndpoint: string; accel: string }
+type EditableNode = Omit<Node, 'accel'> & {
+  user: string
+  hostname: string
+  storageEndpoint: string
+  accel: string
+}
 const node = ref<EditableNode>({} as EditableNode)
 
 const show = (initialNode: Node) => {
   const raw: Node = JSON.parse(JSON.stringify(initialNode))
-  node.value = { ...raw, user: raw.user ?? '', storageEndpoint: raw.storageEndpoint ?? '', accel: raw.accel ?? 'none' }
+  node.value = {
+    ...raw,
+    user: raw.user ?? '',
+    hostname: raw.hostname ?? '',
+    storageEndpoint: raw.storageEndpoint ?? '',
+    accel: raw.accel ?? 'none',
+  }
   errors.value = {}
   dialogOpen.value = true
 }
@@ -47,6 +58,9 @@ const handleUpdate = async () => {
     const updated = await NodeService.updateNode(node.value.id, {
       ...node.value,
       accel: node.value.accel === 'none' ? null : node.value.accel,
+      // A hostname is a proxy's public address; a worker has no use for one and an empty string
+      // would be stored as a hostname of its own.
+      hostname: node.value.type === 'proxy' && node.value.hostname ? node.value.hostname : null,
     })
     dialogOpen.value = false
     emit('updated', updated)
@@ -85,9 +99,25 @@ defineExpose({ show })
           <Input id="edit_node_user" v-model="node.user" placeholder="e.g. root" required />
           <p v-if="errors.user" class="text-sm text-destructive">{{ errors.user[0] }}</p>
         </div>
+        <div v-if="node.type === 'proxy'" class="grid gap-2">
+          <Label for="edit_node_hostname">Hostname</Label>
+          <Input id="edit_node_hostname" v-model="node.hostname" placeholder="e.g. cdn.example.com" required />
+          <p class="text-xs text-muted-foreground">The public address playback links point at. Redeploy after changing: Traefik's router and the certificate are issued for it.</p>
+          <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
+        </div>
         <div class="flex items-center justify-between">
           <Label for="edit_node_active">Active</Label>
           <Switch id="edit_node_active" v-model="node.isActive" @update:checked="node.isActive = $event" />
+        </div>
+        <div v-if="node.type === 'proxy'" class="grid gap-2">
+          <div class="flex items-center justify-between">
+            <Label for="edit_node_draining">Draining</Label>
+            <Switch id="edit_node_draining" v-model="node.isDraining" @update:checked="node.isDraining = $event" />
+          </div>
+          <p class="text-xs text-muted-foreground">
+            Keeps the node out of new playback links while it goes on serving the sessions it has.
+            Use it before maintenance; deactivating stops the containers at once.
+          </p>
         </div>
         <div v-if="node.type === 'worker'" class="grid gap-2">
           <Label for="edit_node_accel">GPU Acceleration</Label>

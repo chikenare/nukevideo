@@ -15,18 +15,39 @@ http {
         default                      -;
     }
 
+    # The zone directory that follows the ULID — `play`, `download`, `assets`. It is what separates
+    # streaming bytes from downloaded ones once the line reaches ClickHouse; nothing downstream can
+    # recover it from anywhere else.
+    map $uri $video_zone {
+        "~^/[0-9A-Za-z]{26}/(?<z>[a-z]+)/"  $z;
+        default                             "";
+    }
+
     map $uri $is_manifest {
         "~\.(mpd|m3u8)$"  1;
         default           0;
     }
 
+    # What the cache did with the request, for the log. Empty means the location had no cache at
+    # all (downloads), which is `OFF` downstream; `BYPASS` is a manifest. Both are excluded from
+    # the hit ratio, and the identity map is what keeps the variable from rendering as `-`.
+    map $upstream_cache_status $cache_status {
+        ""       "OFF";
+        default  $upstream_cache_status;
+    }
+
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
-    # `tid` is the caller's tracking id, carried on download links so a transfer can be attributed
-    # to the integrator's own customer. Empty for playback and for links that carried none — the
-    # token itself is stripped before this runs, so it never leaks into the log.
-    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid tid=$arg_tid';
+    # `cache` and `origin` are what decides whether a node needs more disk or the fleet needs
+    # another node: bytes served against bytes fetched from S3 for them. Vector ignores keys it
+    # was not told about, so an older pipeline reads these lines as before.
+    # `token` is the link's token as the request carried it — the value the API minted, which is
+    # what every request the link produces has in common and what the mint recorded a tracking id
+    # against. Vector hashes it before it leaves the node; nothing downstream sees the token
+    # itself. Quoted because it is empty on the unsigned assets, and an empty unquoted value makes
+    # the key-value parser swallow the next pair as its value.
+    log_format  bandwidth  'ip=$remote_addr bytes=$body_bytes_sent video=$video_ulid zone=$video_zone cache=$cache_status origin=$upstream_bytes_received node=${NODE_ID} token="$link_token"';
 
     access_log off;
     error_log  stderr warn;
@@ -34,11 +55,19 @@ http {
     tcp_nodelay     on;
     keepalive_timeout  65;
 
+    # Sizes are computed by the entrypoint from the filesystem the cache sits on; see there for
+    # what each one guards. The loader and manager are sped up from their defaults because the
+    # defaults were set for caches a thousand times smaller: at 100 files per pass the loader
+    # takes hours to index a full 10 TB pool (during which max_size is not enforced), and the
+    # manager's 400 deletes per second is about the rate a 10 Gbps edge writes new segments at.
     proxy_cache_path /var/cache/nginx/vod
         levels=1:2
-        keys_zone=vod_cache:20m
+        keys_zone=vod_cache:${VOD_CACHE_KEYS_ZONE}
         max_size=${VOD_CACHE_MAX_SIZE}
+        min_free=${VOD_CACHE_MIN_FREE}
         inactive=${VOD_CACHE_INACTIVE}
+        loader_files=2000 loader_sleep=10ms loader_threshold=100ms
+        manager_files=2000 manager_sleep=20ms manager_threshold=200ms
         use_temp_path=off;
 
     aws_auth $aws_token {
@@ -48,19 +77,30 @@ http {
         region ${AWS_DEFAULT_REGION};
     }
 
-    secure_token_akamai $token {
-        key ${VOD_TOKEN_SECRET};
-        acl "$secure_token_baseuri_comma*";
-        ip_address $remote_addr;
-    }
-
     server {
         listen 80;
 
         include /usr/local/nginx/conf/cloudflare-realip.conf;
 
+        # The token the request arrived with, frozen before the access phase: `strip_token` below
+        # rewrites both $args and $request_uri once the token validates, so a lazily evaluated
+        # variable (a `map`, `$arg_…` read at log time) sees nothing exactly when the request was
+        # legitimate. `set` runs in the rewrite phase, ahead of that. Empty here so the log line
+        # can name it on the locations that never validate anything (assets, healthz).
+        set $link_token "";
+
         #access_log /dev/stdout main;
         access_log /dev/stdout bandwidth;
+
+        # The liveness probe (`nodes:probe` on the API host). Unsigned like the assets, and
+        # answered with a header only this nginx sets: a 200 from Traefik, Cloudflare or a
+        # stray default vhost is not the edge being up, and the probe requires the header.
+        location = /healthz {
+            access_log off;
+            add_header Cache-Control "no-store" always;
+            add_header X-NukeVideo-Edge "${NODE_ID}" always;
+            return 204;
+        }
 
         # Thumbnails and storyboards are served unsigned so a listing page can point <img> straight
         # here and both the browser and this cache can keep them: a signed URL changes on every
@@ -72,12 +112,85 @@ http {
         # than at server level: a sibling location does not inherit it. Moving it back up here
         # silently re-locks these, and moving it down further silently unlocks everything.
         location ~ "^/[0-9A-Za-z]{26}/assets/" {
+            # `return` runs in the rewrite phase, before token validation: a bodyless 204 without a
+            # token is the point, a preflight never carries one. nginx inherits add_header from
+            # the enclosing level only when a block declares none, so the block is spelled out.
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin "*";
+                add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+                add_header Access-Control-Allow-Headers "Range, Origin, Accept, Content-Type";
+                add_header Access-Control-Max-Age 86400;
+                add_header Content-Length 0;
+                add_header Content-Type text/plain;
+                return 204;
+            }
+
             proxy_cache vod_cache;
+            proxy_cache_key "$uri";
             proxy_cache_valid 200 30d;
             proxy_cache_valid 404 1m;
             proxy_cache_lock on;
+            proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
             add_header Cache-Control "public, max-age=604800" always;
             add_header X-Cache-Status $upstream_cache_status always;
+            # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
+            # dropped so one cached copy serves every embedding origin, and `*` is safe because
+            # nothing here is authorised by the origin — the token is, on every request.
+            proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Methods;
+            proxy_hide_header Access-Control-Allow-Headers;
+            proxy_hide_header Access-Control-Expose-Headers;
+            add_header Access-Control-Allow-Origin "*" always;
+            add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
+
+            proxy_pass http://127.0.0.1:8080;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+        }
+
+        # Downloads never touch the cache. They are whole masters, fetched once, and nginx drops
+        # the client's Range when proxy_cache is on — so a cached download location turned every
+        # resume into a full re-fetch of a multi-GB file, stored as one cache object. Without
+        # buffering to disk (proxy_max_temp_file_size 0) the upstream read is paced by the client
+        # and nothing is spooled onto the OS disk.
+        location ~ "^/[0-9A-Za-z]{26}/download/" {
+            # `return` runs in the rewrite phase, before token validation: a bodyless 204 without a
+            # token is the point, a preflight never carries one. nginx inherits add_header from
+            # the enclosing level only when a block declares none, so the block is spelled out.
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin "*";
+                add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+                add_header Access-Control-Allow-Headers "Range, Origin, Accept, Content-Type";
+                add_header Access-Control-Max-Age 86400;
+                add_header Content-Length 0;
+                add_header Content-Type text/plain;
+                return 204;
+            }
+
+            set $link_token $arg_${VOD_TOKEN_NAME};
+            akamai_token_validate $arg_${VOD_TOKEN_NAME};
+            akamai_token_validate_key ${VOD_TOKEN_SECRET};
+            akamai_token_validate_strip_token ${VOD_TOKEN_NAME};
+
+            proxy_buffering on;
+            proxy_buffers 64 64k;
+            proxy_max_temp_file_size 0;
+
+            add_header X-Cache-Status "OFF" always;
+            # A download is meant to land on disk, not in a player tab. The panel lives on another
+            # origin, and browsers ignore the anchor's `download` attribute cross-origin, so only
+            # this header makes them save the file. No filename: the browser falls back to the last
+            # path segment, which is the stored name (ULID plus extension) — unique and safe.
+            add_header Content-Disposition "attachment" always;
+            # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
+            # dropped so one cached copy serves every embedding origin, and `*` is safe because
+            # nothing here is authorised by the origin — the token is, on every request.
+            proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Methods;
+            proxy_hide_header Access-Control-Allow-Headers;
+            proxy_hide_header Access-Control-Expose-Headers;
+            add_header Access-Control-Allow-Origin "*" always;
+            add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges, Content-Disposition" always;
 
             proxy_pass http://127.0.0.1:8080;
             proxy_http_version 1.1;
@@ -85,27 +198,61 @@ http {
         }
 
         location / {
-            akamai_token_validate $arg___hdnea__;
-            akamai_token_validate_key ${VOD_TOKEN_SECRET};
-            akamai_token_validate_strip_token __hdnea__;
+            # `return` runs in the rewrite phase, before token validation: a bodyless 204 without a
+            # token is the point, a preflight never carries one. nginx inherits add_header from
+            # the enclosing level only when a block declares none, so the block is spelled out.
+            if ($request_method = OPTIONS) {
+                add_header Access-Control-Allow-Origin "*";
+                add_header Access-Control-Allow-Methods "GET, HEAD, OPTIONS";
+                add_header Access-Control-Allow-Headers "Range, Origin, Accept, Content-Type";
+                add_header Access-Control-Max-Age 86400;
+                add_header Content-Length 0;
+                add_header Content-Type text/plain;
+                return 204;
+            }
 
-            secure_token $token;
+            set $link_token $arg_${VOD_TOKEN_NAME};
+            akamai_token_validate $arg_${VOD_TOKEN_NAME};
+            akamai_token_validate_key ${VOD_TOKEN_SECRET};
+            akamai_token_validate_strip_token ${VOD_TOKEN_NAME};
+
+            # The manifest's segment URLs are rewritten to carry the SAME token the manifest was
+            # requested with, not one this edge generates. The token is what ties every request of
+            # a playback session back to the link the API minted — and to the tracking id it was
+            # minted for — so a per-manifest token from a `secure_token_akamai` block would leave
+            # the segments, which are almost all the bytes, unattributable. The minted token already
+            # authorizes them: its ACL is the manifest's directory and the IP is the viewer's. The
+            # cost is that segments expire with the link rather than on a window of their own.
+            # `secure_token` takes any string with variables; it only appends what it is given.
+            secure_token "${VOD_TOKEN_NAME}=$link_token";
             secure_token_types application/dash+xml application/vnd.apple.mpegurl application/x-mpegurl;
             secure_token_avoid_cookies on;
             secure_token_expires_time ${SECURE_TOKEN_EXPIRES_TIME};
             secure_token_query_token_expires_time ${SECURE_TOKEN_QUERY_EXPIRES_TIME};
 
+            # Keyed on the path alone. With the Origin in the key every embedding site got its own
+            # copy of every segment, and Vary is ignored for the same reason: the response no
+            # longer differs by origin once the CORS headers below replace the bucket's.
             proxy_cache vod_cache;
-            proxy_cache_key "$uri|$http_origin";
+            proxy_cache_key "$uri";
             proxy_cache_use_stale error timeout updating;
             proxy_cache_lock on;
             proxy_no_cache $is_manifest;
             proxy_cache_bypass $is_manifest;
-            proxy_ignore_headers Cache-Control Expires Set-Cookie;
+            proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
             proxy_cache_valid 200 30d;
             proxy_cache_valid 404 1m;
 
             add_header X-Cache-Status $upstream_cache_status always;
+            # CORS is answered here, not by the bucket: the upstream's Access-Control-* headers are
+            # dropped so one cached copy serves every embedding origin, and `*` is safe because
+            # nothing here is authorised by the origin — the token is, on every request.
+            proxy_hide_header Access-Control-Allow-Origin;
+            proxy_hide_header Access-Control-Allow-Methods;
+            proxy_hide_header Access-Control-Allow-Headers;
+            proxy_hide_header Access-Control-Expose-Headers;
+            add_header Access-Control-Allow-Origin "*" always;
+            add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
 
             proxy_pass http://127.0.0.1:8080;
             proxy_http_version 1.1;
@@ -127,6 +274,9 @@ http {
             proxy_ssl_server_name on;
             proxy_ssl_name ${AWS_ENDPOINT_HOST};
             proxy_set_header Host ${AWS_ENDPOINT_HOST};
+            # The bucket must not see the viewer's origin: its CORS answer is dropped anyway, and
+            # a bucket that varies its response on it would defeat the single cached copy.
+            proxy_set_header Origin "";
             proxy_set_header X-Amz-Date $aws_auth_date;
             proxy_set_header X-Amz-Content-SHA256 UNSIGNED-PAYLOAD;
             proxy_set_header Authorization $aws_token;

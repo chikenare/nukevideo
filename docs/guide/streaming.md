@@ -38,21 +38,34 @@ POST /api/outputs/{ulid}
 
 The response contains the signed URL for the requested format (HLS or DASH). The URL points at whichever delivery layer is configured (a proxy node host or the Bunny pull-zone host) and carries the access token.
 
+**Request body** (all optional):
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `format` | `dash` \| `hls` | Defaults to the output's first available format. |
+| `resolution` | integer | Caps the ladder at this height. |
+| `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
+| `tracking_id` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/users#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
+
 ## Token-Based Access Control
 
-Playback URLs are signed with a time-limited token so segments can't be fetched without authorization:
-
-- **Stream token** — Long-lived (configurable, e.g. 100 days) and scoped to a video's content, used for the manifest.
-- **Query/segment token** — Short-lived (e.g. 1 hour) for the individual segment requests the player derives from the manifest.
+Playback URLs are signed with a time-limited token so segments can't be fetched without authorization.
+One token covers a whole playback session — the manifest and every segment the player derives from
+it — and it is minted by the API with the provider's **token window** (one hour by default). The
+segments do not get a window of their own: they expire with the link, so a session that outlives
+the window has to request a fresh link.
 
 The exact signing scheme depends on the delivery layer:
 
-- **Proxy nodes** validate Akamai-style stream tokens (HMAC) and then read segments from S3 using AWS authentication.
+- **Proxy nodes** validate Akamai-style tokens (HMAC) scoped to the manifest's directory, rewrite the manifest so its segment URLs carry that same token, and read the segments from S3 using AWS authentication.
 - **Bunny CDN** uses HMAC-SHA256 tokens in directory mode: the token is a path prefix scoped to the video's directory, so the manifest and all of its relative segments authenticate under one token.
+
+Either way the token is what ties a session's traffic back to the link that was minted, which is
+how a `tracking_id` is attributed without ever appearing in the URL.
 
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. On a self-hosted proxy node the local segment cache is configurable; when the node sits behind a CDN, local caching can be turned off so the edge handles it. See [Nodes: CDN Mode](/guide/nodes#cdn-mode).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

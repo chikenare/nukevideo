@@ -7,6 +7,7 @@ namespace App\Services\Cdn;
 use App\Data\BunnyConfigData;
 use App\Models\Video;
 use App\Settings\CdnSettings;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Bunny CDN token authentication (HMAC-SHA256), per BunnyWay's reference url_signing.php.
@@ -18,12 +19,25 @@ use App\Settings\CdnSettings;
  *
  * IP is not folded into the signature: pull-zone IP validation is off, and a signed IP Bunny
  * doesn't check just fails validation.
+ *
+ * The URL never names the viewer. A directory token refuses extra signed parameters (verified
+ * against the edge: `tid=`, `nonce=`, even the documented `limit=` answer 403), an unsigned one
+ * would be viewer-editable, and a query would not be inherited by the segments anyway. The token
+ * is the carrier instead — it reaches the log on every segment — and the mint records what it
+ * means ({@see TrackingRegistry}).
  */
 class BunnyProvider implements CdnProvider
 {
+    /**
+     * Extra seconds a playback token's expiry may be jittered by to make its hash unique
+     * ({@see tokenFor}). Also the extra lifetime the tracking mapping allows for
+     * ({@see TrackingRegistry}).
+     */
+    public const EXPIRY_JITTER = 300;
+
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): string
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
     {
         $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
@@ -38,48 +52,32 @@ class BunnyProvider implements CdnProvider
      * segments it lists share one token; it is a directory PREFIX, and using it here would scope a
      * download link to everything sharing that prefix instead of to the one object.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string
+    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
         $urlPath = '/'.ltrim($key, '/');
 
-        // `tid` is the caller's own tracking id. It has to be SIGNED, not merely appended: Bunny
-        // folds every query parameter into the signature, so an unsigned extra would fail
-        // validation outright. The reward is that it lands in the v2 logging API's `path`, which
-        // carries the query string — which is what makes per-caller bandwidth attribution possible
-        // ({@see \App\Console\Commands\IngestBunnyLogs}). `tid` is not one of Bunny's reserved
-        // parameter names.
-        $parameters = $trackingId === null ? [] : ['tid' => $trackingId];
-
         if ($config->tokenKey === '') {
-            $query = $parameters === [] ? '' : '?'.$this->joinParams($parameters, rawEncode: true);
-
-            return "https://{$config->host}{$urlPath}{$query}";
+            return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
         $expires = now()->timestamp + $config->tokenWindow;
-        ksort($parameters);
 
-        $signingData = $this->joinParams($parameters, rawEncode: false);
-        $urlData = $this->joinParams($parameters, rawEncode: true);
+        // Advanced token auth, no parameters and no IP: the hashable base is the signature path
+        // plus the expiry, and the token rides as a query parameter.
+        $token = $this->token($urlPath.$expires, $config->tokenKey);
 
-        // Advanced token auth, no IP: the hashable base is the signature path, the expiry and the
-        // alphabetically-sorted parameters, and the token rides as a query parameter.
-        $token = $this->token($urlPath.$expires.$signingData, $config->tokenKey);
-        $extra = $urlData === '' ? '' : "&{$urlData}";
-
-        return "https://{$config->host}{$urlPath}?token={$token}&expires={$expires}{$extra}";
+        return new SignedLink("https://{$config->host}{$urlPath}?token={$token}&expires={$expires}", $token);
     }
 
-    private function signed(string $urlPath, string $tokenPath): string
+    private function signed(string $urlPath, string $tokenPath): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
 
         if ($config->tokenKey === '') {
-            return "https://{$config->host}{$urlPath}";
+            // No token, no identifier in the log: an unsigned zone cannot attribute playback.
+            return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
-
-        $expires = now()->timestamp + $config->tokenWindow;
 
         // Bunny signs the alphabetically-sorted parameters; token_path is our only one.
         $parameters = ['token_path' => $tokenPath];
@@ -88,9 +86,43 @@ class BunnyProvider implements CdnProvider
         $signingData = $this->joinParams($parameters, rawEncode: false);
         $urlData = $this->joinParams($parameters, rawEncode: true);
 
-        $token = $this->token($tokenPath.$expires.$signingData, $config->tokenKey);
+        [$token, $expires] = $this->tokenFor($tokenPath, $signingData, $config);
 
-        return "https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}";
+        return new SignedLink("https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}", $token);
+    }
+
+    /**
+     * The signed token and its expiry, unique to this mint.
+     *
+     * The hash input is (token_path, expires) and nothing else the edge lets us vary, so two
+     * viewers minting the same directory in the same second would share a token — and, since the
+     * token is what attribution hangs off ({@see TrackingRegistry}), a label. The expiry is
+     * jittered until this mint claims a token nobody else has; if every attempt finds it claimed
+     * (hundreds of same-second mints of one video), the shared token is kept — the bytes are
+     * counted either way, only the label may land on the other session's id.
+     *
+     * The claim key lives as long as the token can: a token is only free to reuse once nothing
+     * minted before can still be attributed through it.
+     *
+     * @return array{string, int}
+     */
+    private function tokenFor(string $tokenPath, string $signingData, BunnyConfigData $config): array
+    {
+        $base = now()->timestamp + $config->tokenWindow;
+        $ttl = $config->tokenWindow + self::EXPIRY_JITTER;
+        $expires = $base;
+        $token = '';
+
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $expires = $attempt === 0 ? $base : $base + random_int(1, self::EXPIRY_JITTER);
+            $token = $this->token($tokenPath.$expires.$signingData, $config->tokenKey);
+
+            if (Cache::add("bunny-token-claim:{$token}", 1, $ttl)) {
+                break;
+            }
+        }
+
+        return [$token, $expires];
     }
 
     /** `HS256-` + base64url of the HMAC, per Bunny's advanced token scheme. */

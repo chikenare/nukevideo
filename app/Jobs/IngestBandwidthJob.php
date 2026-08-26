@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Models\Video;
+use App\Services\Cdn\TrackingRegistry;
+use App\Support\TrackingId;
 use ClickHouseDB\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -13,10 +15,14 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Writes a batch of aggregated bandwidth events (video_ulid + ip + bytes, already
- * aggregated by Vector) to ClickHouse `video_usage`, deriving the owning `user_id`
- * from the video in one batched lookup. No session/user metadata is involved —
- * the video and IP come straight from the edge log (the URL path + request).
+ * Writes a batch of aggregated bandwidth events to ClickHouse `usage`, the single metrics table.
+ *
+ * The video and IP come straight from the edge log (the URL path + request); the owning account and
+ * the integrator's own customer are resolved here, from the video, in one batched lookup, and the
+ * tracking id from the hash of the link's token, in another ({@see TrackingRegistry}). That
+ * resolution is the reason nothing has to travel in the URL to be trustworthy: a viewer can rewrite
+ * a link all they like and it cannot change who the bytes are billed to, nor whose label they
+ * land under.
  */
 class IngestBandwidthJob implements ShouldQueue
 {
@@ -26,28 +32,123 @@ class IngestBandwidthJob implements ShouldQueue
 
     public $backoff = [10, 30, 60];
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, tid?: string}> $events */
+    /**
+     * Which metric a request counts towards, by the zone directory its path sits in
+     * ({@see Video::PLAY_DIR} and friends). Splitting delivery this way is the whole
+     * point of folding `video_usage` into `usage`: the old table had one `bytes` column and no way
+     * to tell a playback segment from a downloaded master.
+     *
+     * The unit lives in the metric name, deliberately — `value` is a shared Float64 that means
+     * seconds for `encoding_cpu` and bytes here, and nothing in the schema says which.
+     */
+    private const ZONE_METRICS = [
+        'play' => 'streaming_bytes',
+        'download' => 'download_bytes',
+        'assets' => 'asset_bytes',
+    ];
+
+    /**
+     * Delivered bytes we cannot place in a zone. They are still counted, under a generic metric,
+     * because the point of this pipeline is bandwidth: an unrecognised path costs its label, never
+     * its bytes. Also the metric the pre-merge history was carried over under.
+     */
+    private const FALLBACK_METRIC = 'bandwidth_bytes';
+
+    /**
+     * Bytes the edge had to fetch from S3 to serve a request — the cost side of the cache. Booked
+     * under account 0, the same bucket the delivery of deleted videos lands in: it is the
+     * operator's number, not the customer's, and account 0 is what `/api/usage` can never be
+     * asked for. Anything reading account 0 therefore has to filter by metric, since it holds
+     * both populations.
+     */
+    public const ORIGIN_METRIC = 'origin_bytes';
+
+    /**
+     * What nginx can say about a cache lookup. Clamped to the set rather than stored as received,
+     * because the value is parsed out of a log line: an unknown word becomes '' — "unknown" —
+     * which the hit-ratio query leaves out, and never a string that pollutes a LowCardinality
+     * dictionary. `OFF` is the download location (no cache), `BYPASS` the manifests.
+     */
+    private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
+
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, token_hash?: string, tracking_id?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
     public function __construct(public array $events) {}
 
     /**
-     * The caller's own tracking id, as it survived a round trip through a CDN access log. Treated
-     * as hostile text: it is echoed into a URL by an API client and read back out of a log line, so
-     * it is clamped to the same alphabet the request validation accepts rather than trusted. An
-     * empty string is the column's own default and simply means "not attributed".
+     * The tracking ids of a batch, keyed by token hash. A producer sends either `token_hash` (the
+     * self-hosted edge: Vector hashes the token off the log line, and the mapping the mint
+     * recorded is only reachable from here) or an already resolved `tracking_id` (a producer that
+     * resolved it itself); an event with neither, or with a hash nothing was recorded under, is
+     * unattributed. One cache round trip per batch, not per row: a session is hundreds of lines
+     * under one token.
+     *
+     * @param  list<array<string, mixed>>  $events
+     * @return array<string, string|null>
+     */
+    private function resolveTrackingIds(array $events): array
+    {
+        $hashes = [];
+
+        foreach ($events as $event) {
+            $hash = (string) ($event['token_hash'] ?? '');
+
+            // The hash is computed by our own Vector, but it still arrives over HTTP: anything
+            // that is not a hex SHA-256 never becomes a cache key.
+            if (preg_match('/^[a-f0-9]{64}\z/', $hash) === 1) {
+                $hashes[] = $hash;
+            }
+        }
+
+        return $hashes === [] ? [] : app(TrackingRegistry::class)->resolveMany($hashes);
+    }
+
+    /**
+     * The caller's own tracking id for one event. Resolved from the token hash when the event
+     * carries one, else taken as sent. Either way it is clamped to the alphabet the request
+     * validation accepts rather than trusted: a mapped value was validated at the mint, but a
+     * `tracking_id` sent as-is is text that crossed a log and a queue. An empty string is the
+     * column's own default and simply means "not attributed".
+     *
+     * @param  array<string, mixed>  $event
+     * @param  array<string, string|null>  $resolved
+     */
+    private function trackingId(array $event, array $resolved): string
+    {
+        $id = $resolved[(string) ($event['token_hash'] ?? '')] ?? (string) ($event['tracking_id'] ?? '');
+
+        return TrackingId::isValid($id) ? $id : '';
+    }
+
+    /** @param array<string, mixed> $event */
+    private function metric(array $event): string
+    {
+        return self::ZONE_METRICS[(string) ($event['zone'] ?? '')] ?? self::FALLBACK_METRIC;
+    }
+
+    /** @param array<string, mixed> $event */
+    private function cacheStatus(array $event): string
+    {
+        $status = strtoupper((string) ($event['cache'] ?? ''));
+
+        return in_array($status, self::CACHE_STATUSES, true) ? $status : '';
+    }
+
+    /**
+     * The edge's node id, 0 when the line predates the field. UInt16 in the table, and a node id
+     * comes out of an auto-increment, so the clamp only guards the parse.
      *
      * @param  array<string, mixed>  $event
      */
-    private function trackingId(array $event): string
+    private function nodeId(array $event): int
     {
-        $tid = (string) ($event['tid'] ?? '');
-
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $tid) === 1 ? $tid : '';
+        return max(0, min(65535, (int) ($event['node'] ?? 0)));
     }
 
     public function handle(): void
     {
         $valid = [];
         $ulids = [];
+        $resolved = $this->resolveTrackingIds($this->events);
 
         foreach ($this->events as $event) {
             $videoUlid = (string) ($event['video_ulid'] ?? '');
@@ -63,7 +164,10 @@ class IngestBandwidthJob implements ShouldQueue
                 continue;
             }
 
-            $valid[] = [$videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event)];
+            $valid[] = [
+                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event, $resolved), $this->metric($event),
+                $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)),
+            ];
             $ulids[$videoUlid] = true;
         }
 
@@ -71,8 +175,11 @@ class IngestBandwidthJob implements ShouldQueue
             return;
         }
 
-        // One batched lookup video_ulid -> owning user_id (0 when the video is gone).
-        $owners = Video::whereIn('ulid', array_keys($ulids))->pluck('user_id', 'ulid');
+        // One batched lookup for both attributes the log cannot carry. A video that is gone leaves
+        // its bytes under account 0 rather than dropping them.
+        $videos = Video::whereIn('ulid', array_keys($ulids))
+            ->get(['ulid', 'user_id', 'external_user_id'])
+            ->keyBy('ulid');
 
         // Ingest time, not traffic time — the ingest runs every five minutes over a window that
         // ends two minutes in the past, so the run just after midnight books the tail of the old
@@ -80,19 +187,36 @@ class IngestBandwidthJob implements ShouldQueue
         // partition key, so that slice is misattributed permanently. Prefer a date carried on the
         // event; the fallback is only for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'video_ulid', 'ip', 'bytes', 'tid'];
+        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
         $rows = [];
 
-        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $tid]) {
-            $rows[] = [$date ?? $ingestedOn, (int) ($owners[$videoUlid] ?? 0), $videoUlid, $ip, $bytes, $tid];
+        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $trackingId, $metric, $nodeId, $cache, $origin]) {
+            $video = $videos->get($videoUlid);
+
+            $rows[] = [
+                $date ?? $ingestedOn,
+                (int) ($video->user_id ?? 0),
+                $metric,
+                (string) ($video->external_user_id ?? ''),
+                $videoUlid,
+                $ip,
+                $trackingId,
+                $nodeId,
+                $cache,
+                $bytes,
+            ];
+
+            // The origin's side, as its own row: `value` is the one summed column, so the bytes
+            // fetched from S3 cannot ride along on the delivery row. Keyed by node and video —
+            // what the operator asks about — and by nothing a customer is billed on.
+            if ($origin > 0) {
+                $rows[] = [$date ?? $ingestedOn, 0, self::ORIGIN_METRIC, '', $videoUlid, $ip, '', $nodeId, '', $origin];
+            }
         }
 
         try {
-            // ClickHouse is behind TLS everywhere but local dev — staging included. Keep this
-            // rule in lockstep with UsageService.
-            app(Client::class)
-                ->https(! app()->isLocal())
-                ->insert('video_usage', $rows, $columns);
+            // The container binding already decided http vs https ({@see AppServiceProvider}).
+            app(Client::class)->insert('usage', $rows, $columns);
         } catch (\Throwable $e) {
             Log::warning('Failed to ingest bandwidth batch: '.$e->getMessage());
             throw $e;
@@ -100,7 +224,7 @@ class IngestBandwidthJob implements ShouldQueue
     }
 
     /**
-     * The day the traffic actually happened, when the edge reports it. `video_usage` is a
+     * The day the traffic actually happened, when the edge reports it. `usage` is a
      * SummingMergeTree, so a row can only ever be added — a date that drifts by a few minutes at
      * a boundary is not something a later correction can take back.
      *

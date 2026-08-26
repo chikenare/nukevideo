@@ -19,6 +19,9 @@ GET /api/videos
 | `search` | string | Matches against the video name |
 | `external_user_id` | string | Exact match on the id supplied at upload |
 | `external_resource_id` | string | Exact match on the id supplied at upload |
+| `status` | string | One status, or several comma-separated (`completed,failed`): `pending`, `downloading`, `running`, `uploading`, `completed`, `failed`. An unknown value is a `422` |
+| `sort` | string | `created_at` (default), `name`, `size`, `duration` or `status`. `size` is what the listing shows — package plus retained file bytes over every stream |
+| `direction` | string | `desc` (default) or `asc` |
 
 **Response:**
 

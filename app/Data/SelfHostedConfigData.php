@@ -12,7 +12,5 @@ class SelfHostedConfigData extends Data
         public int $tokenWindow = 3600,
         public string $secureTokenExpires = '100d',
         public string $secureTokenQueryExpires = '1h',
-        public string $cacheMaxSize = '10g',
-        public string $cacheInactive = '1h',
     ) {}
 }

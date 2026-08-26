@@ -92,9 +92,9 @@ Include the token in the `Authorization` header:
 Authorization: Bearer 1|abc123...
 ```
 
-Every endpoint that works on project data — videos, templates, streams, uploads, usage, analytics,
-activity log — resolves inside **one** project, and refuses the request (`400`) without one. A user
-token names the project with the `X-Project-Ulid` header on each request:
+Every endpoint that works on project data — videos, templates, streams, uploads, activity log —
+resolves inside **one** project, and refuses the request (`400`) without one. A user token names the
+project with the `X-Project-Ulid` header on each request:
 
 ```
 Authorization: Bearer 1|abc123...
@@ -108,10 +108,16 @@ on behalf of you, it acts as the project. So it needs no `X-Project-Ulid` header
 its project — a key of project A cannot read, update or delete a video of project B, nor upload into
 it, even though you own both.
 
-What it can reach: videos, templates, streams, uploads and the project's activity log. What it cannot:
-anything that spans the account or the instance — `/me`, `/profile`, `/projects`, `/tokens`, `/usage`,
-`/analytics` and every admin endpoint answer `403`, even when the project's owner is an admin. Those
-stay for the dashboard and for user tokens.
+What it can reach: videos, templates, streams, uploads and the project's activity log, plus the two
+read-only metrics endpoints — [`/analytics`](/api/users#analytics) and
+[`/usage`](/api/users#usage) — because reading those numbers back is what an integrating backend
+holds a key for. Note what that means: `/analytics` reports **instance-wide** figures, and `/usage`
+resolves to the account that owns the project, so both can show more than the calling project's own
+traffic. Keep the key server-side.
+
+What it cannot reach: anything that manages the account or the instance — `/me`, `/profile`,
+`/projects`, `/tokens` and every admin endpoint answer `403`, even when the project's owner is an
+admin. Those stay for the dashboard and for user tokens.
 
 Generate or rotate it from the dashboard (Projects → ⋮ → Regenerate API key) or via the API:
 
@@ -197,3 +203,8 @@ PUT /api/profile/password
 ## Authorization
 
 Some endpoints require admin privileges. These are marked with **Admin** in the API reference. Non-admin users will receive a `403 Forbidden` response.
+
+Admin covers what operates the instance: nodes, SSH keys, the node environment, CDN settings and
+user management. The metrics endpoints — [`/analytics`](/api/users#analytics) and
+[`/usage`](/api/users#usage) — are **not** admin, and are readable with any authenticated token,
+including a project API key.

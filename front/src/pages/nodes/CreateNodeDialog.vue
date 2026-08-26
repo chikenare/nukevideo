@@ -19,10 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { ref, onMounted } from 'vue'
+import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
-import SshKeyService from '@/services/SshKeyService'
-type SshKey = App.Data.SshKeyData
 import { ValidationException } from '@/exceptions/ValidationException'
 import { Plus } from '@lucide/vue'
 
@@ -32,7 +30,6 @@ const dialogOpen = ref(false)
 const loading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
-const sshKeys = ref<SshKey[]>([])
 
 const newNode = ref({
   user: 'root',
@@ -41,13 +38,8 @@ const newNode = ref({
   hostname: '',
   type: 'worker' as 'worker' | 'proxy',
   accel: 'none' as 'none' | 'intel' | 'nvidia',
-  sshKeyId: undefined as number | undefined,
   isStorageServer: false,
   storageEndpoint: '',
-})
-
-onMounted(async () => {
-  sshKeys.value = await SshKeyService.getAll()
 })
 
 const handleCreate = async () => {
@@ -62,11 +54,10 @@ const handleCreate = async () => {
       type: newNode.value.type,
       accel: newNode.value.type === 'worker' && newNode.value.accel !== 'none' ? newNode.value.accel : null,
       hostname: newNode.value.type === 'proxy' && newNode.value.hostname ? newNode.value.hostname : null,
-      sshKeyId: newNode.value.sshKeyId ?? null,
       storageEndpoint: newNode.value.type === 'worker' && newNode.value.isStorageServer && newNode.value.storageEndpoint ? newNode.value.storageEndpoint : null,
       ...(newNode.value.type === 'worker' && newNode.value.isStorageServer ? { isStorageServer: true } : {}),
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none', sshKeyId: undefined, isStorageServer: false, storageEndpoint: '' }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none', isStorageServer: false, storageEndpoint: '' }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -131,20 +122,8 @@ const handleCreate = async () => {
           <p v-if="errors.accel" class="text-sm text-destructive">{{ errors.accel[0] }}</p>
         </div>
         <div class="grid gap-2">
-          <Label for="node_ssh_key">SSH Key</Label>
-          <Select v-model="newNode.sshKeyId">
-            <SelectTrigger>
-              <SelectValue placeholder="Select SSH key" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="key in sshKeys" :key="key.id" :value="key.id">{{ key.name }}</SelectItem>
-            </SelectContent>
-          </Select>
-          <p v-if="errors.sshKeyId" class="text-sm text-destructive">{{ errors.sshKeyId[0] }}</p>
-        </div>
-        <div class="grid gap-2">
-          <Label for="node_ip">User</Label>
-          <Input id="node_ip" v-model="newNode.user" placeholder="e.g. 192.168.1.100" required />
+          <Label for="node_user">User</Label>
+          <Input id="node_user" v-model="newNode.user" placeholder="e.g. root" required />
           <p v-if="errors.user" class="text-sm text-destructive">{{ errors.user }}</p>
         </div>
         <div v-if="newNode.type === 'proxy'" class="grid gap-2">

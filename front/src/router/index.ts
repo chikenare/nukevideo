@@ -9,7 +9,6 @@ import UsersPage from '@/pages/users/UsersPage.vue'
 import AccountPage from '@/pages/settings/AccountPage.vue'
 import ActivityLogPage from '@/pages/settings/ActivityLogPage.vue'
 import ApiKeysPage from '@/pages/settings/ApiKeysPage.vue'
-import SshKeysPage from '@/pages/settings/SshKeysPage.vue'
 import AppSettingsPage from '@/pages/settings/AppSettingsPage.vue'
 import CdnSettingsPage from '@/pages/settings/CdnSettingsPage.vue'
 import LoginPage from '@/pages/auth/LoginPage.vue'
@@ -34,7 +33,6 @@ const router = createRouter({
     { name: 'Account', path: '/settings/account', component: AccountPage },
     { name: 'ActivityLog', path: '/settings/activity-log', component: ActivityLogPage },
     { name: 'ApiKeys', path: '/settings/api-keys', component: ApiKeysPage },
-    { name: 'SshKeys', path: '/settings/ssh-keys', component: SshKeysPage, meta: { admin: true } },
     { name: 'AppSettings', path: '/settings/app', component: AppSettingsPage, meta: { admin: true } },
     { name: 'CdnSettings', path: '/settings/cdn', component: CdnSettingsPage, meta: { admin: true } },
   ],

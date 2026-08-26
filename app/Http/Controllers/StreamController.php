@@ -7,6 +7,7 @@ use App\Data\Stream\UpdateStreamData;
 use App\Data\StreamData;
 use App\Services\DownloadLinkService;
 use App\Services\StreamManagementService;
+use App\Support\TrackingId;
 use Illuminate\Http\Request;
 
 class StreamController extends Controller
@@ -33,7 +34,7 @@ class StreamController extends Controller
     public function download(Request $request, DownloadStreamData $data, string $ulid)
     {
         return response()->json([
-            'data' => $this->downloads->forStreamUlid($ulid, $request->project(), $data->tid),
+            'data' => $this->downloads->forStreamUlid($ulid, $request->project(), TrackingId::resolve($data->trackingId, $request->user())),
         ]);
     }
 

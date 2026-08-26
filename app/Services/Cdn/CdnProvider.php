@@ -11,9 +11,13 @@ interface CdnProvider
     /**
      * Build the fully-qualified, signed manifest URL.
      *
+     * Returned with its token rather than as a bare string: the token is what every segment
+     * request carries into the access log, so it is what the mint attributes to a tracking id
+     * ({@see TrackingRegistry}). The URL itself never names the viewer.
+     *
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file}), provider-agnostic
      */
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): string;
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink;
 
     /**
      * Build the fully-qualified, UNSIGNED URL of a thumbnail or storyboard.
@@ -40,9 +44,6 @@ interface CdnProvider
      * between addresses; playback tokens can afford the binding because a session is short.
      *
      * @param  string  $key  host-relative object key ({videoUlid}/download/{type}/{file})
-     * @param  string|null  $trackingId  echoed into the URL so the CDN log can attribute the
-     *                                   transfer; only providers whose logs carry the query string
-     *                                   can honour it, the rest ignore it
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string;
+    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink;
 }

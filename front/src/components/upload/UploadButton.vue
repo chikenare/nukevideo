@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/select'
 
 import { Button } from '@/components/ui/button'
+import { LoaderCircle } from '@lucide/vue'
 import UploadFiles from './UploadFiles.vue'
 import { useUploadStore } from '@/stores/upload'
 import { storeToRefs } from 'pinia'
@@ -27,7 +28,7 @@ import TemplateService from '@/services/TemplateService'
 import type { AcceptableValue } from 'reka-ui'
 
 const uploadStore = useUploadStore()
-const { files, selectedTemplate, isUploading } = storeToRefs(uploadStore)
+const { files, selectedTemplate, isUploading, isStarting } = storeToRefs(uploadStore)
 
 const templates = ref<Template[]>([])
 const dialogOpen = ref(false)
@@ -37,6 +38,13 @@ const dialogOpen = ref(false)
 const pendingCount = computed(() =>
   files.value.filter(f => f.status === 'pending' && f.progress === 0 && !f.uppyFileId).length
 )
+
+// The button is one control with three faces, never hidden while there is anything in the list:
+// hiding it the instant the queue emptied is what let a second press land on whatever took its
+// place. Disabled — and visibly busy — while a batch is being handed over or transferring with
+// nothing new queued; a live button again as soon as more files are waiting.
+const busy = computed(() => isStarting.value || (isUploading.value && pendingCount.value === 0))
+const canStart = computed(() => pendingCount.value > 0 && !!selectedTemplate.value && !isStarting.value)
 
 const handleUpload = () => {
   uploadStore.startUpload()
@@ -87,14 +95,18 @@ onMounted(getTemplates)
         </Select>
       </div>
 
-      <DialogFooter v-if="pendingCount > 0" class="mt-4 sm:items-center">
+      <DialogFooter v-if="files.length > 0" class="mt-4 sm:items-center">
         <!-- The template is required server-side. Blocking the click here is the difference
              between a hint and every file flipping to "Error" after the request. -->
-        <p v-if="!selectedTemplate" class="text-xs text-muted-foreground mr-auto">
+        <p v-if="pendingCount > 0 && !selectedTemplate" class="text-xs text-muted-foreground mr-auto">
           Select a template to start uploading.
         </p>
-        <Button type="button" :disabled="!selectedTemplate" @click="handleUpload">
-          {{ isUploading ? 'Upload more' : 'Upload' }} ({{ pendingCount }})
+        <Button type="button" :disabled="!canStart" :aria-busy="busy" @click="handleUpload">
+          <LoaderCircle v-if="busy" class="w-4 h-4 mr-1 animate-spin" />
+          <template v-if="isStarting">Starting…</template>
+          <template v-else-if="pendingCount > 0">{{ isUploading ? 'Upload more' : 'Upload' }} ({{ pendingCount }})</template>
+          <template v-else-if="isUploading">Uploading…</template>
+          <template v-else>Upload</template>
         </Button>
       </DialogFooter>
     </DialogContent>

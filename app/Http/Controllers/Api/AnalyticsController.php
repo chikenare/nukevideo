@@ -6,15 +6,19 @@ use App\Data\Analytics\AnalyticsCardData;
 use App\Data\Analytics\AnalyticsData;
 use App\Data\Analytics\BandwidthByVideoData;
 use App\Data\Analytics\BandwidthPointData;
+use App\Data\Analytics\EdgeDeliveryData;
+use App\Data\Analytics\EdgeDeliveryQueryData;
 use App\Data\Analytics\EncodingPointData;
 use App\Data\Analytics\TopExternalUserData;
 use App\Data\Analytics\TopIpData;
+use App\Data\Analytics\TopTrackingIdData;
 use App\Data\Analytics\TopVideoData;
 use App\Enums\VideoStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Models\Video;
 use App\Services\AnalyticsService;
+use App\Support\TrackingId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -46,20 +50,49 @@ class AnalyticsController extends Controller
         return response()->json(['data' => $queue]);
     }
 
+    /**
+     * Per-node delivery for the nodes page. Admin-only, unlike the rest of this controller: it
+     * names the operator's infrastructure and its origin egress, which no project key has any
+     * business reading.
+     */
+    public function edges(EdgeDeliveryQueryData $data): JsonResponse
+    {
+        return response()->json([
+            'data' => EdgeDeliveryData::collect($this->analyticsService->edgeDelivery($data->from, $data->to)),
+        ]);
+    }
+
     public function index(Request $request): JsonResponse
     {
         $request->validate([
             'from' => 'required|date_format:Y-m-d',
             'to' => 'required|date_format:Y-m-d',
             'user_id' => 'nullable|integer|exists:users,id',
+            // Narrow the bandwidth series to one video and/or one tracking id. Both are matched
+            // against columns written from CDN access logs, so they are bound parameters in the
+            // service, never interpolated; the shapes below are what those columns can hold.
+            'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
+            'tracking_id' => TrackingId::rules(),
+            // Which kind of delivery to report. Anything outside this list is refused rather than
+            // passed through: `usage` also holds upload volume and encoding seconds in the same
+            // `value` column, and letting one of those names reach the bandwidth queries would
+            // report seconds as if they were bytes.
+            'metric' => 'nullable|string|in:streaming_bytes,download_bytes,asset_bytes,bandwidth_bytes',
         ]);
 
         $from = $request->input('from');
         $to = $request->input('to');
         $userId = $request->input('user_id') ? (int) $request->input('user_id') : null;
+        $video = $request->input('video');
+
+        // `has`, not `filled`: an empty string is the value traffic with no tracking id carries,
+        // so `?tracking_id=` is a meaningful request — "show me only what was never attributed" —
+        // and must not be flattened into "no filter at all".
+        $trackingId = $request->has('tracking_id') ? (string) $request->input('tracking_id', '') : null;
+        $metric = $request->input('metric');
 
         $encoding = $this->analyticsService->encodingUsage($from, $to);
-        $summary = $this->analyticsService->summary($from, $to);
+        $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric);
         $usage = $this->analyticsService->usageSummary($from, $to, $userId);
 
         return response()->json([
@@ -68,15 +101,17 @@ class AnalyticsController extends Controller
                     ['label' => 'Total Bandwidth', 'value' => $summary['total_bytes'], 'format' => 'bytes'],
                     ['label' => 'Unique IPs', 'value' => $summary['unique_ips'], 'format' => 'number'],
                     ['label' => 'Active Videos', 'value' => $summary['unique_videos'], 'format' => 'number'],
+                    ['label' => 'Tracking IDs', 'value' => $summary['unique_tracking_ids'], 'format' => 'number'],
                     ['label' => 'Nodes', 'value' => Node::count(), 'format' => 'number'],
                     ['label' => 'CPU Encoding', 'value' => $encoding['cpu'], 'format' => 'seconds'],
                     ['label' => 'Upload Volume', 'value' => $usage['upload_bytes'], 'format' => 'bytes'],
                 ]),
-                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to)),
-                topIps: TopIpData::collect($this->analyticsService->topIps($from, $to)),
-                topVideos: TopVideoData::collect($this->analyticsService->topVideos($from, $to)),
+                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $trackingId, $metric)),
+                topIps: TopIpData::collect($this->analyticsService->topIps($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
+                topVideos: TopVideoData::collect($this->analyticsService->topVideos($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
                 topExternalUsers: TopExternalUserData::collect($this->analyticsService->topExternalUsers($from, $to, $userId)),
-                bandwidthByVideo: BandwidthByVideoData::collect($this->analyticsService->bandwidthByVideo($from, $to)),
+                topTrackingIds: TopTrackingIdData::collect($this->analyticsService->bandwidthByTrackingId($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
+                bandwidthByVideo: BandwidthByVideoData::collect($this->analyticsService->bandwidthByVideo($from, $to, video: $video, trackingId: $trackingId, metric: $metric)),
                 encodingOverTime: EncodingPointData::collect($this->analyticsService->encodingUsageOverTime($from, $to)),
             ),
         ]);

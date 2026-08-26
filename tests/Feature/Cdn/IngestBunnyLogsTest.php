@@ -36,18 +36,18 @@ function fakeBunnySettings(string $provider = 'bunny', string $apiKey = 'api-key
  */
 function eventsWithoutDate(IngestBandwidthJob $job): array
 {
-    // `tid` is dropped alongside `date`: these assertions are about aggregation shape, and every
-    // line here is a playback request that carries no tracking id.
+    // `token_hash` and `zone` are dropped alongside `date`: these assertions are about aggregation
+    // shape, and each is covered by its own case below.
     return array_map(
-        fn (array $event) => collect($event)->except(['date', 'tid'])->all(),
+        fn (array $event) => collect($event)->except(['date', 'token_hash', 'zone'])->all(),
         array_values($job->events),
     );
 }
 
-function bunnyLogLine(string $ulid, string $ip, int $bytes): array
+function bunnyLogLine(string $ulid, string $ip, int $bytes, string $timestamp = '2026-01-01T00:00:00Z'): array
 {
     return [
-        'timestamp' => '2026-01-01T00:00:00Z',
+        'timestamp' => $timestamp,
         'statusCode' => 200,
         'bytesSent' => $bytes,
         'remoteIp' => $ip,
@@ -107,9 +107,9 @@ it('aggregates log lines by video and ip and dispatches the ingest job', functio
         && $request['status'] === '2xx');
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        // Every event carries the day of the WINDOW it was read from, not the day it was ingested:
-        // the run just after midnight reads the tail of the previous day, and `date` is what
-        // partitions the ClickHouse table these land in.
+        // Every event carries the day the traffic happened, not the day it was ingested: the run
+        // just after midnight reads the tail of the previous day, and `date` is what partitions
+        // the ClickHouse table these land in. Which day, per line, is asserted separately below.
         expect($job->events)->each->toHaveKey('date');
 
         return eventsWithoutDate($job) === [
@@ -162,24 +162,163 @@ it('keeps the cursor and fails when the API errors, so the window is retried', f
     expect(Cache::get('bunny-ingest-logs:cursor'))->toBeNull();
 });
 
-it('attributes traffic to the tracking id carried in the logged query string', function () {
+it('dates every event by its own log line, so a window that straddles midnight splits', function () {
     fakeBunnySettings();
 
-    // The v2 logging API reports `path` WITH the query string, which is the only reason a download
-    // link's `tid` can be attributed at all. Two ids must not collapse into one row.
+    // A window can span a midnight: `--from`, or a cursor recovered after an outage. `date` is the
+    // partition key of a SummingMergeTree, so stamping the whole window with its start would book
+    // post-midnight traffic to the previous day with no way back.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
-        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-a'],
-        ['statusCode' => 200, 'bytesSent' => 50, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-b'],
+        bunnyLogLine(ULID_A, '1.2.3.4', 100, '2026-01-01T23:59:59+00:00'),
+        bunnyLogLine(ULID_A, '1.2.3.4', 40, '2026-01-02T00:00:01+00:00'),
+        bunnyLogLine(ULID_A, '1.2.3.4', 60, '2026-01-02T00:30:00+00:00'),
+    ]))]);
+
+    Carbon::setTestNow('2026-01-02 01:00:00');
+
+    $this->artisan('bunny:ingest-logs', ['--from' => '2026-01-01T23:00:00Z'])->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
+        return array_values($job->events) === [
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
+        ];
+    });
+});
+
+it('falls back to the window date only when the line carries no timestamp', function () {
+    fakeBunnySettings();
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.m4s'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => array_values($job->events)[0]['date'] === now()->subSeconds(720)->toDateString());
+});
+
+it('drops non-2xx lines even when the API filter does not', function () {
+    fakeBunnySettings();
+
+    // `status=2xx` is a server-side filter and the only thing between an error page's bytes and a
+    // customer's bill. A parameter the API renames or ignores must not silently start billing the
+    // 403s an expired token produces.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 403, 'bytesSent' => 2538, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.m4s'],
+        ['statusCode' => 404, 'bytesSent' => 1207, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
+        // 206 is what a resumed download or a ranged player request reports, and Bunny's own
+        // `2xx` filter returns it. It has to count.
+        ['statusCode' => 206, 'bytesSent' => 700, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => eventsWithoutDate($job) === [
+        ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 700],
+    ]);
+});
+
+it('ships the hash of a download token, one row per token', function () {
+    fakeBunnySettings();
+
+    // The v2 logging API reports `path` WITH the query string, which is where a download link's
+    // token sits. Two tokens are two viewers and must not collapse into one row; resolving them
+    // to tracking ids is the job's business ({@see \App\Jobs\IngestBandwidthJob}), not this
+    // command's — the token goes no further than the hash.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=HS256-aaa&expires=1'],
+        ['statusCode' => 200, 'bytesSent' => 50, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=HS256-bbb&expires=1'],
         ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.mpd'],
     ]))]);
 
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        $byTid = collect($job->events)->keyBy('tid')->map->bytes;
+        $byHash = collect($job->events)->keyBy('token_hash')->map->bytes;
 
-        return $byTid->get('customer-a') === 100
-            && $byTid->get('customer-b') === 50
-            && $byTid->get('') === 25;
+        return $byHash->get(hash('sha256', 'HS256-aaa')) === 100
+            && $byHash->get(hash('sha256', 'HS256-bbb')) === 50
+            && $byHash->get('') === 25
+            && ! collect($job->events)->contains(fn (array $event) => array_key_exists('tracking_id', $event));
+    });
+});
+
+it('counts the bytes of a token that could not have been ours, as unattributed', function () {
+    fakeBunnySettings();
+
+    // The point of the whole pipeline is bandwidth. A token outside the signer's alphabet is a
+    // broken LABEL, never a reason to drop the line: those bytes were really delivered and really
+    // cost money, and `usage` is a SummingMergeTree where a dropped row is gone for good.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 70, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=a%26b%3Dc'],
+        ['statusCode' => 200, 'bytesSent' => 30, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => eventsWithoutDate($job) === [
+        ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100],
+    ]);
+});
+
+it('reads the delivery zone out of the logged path', function () {
+    fakeBunnySettings();
+
+    // `play` vs `download` is what separates streaming bytes from downloaded ones once the batch
+    // reaches ClickHouse, and the log path is the only place that distinction survives. The zone
+    // is anchored on the ULID's own position, so the `bcdn_token=` prefix cannot be mistaken for it.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 10, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=abc&token_path=%2Fplay%2F&expires=1/'.ULID_A.'/play/chunk-0001.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 20, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t'],
+        ['statusCode' => 200, 'bytesSent' => 30, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/assets/thumb.jpg'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
+        return collect($job->events)->pluck('bytes', 'zone')->all() === [
+            'play' => 10,
+            'download' => 20,
+            'assets' => 30,
+        ];
+    });
+});
+
+it('keeps the zones apart instead of summing them into one row', function () {
+    fakeBunnySettings();
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 10, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/a.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 5, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/b.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 20, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => collect($job->events)->pluck('bytes', 'zone')->all() === [
+        'play' => 15,
+        'download' => 20,
+    ]);
+});
+
+it('ships the hash of the playback token prefix every segment inherits', function () {
+    fakeBunnySettings();
+
+    // A playback link's token is the `bcdn_token=` path prefix, which the relative segment URLs
+    // inherit — so every line of a session carries it, and hashes to the key the mint recorded
+    // the tracking id under ({@see \App\Services\Cdn\TrackingRegistry}). The command does not
+    // resolve it: it sums per hash and leaves the lookup to the job, like the self-hosted edge.
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 40, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00002.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-other&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
+        $byHash = collect($job->events)->keyBy('token_hash')->map->bytes;
+
+        return $byHash->get(hash('sha256', 'HS256-known_token')) === 140
+            && $byHash->get(hash('sha256', 'HS256-other')) === 25;
     });
 });

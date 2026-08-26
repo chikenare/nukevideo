@@ -36,6 +36,9 @@ function asLocalEnvironment(): void
 {
     // `isLocal()` reads the container's `env` binding, which `config()` does not touch.
     app()->detectEnvironment(fn () => 'local');
+    // A development panel always has a registry: it is where `node-dev` is pushed to and pulled
+    // from, and a deploy without one is refused (its own test clears it again).
+    config(['nuke.registry' => '10.0.0.240:5000']);
 }
 
 // The image names are assertions about Docker Hub unless a test says otherwise, and the developer
@@ -111,70 +114,45 @@ describe('development and production deploys on one host', function () {
             ->and($script)->not->toContain('nukevideo_dev');
     });
 
-    it('builds the development image instead of pulling one that does not exist', function () {
-        // Built from the release target, so a development node runs the same shape as production —
-        // and under its own tag, because `:dev` is compose's (target `api-dev`, no code in it) and
-        // the next `compose up --build` would rebuild it from under the node.
-        asLocalEnvironment();
-        $script = app(NodeService::class)->buildDeployScript(deployableNode());
-
-        expect($script)->toContain('docker build --target api-prod -t chikenare/nukevideo-api:node-dev "$SOURCE_DIR"')
-            // Compose's own tag, the one with no code in it, must never be what a node runs.
-            ->and($script)->not->toContain('chikenare/nukevideo-api:dev');
-    });
-
-    it('builds from the compose project it finds on the node, and says where from', function () {
-        // Nothing to configure: the working copy is wherever the panel itself runs from, and compose
-        // labels every container it creates with that directory. The path is printed so the image
-        // can be pushed or copied to an external test node afterwards.
-        asLocalEnvironment();
-        $script = app(NodeService::class)->buildDeployScript(deployableNode());
-
-        expect($script)->toContain('--filter label=com.docker.compose.service=nukevideo-api')
-            ->and($script)->toContain('{{.Label "com.docker.compose.project.working_dir"}}')
-            // Building from an empty context would produce an image with no project in it.
-            ->and($script)->toContain('if [ -n "$SOURCE_DIR" ]; then')
-            ->and($script)->toContain('from $SOURCE_DIR')
-            ->and(strpos($script, 'SOURCE_DIR=$('))
-            ->toBeLessThan(strpos($script, 'docker build --target'));
-    });
-
-    it('builds the proxy from its own release target', function () {
-        asLocalEnvironment();
-        $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
-        );
-
-        expect($script)->toContain('docker build --target proxy-prod -t chikenare/nukevideo-proxy:node-dev');
-    });
-
-    it('falls back to the published image on a node that has no working copy', function () {
-        // An external test node runs what the last deploy from the development machine pushed;
-        // same script, the node itself decides which half applies.
+    it('pulls the development tag from the configured registry, never building on the node', function () {
+        // Built and pushed by bin/push-node-dev from the working copy; the node only pulls. Under
+        // its own tag, because `:dev` is compose's (target `api-dev`, no code in it) and the next
+        // `compose up --build` would rebuild it from under the node.
         asLocalEnvironment();
         config(['nuke.registry' => '10.0.0.240:5000']);
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->toContain('if [ -n "$SOURCE_DIR" ]; then')
-            ->and($script)->toContain('docker build --target api-prod -t 10.0.0.240:5000/nukevideo-api:node-dev')
-            ->and($script)->toContain('docker push 10.0.0.240:5000/nukevideo-api:node-dev')
-            ->and($script)->toContain('pull_image 10.0.0.240:5000/nukevideo-api:node-dev');
+        expect($script)->toContain("IMAGE='10.0.0.240:5000/nukevideo-api:node-dev'")
+            ->and($script)->toContain('pull_image "$IMAGE"')
+            ->and($script)->not->toContain('docker build')
+            ->and($script)->not->toContain('BUILD_TARGET')
+            // Compose's own tag, the one with no code in it, must never be what a node runs.
+            ->and($script)->not->toContain('nukevideo-api:dev');
     });
 
-    it('never pushes a development build when the registry is docker hub', function () {
-        // Unset means the namespace the releases are published under. A working copy has no
-        // business going there.
+    it('pulls the proxy under the same development tag', function () {
         asLocalEnvironment();
-        $script = app(NodeService::class)->buildDeployScript(deployableNode());
+        config(['nuke.registry' => '10.0.0.240:5000']);
+        $script = app(NodeService::class)->buildDeployScript(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+        );
 
-        expect($script)->toContain('chikenare/nukevideo-api:node-dev')
-            ->and($script)->not->toContain('docker push');
+        expect($script)->toContain("IMAGE='10.0.0.240:5000/nukevideo-proxy:node-dev'");
     });
+
+    it('refuses a development deploy with no registry rather than pulling a tag Docker Hub does not have', function () {
+        // Unset means the namespace the releases are published under. A working copy has no
+        // business there, in either direction: nothing to pull, and nothing must ever be pushed.
+        asLocalEnvironment();
+        config(['nuke.registry' => null]);
+
+        app(NodeService::class)->buildDeployScript(deployableNode());
+    })->throws(RuntimeException::class, 'bin/push-node-dev');
 
     it('leaves production on docker hub when no registry is configured', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->toContain('pull_image chikenare/nukevideo-api:'.config('app.version'));
+        expect($script)->toContain("IMAGE='chikenare/nukevideo-api:".config('app.version')."'");
     });
 
     it('pulls production from the configured registry', function () {
@@ -182,7 +160,7 @@ describe('development and production deploys on one host', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
         // Trailing slash trimmed — the name would otherwise carry a double separator.
-        expect($script)->toContain('pull_image registry.example.com:5000/nukevideo-api:'.config('app.version'))
+        expect($script)->toContain("IMAGE='registry.example.com:5000/nukevideo-api:".config('app.version')."'")
             ->and($script)->not->toContain('chikenare/');
     });
 
@@ -190,9 +168,9 @@ describe('development and production deploys on one host', function () {
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
         $image = 'chikenare/nukevideo-api:'.config('app.version');
 
-        expect($script)->toContain("pull_image {$image}")
-            ->and($script)->not->toContain('docker build')
-            ->and($script)->not->toContain('SOURCE_DIR');
+        expect($script)->toContain("IMAGE='{$image}'")
+            ->and($script)->toContain('pull_image "$IMAGE"')
+            ->and($script)->not->toContain('docker build');
     });
 });
 
@@ -203,7 +181,7 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        expect($script)->toContain('docker run -d --name nukevideo_vector')
+        expect($script)->toContain("VECTOR_RUN_ARGS='--name nukevideo_vector")
             ->and($script)->toContain('/etc/vector/vector.yaml');
     });
 
@@ -213,9 +191,8 @@ describe('vector placement', function () {
         fakeCdnProvider('self_hosted');
         $script = app(NodeService::class)->buildDeployScript(deployableNode());
 
-        expect($script)->not->toContain('docker run -d --name nukevideo_dev_vector')
-            ->and($script)->not->toContain('docker run -d --name nukevideo_vector')
-            ->and($script)->toContain('docker rm -f nukevideo_vector');
+        expect($script)->toContain("VECTOR_RUN_ARGS=''")
+            ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
     });
 
     it('does not run vector behind bunny, whose logs come from its own API', function () {
@@ -226,8 +203,8 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        expect($script)->not->toContain('docker run -d --name nukevideo_vector')
-            ->and($script)->toContain('docker rm -f nukevideo_vector');
+        expect($script)->toContain("VECTOR_RUN_ARGS=''")
+            ->and($script)->toContain("VECTOR_CONTAINER='nukevideo_vector'");
     });
 
     it('hands vector only the two variables its config reads', function () {
@@ -236,7 +213,7 @@ describe('vector placement', function () {
             deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
         );
 
-        preg_match('/^docker run -d --name nukevideo_vector .*$/m', $script, $matches);
+        preg_match('/^VECTOR_RUN_ARGS=.*$/m', $script, $matches);
 
         expect($matches)->not->toBeEmpty()
             ->and($matches[0])->toContain('INTERNAL_API_URL=')
@@ -244,5 +221,34 @@ describe('vector placement', function () {
             // The node environment carries database, S3 and webhook credentials with it.
             ->and($matches[0])->not->toContain('APP_KEY=')
             ->and($matches[0])->not->toContain('AWS_SECRET_ACCESS_KEY=');
+    });
+});
+
+describe('edge token settings', function () {
+    it('hands the proxy the query argument the signer actually writes', function () {
+        // The name is one setting read by two sides: `SelfHostedProvider` signs `?<name>=...` and
+        // the edge's nginx.conf validates `$arg_<name>`. While it was hardcoded in the template,
+        // changing it in the panel left the edge reading an argument nobody sent — a 403 on every
+        // manifest and segment, with only the unsigned assets still served.
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => 'secret', 'token_name' => 'nv_token']],
+        ]);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+        );
+
+        expect($env)->toContain('VOD_TOKEN_NAME=nv_token');
+    });
+
+    it('falls back to the akamai name both sides default to', function () {
+        fakeCdnProvider('self_hosted');
+
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+        );
+
+        expect($env)->toContain('VOD_TOKEN_NAME=__hdnea__');
     });
 });

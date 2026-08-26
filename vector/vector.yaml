@@ -1,3 +1,11 @@
+# Local only, no port published: it exists for `vector tap`, which is how to watch what the
+# pipeline emits (`docker exec <vector> vector tap aggregate_bandwidth_logs`) now that nothing
+# is echoed to stdout — a console sink doubled every event into the Docker log for the whole
+# life of the node, in exchange for a debugging aid that this replaces on demand.
+api:
+  enabled: true
+  address: 127.0.0.1:8686
+
 sources:
   nginx_logs:
     type: docker_logs
@@ -23,7 +31,11 @@ transforms:
       .ip = parsed.ip
       .bytes = to_int(parsed.bytes) ?? 0
       .video = parsed.video
-      .tid = parsed.tid
+      .zone = parsed.zone
+      .token = parsed.token
+      .cache = parsed.cache
+      .origin = parsed.origin
+      .node = parsed.node
 
       if .bytes <= 0 { abort }
 
@@ -52,16 +64,47 @@ transforms:
       if !is_timestamp(ts) { ts = now() }
       date = format_timestamp!(ts, "%Y-%m-%d")
 
-      # Absent on every playback line and on downloads that carried no id; nginx logs it as an
-      # empty value either way, so the column's own default is what lands.
-      tid = to_string(.tid) ?? ""
+      # The link's token, hashed here and never shipped: the API keyed the tracking id it minted
+      # the link for under the SHA-256 of the token, so the hash is all the ingest needs, and a
+      # valid bearer token has no business in a queue payload. Empty for the unsigned assets and
+      # for an edge from before the field, which means "unattributed" downstream. `-` is nginx's
+      # marker for a variable it could not find; it is not a token.
+      token = to_string(.token) ?? ""
+      if token == "-" { token = "" }
+      token_hash = ""
+      if token != "" { token_hash = sha2(token, variant: "SHA-256") }
+
+      # `-` is nginx's marker for a variable it could not find, and a node deployed before the
+      # log format was fixed still emits it. A node deployed before `zone` existed sends nothing
+      # at all, which reads as null here and means the same thing: count the bytes under the
+      # generic metric.
+      zone = to_string(.zone) ?? ""
+      if zone == "-" { zone = "" }
+
+      # What the edge's cache did with the request and what it cost at the origin, for the
+      # per-node hit ratio. `origin` is `-` on a HIT (nginx never opened an upstream), which is
+      # the zero it means. An edge from before these fields sends nothing, which reads as null:
+      # an empty cache status and no origin bytes, never a wrong number.
+      cache = to_string(.cache) ?? ""
+      if cache == "-" { cache = "" }
+
+      origin = to_int(.origin) ?? 0
+      if origin < 0 { origin = 0 }
+
+      # Kept as text: the reduce below groups on it, and a number in a reduced event is summed
+      # across the batch even when it is a group key — node 4 came out as 12 and 208.
+      node = to_string(to_int(.node) ?? 0)
 
       . = {}
       .video_ulid = video
       .ip = ip
       .bytes = bytes
       .date = date
-      .tid = tid
+      .token_hash = token_hash
+      .zone = zone
+      .cache = cache
+      .origin = origin
+      .node = node
 
   aggregate_bandwidth_logs:
     type: reduce
@@ -73,19 +116,28 @@ transforms:
       - video_ulid
       - ip
       - date
-      # Grouped on, not carried: summing across tracking ids would merge two customers' traffic
-      # into one row and lose exactly what the id was added for.
-      - tid
+      # Grouped on, not carried: summing across tokens would merge two viewers' traffic into one
+      # row and lose exactly what the attribution exists for. Same for the zone, which decides
+      # which metric the bytes land under.
+      - token_hash
+      - zone
+      # Both decide which row the bytes land in: the hit ratio is hits over everything served,
+      # and it is read per node.
+      - cache
+      - node
     merge_strategies:
       bytes: sum
+      origin: sum
+    # A group closes on either clock. `expire_after_ms` counts from the group's LAST event, so on
+    # its own a viewer who never pauses keeps their group open for the whole session and the bytes
+    # land only when they stop — a one-hour session is one event, an hour late, and every open
+    # group is memory on the edge. `end_every_period_ms` caps that: an active session is flushed
+    # once a minute regardless, which bounds both the delay the panel sees and what a busy node
+    # holds, at the cost of a handful of rows per session that ClickHouse sums back together.
+    expire_after_ms: 30000
+    end_every_period_ms: 60000
 
 sinks:
-  stdout:
-    type: console
-    inputs:
-      - aggregate_bandwidth_logs
-    encoding:
-      codec: json
   laravel_bandwidth:
     type: http
     inputs:
@@ -98,7 +150,10 @@ sinks:
       headers:
         Authorization: "Bearer ${INTERNAL_API_SECRET}"
     batch:
-      # Collapse many aggregated events into one POST (and therefore one queue
-      # job) so the per-request/per-job overhead is amortised across the batch.
+      # Collapse many aggregated events into one POST (and therefore one queue job, one cache
+      # lookup and one ClickHouse insert) so the per-request overhead is amortised across the
+      # batch. The reduce above already emits at most once a minute per session, so a shorter
+      # timeout here only splits a minute's worth of nodes into more jobs; nothing reads the
+      # numbers at a resolution where the extra half-minute shows.
       max_events: 1000
-      timeout_secs: 5
+      timeout_secs: 30
