@@ -100,16 +100,12 @@ panel decides: the released version in production, `node-dev` from `DOCKER_REGIS
 development. For a development node, build and push that tag from the checkout first —
 `bin/push-node-dev` — then deploy; repeat after every change you want the node to run.
 
-**The SSH key.** Before adding a node, you need an SSH key registered in NukeVideo:
-
-```
-POST /api/ssh-keys
-{
-  "name": "Production Key",
-  "public_key": "ssh-ed25519 AAAA...",
-  "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----..."
-}
-```
+**The SSH key.** The panel connects with a key it holds. Generate one on the SSH keys page
+(or `POST /api/ssh-keys` with just a `name`), copy the public key it shows and add it to
+`~/.ssh/authorized_keys` of the SSH user on the node. A pair made elsewhere can be imported by
+its private half alone; the public key is derived from it. One key is enough for a fleet — a
+node created without naming one gets the only key that exists — and several are for rotation
+or for hosts that come with a key of their own.
 
 ### Creating a Node
 

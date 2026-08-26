@@ -308,8 +308,7 @@ settings?: App.Data.ProjectSettingsData,
 namespace SshKey {
 export type StoreSshKeyData = {
 name: string,
-publicKey: string,
-privateKey: string,
+privateKey: string | null,
 };
 }
 namespace Stream {

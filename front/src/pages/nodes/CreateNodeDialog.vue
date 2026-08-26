@@ -48,6 +48,10 @@ const newNode = ref({
 
 onMounted(async () => {
   sshKeys.value = await SshKeyService.getAll()
+  // One key is the common installation; a picker with a single answer is only a required field
+  // to forget. The server makes the same choice when the id is absent, so this is the same result
+  // a second time, shown rather than hidden.
+  if (sshKeys.value.length === 1) newNode.value.sshKeyId = sshKeys.value[0]!.id
 })
 
 const handleCreate = async () => {
@@ -130,7 +134,7 @@ const handleCreate = async () => {
           <p class="text-xs text-muted-foreground">Renditions using a GPU codec are routed to nodes with matching hardware.</p>
           <p v-if="errors.accel" class="text-sm text-destructive">{{ errors.accel[0] }}</p>
         </div>
-        <div class="grid gap-2">
+        <div v-if="sshKeys.length !== 1" class="grid gap-2">
           <Label for="node_ssh_key">SSH Key</Label>
           <Select v-model="newNode.sshKeyId">
             <SelectTrigger>

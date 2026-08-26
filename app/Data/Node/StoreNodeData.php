@@ -4,6 +4,7 @@ namespace App\Data\Node;
 
 use App\Data\RequestData;
 use App\Models\Node;
+use App\Models\SshKey;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Mappers\CamelCaseMapper;
 use Spatie\LaravelData\Optional;
@@ -25,6 +26,23 @@ class StoreNodeData extends RequestData
         #[MapInputName(CamelCaseMapper::class)]
         public ?string $storageEndpoint,
     ) {}
+
+    /**
+     * Snake-cased for the model, with the key filled in when the caller named none and there is
+     * exactly one to pick. One key is the common installation; making the operator choose it on
+     * every node is a form field with a single answer. With several keys the choice is real, and
+     * a node created without one stays keyless — it cannot be deployed to until it is assigned.
+     */
+    public function toDatabase(): array
+    {
+        $data = parent::toDatabase();
+
+        if (empty($data['ssh_key_id']) && SshKey::count() === 1) {
+            $data['ssh_key_id'] = SshKey::value('id');
+        }
+
+        return $data;
+    }
 
     public static function rules(): array
     {

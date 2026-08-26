@@ -131,10 +131,17 @@ POST /api/ssh-keys
 ```json
 {
   "name": "Production Key",
-  "public_key": "ssh-ed25519 AAAA...",
-  "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
+  "privateKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
 }
 ```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `name` | string | Yes | Up to 50 characters; also becomes the comment on the public key line |
+| `privateKey` | string | No | The private half of a pair you already have. **Omit it to have the server generate an Ed25519 pair.** The public key is always derived from the private one, never accepted |
+
+The response carries `publicKey` and `fingerprint`: install the public key in the SSH user's
+`~/.ssh/authorized_keys` on every node the key should connect to.
 
 ::: warning
 Private keys are stored encrypted. They are never returned in API responses.

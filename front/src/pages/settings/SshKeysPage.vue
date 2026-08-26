@@ -35,7 +35,7 @@ import Spinner from '@/components/ui/spinner/Spinner.vue'
 import SshKeyService from '@/services/SshKeyService'
 type SshKey = App.Data.SshKeyData
 import { ValidationException } from '@/exceptions/ValidationException'
-import { Plus, Copy, Trash2 } from '@lucide/vue'
+import { Plus, Copy, Trash2, Check } from '@lucide/vue'
 
 const keys = ref<SshKey[]>([])
 const loading = ref(true)
@@ -43,11 +43,19 @@ const dialogOpen = ref(false)
 const createLoading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
+// "generate" is the default: the server mints an Ed25519 pair and the operator only has to copy
+// the public half onto the nodes. "import" is for a pair made elsewhere — the private half alone;
+// the public one is derived server-side so the two can never disagree.
+const mode = ref<'generate' | 'import'>('generate')
 const form = ref({
   name: '',
-  publicKey: '',
   privateKey: '',
 })
+
+// The key just created, kept on screen with its public half: this is the moment the operator
+// needs it, to paste into the node's authorized_keys, and the list only shows a fingerprint.
+const created = ref<SshKey | null>(null)
+const copiedId = ref<number | null>(null)
 
 async function fetchKeys() {
   try {
@@ -65,9 +73,11 @@ async function handleCreate() {
   createLoading.value = true
 
   try {
-    await SshKeyService.create(form.value)
-    form.value = { name: '', publicKey: '', privateKey: '' }
-    dialogOpen.value = false
+    created.value = await SshKeyService.create({
+      name: form.value.name,
+      privateKey: mode.value === 'import' ? form.value.privateKey : null,
+    })
+    form.value = { name: '', privateKey: '' }
     await fetchKeys()
   } catch (error) {
     if (error instanceof ValidationException) {
@@ -87,8 +97,18 @@ async function handleDelete(id: number) {
   }
 }
 
-function copyPublicKey(key: string) {
-  navigator.clipboard.writeText(key)
+async function copyPublicKey(key: SshKey) {
+  await navigator.clipboard.writeText(key.publicKey)
+  copiedId.value = key.id
+  setTimeout(() => {
+    if (copiedId.value === key.id) copiedId.value = null
+  }, 1500)
+}
+
+function closeDialog() {
+  dialogOpen.value = false
+  created.value = null
+  errors.value = {}
 }
 
 function formatDate(dateString: string) {
@@ -112,7 +132,7 @@ onMounted(() => {
         <p class="text-muted-foreground">Manage SSH keys used to connect to your nodes.</p>
       </div>
 
-      <Dialog v-model:open="dialogOpen">
+      <Dialog :open="dialogOpen" @update:open="(open) => (open ? (dialogOpen = true) : closeDialog())">
         <DialogTrigger as-child>
           <Button>
             <Plus class="h-4 w-4 mr-2" />
@@ -120,46 +140,71 @@ onMounted(() => {
           </Button>
         </DialogTrigger>
         <DialogContent class="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Add SSH Key</DialogTitle>
-            <DialogDescription>Paste your SSH key pair to use for node connections.</DialogDescription>
-          </DialogHeader>
-          <form @submit.prevent="handleCreate" class="grid gap-4">
+          <template v-if="created">
+            <DialogHeader>
+              <DialogTitle>Key "{{ created.name }}" ready</DialogTitle>
+              <DialogDescription>
+                Add this public key to <code>~/.ssh/authorized_keys</code> of the SSH user on every node it should connect to. The private key stays here, encrypted, and is never shown.
+              </DialogDescription>
+            </DialogHeader>
             <div class="grid gap-2">
-              <Label for="key_name">Name</Label>
-              <Input id="key_name" v-model="form.name" placeholder="e.g. production-key" required />
-              <p v-if="errors.name" class="text-sm text-destructive">{{ errors.name[0] }}</p>
-            </div>
-            <div class="grid gap-2">
-              <Label for="key_public">Public Key</Label>
+              <Label>Public key</Label>
               <textarea
-                id="key_public"
-                v-model="form.publicKey"
-                placeholder="ssh-ed25519 AAAA..."
-                required
-                rows="3"
-                class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                readonly
+                rows="4"
+                :value="created.publicKey"
+                class="flex w-full rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono"
+                @focus="($event.target as HTMLTextAreaElement).select()"
               />
-              <p v-if="errors.publicKey" class="text-sm text-destructive">{{ errors.publicKey[0] }}</p>
-            </div>
-            <div class="grid gap-2">
-              <Label for="key_private">Private Key</Label>
-              <textarea
-                id="key_private"
-                v-model="form.privateKey"
-                placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-                required
-                rows="5"
-                class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <p v-if="errors.privateKey" class="text-sm text-destructive">{{ errors.privateKey[0] }}</p>
+              <p class="text-xs text-muted-foreground">Fingerprint <code>{{ created.fingerprint }}</code></p>
             </div>
             <DialogFooter>
-              <Button type="submit" :disabled="createLoading">
-                {{ createLoading ? 'Adding...' : 'Add Key' }}
+              <Button type="button" variant="outline" @click="copyPublicKey(created)">
+                <Check v-if="copiedId === created.id" class="h-4 w-4 mr-2" />
+                <Copy v-else class="h-4 w-4 mr-2" />
+                {{ copiedId === created.id ? 'Copied' : 'Copy public key' }}
               </Button>
+              <Button type="button" @click="closeDialog">Done</Button>
             </DialogFooter>
-          </form>
+          </template>
+          <template v-else>
+            <DialogHeader>
+              <DialogTitle>Add SSH Key</DialogTitle>
+              <DialogDescription>Generate a key here, or import the private half of a pair you already have.</DialogDescription>
+            </DialogHeader>
+            <form @submit.prevent="handleCreate" class="grid gap-4">
+              <div class="grid gap-2">
+                <Label for="key_name">Name</Label>
+                <Input id="key_name" v-model="form.name" placeholder="e.g. production-key" required />
+                <p v-if="errors.name" class="text-sm text-destructive">{{ errors.name[0] }}</p>
+              </div>
+              <div class="flex gap-2">
+                <Button type="button" size="sm" :variant="mode === 'generate' ? 'default' : 'outline'" @click="mode = 'generate'">Generate</Button>
+                <Button type="button" size="sm" :variant="mode === 'import' ? 'default' : 'outline'" @click="mode = 'import'">Import</Button>
+              </div>
+              <p v-if="mode === 'generate'" class="text-xs text-muted-foreground">
+                An Ed25519 pair is generated on the server. You will get the public key to install on your nodes.
+              </p>
+              <div v-else class="grid gap-2">
+                <Label for="key_private">Private Key</Label>
+                <textarea
+                  id="key_private"
+                  v-model="form.privateKey"
+                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  required
+                  rows="5"
+                  class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <p class="text-xs text-muted-foreground">The public key is derived from it; there is nothing else to paste.</p>
+                <p v-if="errors.privateKey" class="text-sm text-destructive">{{ errors.privateKey[0] }}</p>
+              </div>
+              <DialogFooter>
+                <Button type="submit" :disabled="createLoading">
+                  {{ createLoading ? 'Working...' : mode === 'generate' ? 'Generate Key' : 'Import Key' }}
+                </Button>
+              </DialogFooter>
+            </form>
+          </template>
         </DialogContent>
       </Dialog>
     </div>
@@ -188,8 +233,9 @@ onMounted(() => {
             <TableCell>
               <div class="flex items-center gap-1">
                 <code class="text-xs text-muted-foreground">{{ key.fingerprint }}</code>
-                <Button variant="ghost" size="icon" class="h-6 w-6" @click="copyPublicKey(key.publicKey)">
-                  <Copy class="h-3 w-3" />
+                <Button variant="ghost" size="icon" class="h-6 w-6" title="Copy public key" @click="copyPublicKey(key)">
+                  <Check v-if="copiedId === key.id" class="h-3 w-3" />
+                  <Copy v-else class="h-3 w-3" />
                 </Button>
               </div>
             </TableCell>
