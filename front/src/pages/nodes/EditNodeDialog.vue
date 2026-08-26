@@ -20,7 +20,9 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
+import SshKeyService from '@/services/SshKeyService'
 type Node = App.Data.NodeData
+type SshKey = App.Data.SshKeyData
 import { ValidationException } from '@/exceptions/ValidationException'
 
 const emit = defineEmits<{ updated: [node: Node] }>()
@@ -29,14 +31,31 @@ const dialogOpen = ref(false)
 const loading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
-type EditableNode = Omit<Node, 'accel'> & { user: string; storageEndpoint: string; accel: string }
+type EditableNode = Omit<Node, 'accel' | 'sshKeyId'> & {
+  user: string
+  hostname: string
+  storageEndpoint: string
+  accel: string
+  sshKeyId: number | undefined
+}
 const node = ref<EditableNode>({} as EditableNode)
+const sshKeys = ref<SshKey[]>([])
 
-const show = (initialNode: Node) => {
+const show = async (initialNode: Node) => {
   const raw: Node = JSON.parse(JSON.stringify(initialNode))
-  node.value = { ...raw, user: raw.user ?? '', storageEndpoint: raw.storageEndpoint ?? '', accel: raw.accel ?? 'none' }
+  node.value = {
+    ...raw,
+    user: raw.user ?? '',
+    hostname: raw.hostname ?? '',
+    storageEndpoint: raw.storageEndpoint ?? '',
+    accel: raw.accel ?? 'none',
+    sshKeyId: raw.sshKeyId ?? undefined,
+  }
   errors.value = {}
   dialogOpen.value = true
+  // Fetched on open rather than on mount: a key added on the SSH keys page after this dialog was
+  // mounted would otherwise be missing from the list until a full reload.
+  sshKeys.value = await SshKeyService.getAll()
 }
 
 const handleUpdate = async () => {
@@ -47,6 +66,10 @@ const handleUpdate = async () => {
     const updated = await NodeService.updateNode(node.value.id, {
       ...node.value,
       accel: node.value.accel === 'none' ? null : node.value.accel,
+      sshKeyId: node.value.sshKeyId ?? null,
+      // A hostname is a proxy's public address; a worker has no use for one and an empty string
+      // would be stored as a hostname of its own.
+      hostname: node.value.type === 'proxy' && node.value.hostname ? node.value.hostname : null,
     })
     dialogOpen.value = false
     emit('updated', updated)
@@ -81,9 +104,28 @@ defineExpose({ show })
           <p v-if="errors.ipAddress" class="text-sm text-destructive">{{ errors.ipAddress }}</p>
         </div>
         <div class="grid gap-2">
+          <Label for="edit_node_ssh_key">SSH Key</Label>
+          <Select v-model="node.sshKeyId">
+            <SelectTrigger>
+              <SelectValue placeholder="Select SSH key" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem v-for="key in sshKeys" :key="key.id" :value="key.id">{{ key.name }}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">The key the panel connects with. Its public half has to be in the user's authorized_keys on the node.</p>
+          <p v-if="errors.sshKeyId" class="text-sm text-destructive">{{ errors.sshKeyId[0] }}</p>
+        </div>
+        <div class="grid gap-2">
           <Label for="edit_node_user">User</Label>
           <Input id="edit_node_user" v-model="node.user" placeholder="e.g. root" required />
           <p v-if="errors.user" class="text-sm text-destructive">{{ errors.user[0] }}</p>
+        </div>
+        <div v-if="node.type === 'proxy'" class="grid gap-2">
+          <Label for="edit_node_hostname">Hostname</Label>
+          <Input id="edit_node_hostname" v-model="node.hostname" placeholder="e.g. cdn.example.com" required />
+          <p class="text-xs text-muted-foreground">The public address playback links point at. Redeploy after changing: Traefik's router and the certificate are issued for it.</p>
+          <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
         </div>
         <div class="flex items-center justify-between">
           <Label for="edit_node_active">Active</Label>
