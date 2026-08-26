@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\Video;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\TrackingId;
 use ClickHouseDB\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -115,7 +116,7 @@ class IngestBandwidthJob implements ShouldQueue
     {
         $id = $resolved[(string) ($event['token_hash'] ?? '')] ?? (string) ($event['tracking_id'] ?? '');
 
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $id) === 1 ? $id : '';
+        return TrackingId::isValid($id) ? $id : '';
     }
 
     /** @param array<string, mixed> $event */

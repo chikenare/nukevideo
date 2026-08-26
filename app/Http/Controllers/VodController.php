@@ -45,9 +45,11 @@ class VodController extends Controller
         $link = $this->buildLink(
             output: $output,
             video: $video,
-            // The token is bound to the IP that will actually fetch the manifest. An integrator
-            // calling this from its own backend must name the end viewer, or the edge would
-            // compare the viewer's address against the integrator's server and refuse playback.
+            // The address that will actually fetch the manifest, so an integrator calling this
+            // from its own backend must name the end viewer. Bunny binds the token to it and
+            // refuses playback from any other address; the self-hosted edge signs it into the
+            // token but never checks it ({@see \App\Services\Cdn\SelfHostedProvider::sign}), so
+            // there a wrong address costs nothing — and buys nothing either.
             ip: $data->ip ?? $request->ip(),
             format: $format,
             cap: $output->resolveCap($data->resolution),

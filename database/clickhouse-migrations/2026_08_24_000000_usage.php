@@ -12,6 +12,10 @@ return new class extends AbstractClickhouseMigration
      * (usage, video_usage, the tid → tracking_id rename, the node/cache dimensions) into one
      * CREATE: the history had no readers, and a fresh install has nothing to carry over.
      *
+     * Deliberately not upgrade-aware: an install that ran the earlier chain must `DROP TABLE usage`
+     * (the history is not carried) before running this, or `IF NOT EXISTS` leaves the old shape —
+     * `tid`, no `tracking_id`/`node_id`/`cache` — in place and the ingest and analytics break on it.
+     *
      * Design notes that used to live across those migrations:
      *
      * - SummingMergeTree folds rows sharing the full sorting key as it merges, so a row can only

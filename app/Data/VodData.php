@@ -3,6 +3,7 @@
 namespace App\Data;
 
 use App\Data\Stream\DownloadStreamData;
+use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapName;
 use Spatie\LaravelData\Attributes\Validation\In;
 use Spatie\LaravelData\Attributes\Validation\IP;
@@ -38,7 +39,7 @@ class VodData extends RequestData
      */
     public static function rules(): array
     {
-        $trackingId = ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+\z/'];
+        $trackingId = TrackingId::rules();
 
         return [
             'tracking_id' => $trackingId,

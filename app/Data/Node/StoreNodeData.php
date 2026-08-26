@@ -27,7 +27,10 @@ class StoreNodeData extends RequestData
     public static function rules(): array
     {
         return [
-            'hostname' => 'nullable|max:255',
+            // A DNS name and nothing else. It lands inside the edge's Traefik ``Host(`…`)`` rule,
+            // in the playback URLs handed to integrators and in the URL the health probe fetches:
+            // a backtick or a slash here rewrites a router rule or points the probe elsewhere.
+            'hostname' => ['nullable', 'string', 'max:255', 'regex:/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i'],
             'name' => 'required|string|max:255|unique:nodes,name',
             // A POSIX login name. It is interpolated into the paths of the SSH deploy script, so
             // free text here is a shell injection on the node — and even an honest value carrying

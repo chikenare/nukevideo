@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Data\CacheDiskData;
+use App\Data\Node\DeployNodeData;
 use App\Data\Node\StoreNodeData;
 use App\Data\Node\UpdateNodeData;
 use App\Data\NodeData;
@@ -18,6 +19,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
+use Spatie\LaravelData\Optional;
 
 class NodeController extends Controller
 {
@@ -54,25 +56,26 @@ class NodeController extends Controller
         ]);
     }
 
-    public function deploy(Node $node)
+    public function deploy(DeployNodeData $data, Node $node)
     {
         // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
         $drain = request()->boolean('drain', true);
 
-        // Which spare disks to format into the cache pool, as the panel listed them. Absent means
-        // every one; an empty list means none — keep the cache off the disks and in a volume. The
-        // shape is checked here because a device path lands in a shell script on the node.
-        $disks = request()->validate([
-            'disks' => ['nullable', 'array'],
-            'disks.*' => ['string', 'regex:#^/dev/[a-z0-9]+$#'],
-        ])['disks'] ?? null;
+        // Which spare disks to format into the cache pool, as the panel listed them. An empty
+        // list means none — keep the cache off the disks and in a volume. The list is mandatory
+        // for a production proxy ({@see DeployNodeData}): the service reads a missing one as
+        // "every spare disk", and a missing list must never mean that by accident. A development
+        // panel's deploy target is often the developer's own machine, where "every spare disk"
+        // is a backup drive, so there an absent list means none.
+        $disks = $data->disks instanceof Optional ? null : $data->disks;
 
-        // Absent from a development panel means none, not all: a dev deploy's target is often the
-        // developer's own machine, and "every spare disk" there is a backup drive. Production keeps
-        // the convenient default; the panel always sends an explicit list anyway.
         if ($disks === null && app()->isLocal()) {
             $disks = [];
         }
+
+        // Belt and braces over the validation: null past this point is "all", and only a
+        // worker (whose deploy ignores the list) may get there without having chosen.
+        abort_if($disks === null && $node->type === NodeType::PROXY, 422, 'A proxy deploy needs the list of disks to format (an empty list formats none).');
 
         return response()->stream(function () use ($node, $drain, $disks) {
             $send = function (string $type, string $data = '') {
@@ -138,7 +141,7 @@ class NodeController extends Controller
             // Through the model: the names carry an environment prefix, and a hand-built one here
             // would either miss this environment's containers or match the other environment's.
             $owned = $node->deployedContainerNames();
-            if ($node->type->value === 'worker') {
+            if ($node->type === NodeType::WORKER) {
                 // Only on delete. The node is gone for good, so its chunk store goes with it —
                 // and if this was the storage server, another node has to be flagged as one.
                 $owned[] = $node->storageContainerName();
@@ -154,7 +157,7 @@ class NodeController extends Controller
                 }
             }
 
-            if ($node->type->value === 'proxy') {
+            if ($node->type === NodeType::PROXY) {
                 // The fallback cache volume is the node's alone and is otherwise never reclaimed.
                 // A cache pool directory on a dedicated disk is not touched: the pool belongs to
                 // the host and is what the next node deployed there picks up.
@@ -186,7 +189,7 @@ class NodeController extends Controller
 
     public function generateBootstrapToken(Node $node)
     {
-        if ($node->type->value !== 'worker') {
+        if ($node->type !== NodeType::WORKER) {
             return response()->json(['message' => 'Bootstrap tokens are only available for worker nodes.'], 422);
         }
 

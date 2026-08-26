@@ -4,6 +4,7 @@ namespace App\Data\Stream;
 
 use App\Data\RequestData;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\TrackingId;
 
 class DownloadStreamData extends RequestData
 {
@@ -34,7 +35,7 @@ class DownloadStreamData extends RequestData
      */
     public static function rules(): array
     {
-        $trackingId = ['nullable', 'string', 'max:64', 'regex:/^[A-Za-z0-9_-]+\z/'];
+        $trackingId = TrackingId::rules();
 
         return [
             'tracking_id' => $trackingId,

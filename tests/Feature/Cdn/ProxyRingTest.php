@@ -95,9 +95,37 @@ describe('the proxy ring', function () {
     });
 });
 
+/**
+ * A proxy whose deploy is long past: the probe does not count failures against a node written
+ * in the last minutes (its own test below), and a node just created is exactly that.
+ */
+function settledProxy(array $attributes = []): Node
+{
+    $node = ringProxy($attributes);
+    Node::whereKey($node->id)->update(['updated_at' => now()->subMinutes(15)]);
+
+    return $node->fresh();
+}
+
 describe('nodes:probe', function () {
-    it('counts silence and clears it on the first good answer', function () {
+    it('does not count a failure against a node deployed or edited minutes ago', function () {
+        // A fresh production proxy serves Traefik's self-signed certificate until ACME finishes;
+        // three of those in a row must not condemn a node that is only just coming up.
         $node = ringProxy();
+        Http::fake(["https://{$node->hostname}/healthz" => Http::response('', 500)]);
+
+        foreach (range(1, Node::HEALTH_FAILURE_THRESHOLD) as $i) {
+            $this->artisan('nodes:probe')->assertSuccessful();
+        }
+        expect($node->fresh()->health_failures)->toBe(0);
+
+        $this->travel(15)->minutes();
+        $this->artisan('nodes:probe')->assertSuccessful();
+        expect($node->fresh()->health_failures)->toBe(1);
+    });
+
+    it('counts silence and clears it on the first good answer', function () {
+        $node = settledProxy();
 
         // Stubs stack rather than replace, so the whole story is one sequence.
         $sequence = Http::sequence();
@@ -121,7 +149,7 @@ describe('nodes:probe', function () {
     it('does not take a 200 from something that is not the edge as the edge being up', function () {
         // Traefik with no router answers 404, Cloudflare 403 or a challenge page, a wrong DNS
         // record somebody else's site. The header is the only thing that proves nginx answered.
-        $node = ringProxy();
+        $node = settledProxy();
         Http::fake(["https://{$node->hostname}/healthz" => Http::response('<html>welcome</html>', 200)]);
 
         $this->artisan('nodes:probe')->assertSuccessful();
@@ -130,7 +158,7 @@ describe('nodes:probe', function () {
     });
 
     it('does not mistake one edge for another', function () {
-        $node = ringProxy();
+        $node = settledProxy();
         Http::fake(["https://{$node->hostname}/healthz" => Http::response('', 204, [ProbeProxyNodes::HEADER => '999'])]);
 
         $this->artisan('nodes:probe')->assertSuccessful();

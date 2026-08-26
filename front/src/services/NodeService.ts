@@ -39,7 +39,7 @@ class NodeService {
         return res.data.data
     }
 
-    /** `disks`: spare disks to format into a proxy's cache pool; omit for all, [] for none. */
+    /** `disks`: spare disks to format into a proxy's cache pool, [] for none. A production proxy deploy is refused without it. */
     async runDeploy(id: number, onMessage: (event: { type: string; data: string }) => void, body?: { disks?: string[] }): Promise<void> {
         return this.streamSSE(`${this.BASE_PATH}/${id}/deploy`, onMessage, body)
     }

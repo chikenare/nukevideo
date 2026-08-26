@@ -4,9 +4,9 @@ namespace App\Services;
 
 use App\Data\AppSettings\NodeRotationData;
 use App\Data\AppSettings\SshKeyRotationData;
+use App\Jobs\RemoveOldSshPublicKeyJob;
 use App\Models\Node;
 use App\Settings\AppSettings;
-use Illuminate\Support\Facades\Log;
 use phpseclib3\Crypt\EC;
 use phpseclib3\Crypt\PublicKeyLoader;
 
@@ -69,9 +69,13 @@ class SshKeyService
      * the other way round locks the panel out of every node it has not reached yet, with no key
      * left to reach them with. If any active node refuses, nothing is switched and the per-node
      * result says which; an inactive node is tried but cannot block, since it may be gone for
-     * good and the fleet cannot stay on a leaked key for its sake. After the switch the old public
-     * line is removed from the nodes that took the new one; a failure there only leaves a stale
-     * line behind, so it is logged rather than reported.
+     * good and the fleet cannot stay on a leaked key for its sake. If it does come back, the new
+     * public line has to be put in its authorized_keys by hand — the per-node result says so.
+     *
+     * Two SSH sessions per node is the floor — the install has to use the old key and the proof
+     * the new one — and the operator waits through all of them, so nothing else is added to the
+     * request: the old public line is removed by a queued job once the panel has switched. That
+     * step can only ever leave a stale line behind, never cost access, so nothing waits on it.
      */
     public function rotate(): SshKeyRotationData
     {
@@ -85,11 +89,14 @@ class SshKeyService
 
         foreach (Node::orderBy('id')->get() as $node) {
             try {
-                $this->ssh->run($node->ip_address, $node->user, $oldPrivate, $this->installCommand($newPublic), timeout: 30);
+                $this->ssh->run($node->ip_address, $node->user, $oldPrivate, self::installCommand($newPublic), timeout: 30);
                 $this->ssh->run($node->ip_address, $node->user, $newPrivate, 'true', timeout: 15);
                 $results[] = new NodeRotationData($node->id, $node->name, true, null);
             } catch (\Throwable $e) {
-                $results[] = new NodeRotationData($node->id, $node->name, false, $e->getMessage());
+                $error = $node->is_active
+                    ? $e->getMessage()
+                    : "{$e->getMessage()} — inactive, so it did not block; install the new public key on it by hand before reactivating it.";
+                $results[] = new NodeRotationData($node->id, $node->name, false, $error);
                 $blocked = $blocked || $node->is_active;
             }
         }
@@ -100,19 +107,13 @@ class SshKeyService
 
         $this->set($newPrivate);
 
-        foreach (Node::orderBy('id')->get() as $node) {
-            try {
-                $this->ssh->run($node->ip_address, $node->user, $newPrivate, $this->removeCommand($oldPublic), timeout: 30);
-            } catch (\Throwable $e) {
-                Log::warning("Old SSH public key left on node {$node->id}: {$e->getMessage()}");
-            }
-        }
+        RemoveOldSshPublicKeyJob::dispatchFor($oldPublic);
 
         return new SshKeyRotationData(true, $results);
     }
 
     /** Append the line once, creating the file with the permissions sshd insists on. */
-    private function installCommand(string $publicKey): string
+    public static function installCommand(string $publicKey): string
     {
         $line = escapeshellarg($publicKey);
 
@@ -120,7 +121,7 @@ class SshKeyService
             ." && (grep -qxF {$line} ~/.ssh/authorized_keys || echo {$line} >> ~/.ssh/authorized_keys)";
     }
 
-    private function removeCommand(string $publicKey): string
+    public static function removeCommand(string $publicKey): string
     {
         $line = escapeshellarg($publicKey);
 

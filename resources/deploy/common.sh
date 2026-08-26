@@ -1,20 +1,7 @@
-# Shared by every node deploy. Runs on the node over SSH, after the header the API prepends:
-# one assignment per variable, nothing else — the PHP side composes, the shell side acts.
+# Shared by every node deploy. Runs on the node over SSH, after the header the API prepends
+# (one assignment per variable, nothing else — the PHP side composes, the shell side acts) and
+# after sudo.sh, which has already settled $SUDO or aborted.
 set -e
-
-# Root, or a user whose sudo asks no questions. The API runs this over SSH with no terminal
-# (BatchMode), so a sudo that wants a password cannot get one: it fails, and every `|| true`
-# below used to turn that into a deploy that "succeeded" with Docker never enabled and the user
-# never in the docker group. Checked once, up front, with the reason spelled out.
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then
-    SUDO="sudo"
-    if ! sudo -n true 2>/dev/null; then
-        echo "ERROR: $(id -un) cannot sudo without a password, and this deploy has no terminal to type one in." >&2
-        echo "Deploy as root, or grant passwordless sudo: echo '$(id -un) ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/nukevideo" >&2
-        exit 1
-    fi
-fi
 
 # Seconds the old worker gets to finish in-flight jobs before it is killed. The default covers
 # one full chunk pass, and is 0 in development and staging, where the wait buys nothing; docker

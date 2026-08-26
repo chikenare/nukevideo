@@ -103,7 +103,8 @@ describe('rotation', function () {
         expect($data['rotated'])->toBeTrue()
             ->and($data['nodes'])->toBe([['id' => 1, 'name' => 'a', 'ok' => true, 'error' => null]])
             ->and($new)->not->toBe($this->old)
-            // 1. install with OLD key, 2. log in with NEW key, 3. remove old line with NEW key.
+            // 1. install with OLD key, 2. log in with NEW key, 3. remove old line with NEW key
+            // (queued, but the test queue is sync).
             ->and($calls[0][0])->toBe($this->old)
             ->and($calls[0][1])->toContain('authorized_keys')->toContain($newPublic)
             ->and($calls[1][0])->toBe($new)
@@ -151,6 +152,7 @@ describe('rotation', function () {
 
         expect($data['rotated'])->toBeTrue()
             ->and($data['nodes'][0]['ok'])->toBeFalse()
+            ->and($data['nodes'][0]['error'])->toContain('No route to host')->toContain('by hand')
             ->and(app(AppSettings::class)->ssh_private_key)->not->toBe($this->old);
     });
 });

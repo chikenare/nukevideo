@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Console\Commands\IngestBunnyLogs;
+use App\Data\Node\DeployNodeData;
 use App\Data\NodeData;
 use App\Data\SelfHostedConfigData;
 use App\Enums\CdnDriver;
@@ -12,9 +13,12 @@ use App\Models\Node;
 use App\Settings\CdnSettings;
 use App\Settings\NodeSettings;
 use App\Support\Cpu;
+use Illuminate\Support\Facades\Log;
 
 class NodeService
 {
+    public function __construct(private SshKeyService $sshKeys) {}
+
     public function index(): array
     {
         return [
@@ -93,7 +97,7 @@ class NodeService
 
     public function getEnvironmentVariables(Node $node): array
     {
-        $scheme = app()->isLocal() ? 'http://' : 'https://';
+        $scheme = Node::proxyScheme();
         $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
         $base = [
@@ -147,11 +151,46 @@ class NodeService
         $settings = $this->parseEnvText(app(NodeSettings::class)->environment);
         $nodeOverrides = $this->parseEnvText($node->env ?? '');
 
+        // Overrides still win — for everything but the deploy-owned keys, which are stripped
+        // from them (and logged) rather than honoured. Node overrides used to win outright, so a line in
+        // one node's env — a text field anyone with the admin panel can edit — could point that
+        // edge's INTERNAL_API_URL at a host of its own choosing, swap its S3 credentials, or
+        // replace VOD_TOKEN_SECRET with one it knows and mint its own playback tokens. Those keys
+        // are the deploy's to set; the override field is for tuning, not for re-plumbing.
+        $overrides = array_merge($settings, $nodeOverrides);
+        foreach (array_intersect_key($overrides, array_flip(self::DEPLOY_OWNED_ENV)) as $key => $line) {
+            if (isset($base[$key]) && $base[$key] !== $line) {
+                Log::warning('Ignoring a node env override of a deploy-owned variable', ['node_id' => $node->id, 'key' => $key]);
+            }
+        }
+
         return array_values(array_filter(
-            array_merge($base, $settings, $nodeOverrides),
+            array_merge($base, array_diff_key($overrides, array_flip(self::DEPLOY_OWNED_ENV))),
             fn ($v) => ! in_array(explode('=', $v, 2)[0], self::DOCKER_RUN_FLAGS)
         ));
     }
+
+    /**
+     * Variables the deploy sets and neither the global node environment nor a node's own `env`
+     * may replace: the credentials and the endpoints that make a node part of *this*
+     * installation. See {@see getEnvironmentVariables()} for what an override of one would buy.
+     */
+    private const DEPLOY_OWNED_ENV = [
+        'APP_KEY',
+        'APP_URL',
+        'API_UPSTREAM_HOST',
+        'NODE_ID',
+        'NODE_TYPE',
+        'INTERNAL_API_URL',
+        'INTERNAL_API_SECRET',
+        'WEBHOOK_SECRET',
+        'VOD_TOKEN_SECRET',
+        'VOD_TOKEN_NAME',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_BUCKET',
+        'AWS_ENDPOINT',
+    ];
 
     /**
      * Reads the same merged chain the environment does, node overriding settings. It used to look
@@ -217,11 +256,9 @@ class NodeService
 
     /**
      * @param  array<int, string>|null  $disks  spare disks to format into the cache pool (proxies);
-     *                                          null formats every spare disk, [] formats none
-     */
-    /**
-     * @param  array<int, string>|null  $disks  spare disks to format into the cache pool (proxies);
-     *                                          null formats every spare disk, [] formats none
+     *                                          null formats every spare disk, [] formats none.
+     *                                          The controller never passes null for a proxy
+     *                                          ({@see DeployNodeData}).
      */
     public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true, ?array $disks = null): void
     {
@@ -256,11 +293,10 @@ class NodeService
             'WORKDIR' => self::workdir($node),
             'DRAIN' => self::drainGrace(),
             'SERVICE_CONTAINER' => $node->serviceContainerName(),
-            ...$this->imageVars($type === 'proxy' ? 'proxy' : 'api'),
-            ...match ($type) {
-                'worker' => $this->workerVars($node),
-                'proxy' => $this->proxyVars($node, $disks),
-                default => throw new \RuntimeException("Unknown node type: {$type}"),
+            ...$this->imageVars($node->type === NodeType::PROXY ? 'proxy' : 'api'),
+            ...match ($node->type) {
+                NodeType::WORKER => $this->workerVars($node),
+                NodeType::PROXY => $this->proxyVars($node, $disks),
             },
             ...$this->vectorVars($node),
         ];
@@ -279,7 +315,8 @@ class NodeService
             $header .= $key.'='.(is_int($value) ? $value : escapeshellarg((string) $value))."\n";
         }
 
-        $sections = ['common', $type === 'proxy' ? 'cache-disks' : null, $type, 'vector'];
+        // sudo.sh first: everything after it leans on $SUDO having been settled or the run aborted.
+        $sections = ['sudo', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $type, 'vector'];
 
         return $header."\n".implode("\n", array_map(
             fn ($section) => self::deployScript($section),
@@ -417,11 +454,16 @@ class NodeService
             'network' => 'nukevideo_default',
             // Resolved on the node by proxy.sh: CACHE_MOUNT is the pool's directory, or the
             // fallback volume when the host has no pool — and only then is the cache capped,
-            // because a volume shares the OS disk.
+            // because a volume shares the OS disk. With a pool, CACHE_EXPECT_POOL tells the
+            // entrypoint to look for the marker cache-disks.sh left on it, so a container that
+            // comes back on a host booted without the pool caps itself instead of sizing the
+            // cache to the OS disk ({@see vod/entrypoint.sh}).
             'raw' => [
                 '-v "$CACHE_MOUNT:'.ProxyCacheService::CONTAINER_PATH.'"',
                 '${CACHE_MAX_SIZE:+-e "VOD_CACHE_MAX_SIZE=$CACHE_MAX_SIZE"}',
+                '${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}',
             ],
+            'log_opts' => self::PROXY_LOG_OPTS,
         ]);
 
         return [
@@ -491,8 +533,8 @@ class NodeService
         $runArgs = $this->buildDockerRunArgs($name, $image, [
             // Only the two variables the config interpolates. Handing a third-party image the whole
             // node environment — database, S3 and webhook credentials — bought nothing. Filtered
-            // out of the merged list rather than rebuilt, so a node or global override of the
-            // internal URL still reaches it.
+            // out of the merged list rather than rebuilt, so the two stay exactly what the edge
+            // itself was given (both are deploy-owned: no override can redirect the reports).
             'env' => array_merge(
                 array_values(array_filter(
                     $this->getEnvironmentVariables($node),
@@ -579,16 +621,21 @@ class NodeService
     }
 
     /**
-     * Usage of the cache pool and the state of the array beneath it. A missing mount is an error
-     * rather than empty output: the edge is then caching into whatever is at the path — the OS
-     * disk — which is exactly the situation the check exists to surface.
+     * Usage of the cache pool and the state of the array beneath it. Pool-aware: a host that was
+     * never given one (no device carrying the label, no array) is caching on a capped docker
+     * volume by design, and says so. A pool that exists but is not mounted is the error — the
+     * edge is then caching into whatever is at the path, the OS disk, which is exactly the
+     * regression the check exists to surface.
      */
     private function cachePoolCommand(): string
     {
         $mount = ProxyCacheService::MOUNT;
         $md = ProxyCacheService::MD_DEVICE;
+        $label = ProxyCacheService::FS_LABEL;
 
-        return "mountpoint -q {$mount} || { echo 'No cache pool mounted at {$mount}'; exit 1; };"
+        return "if ! mountpoint -q {$mount}; then"
+            ." if [ -e {$md} ] || blkid -L {$label} >/dev/null 2>&1; then echo 'Cache pool exists but is NOT mounted at {$mount} — the edge is caching on the OS disk'; exit 1; fi;"
+            ." echo 'no cache pool provisioned, edge caches on a docker volume'; exit 0; fi;"
             ." df -h {$mount} | tail -1 | awk '{ print \$2 \" total, \" \$3 \" used (\" \$5 \"), \" \$4 \" free\" }';"
             ." [ -e {$md} ] && grep -A1 '^md' /proc/mdstat | head -2 || echo 'single disk, no array'";
     }
@@ -651,7 +698,7 @@ class NodeService
         return $sshService->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: app(SshKeyService::class)->privateKey(),
+            privateKey: $this->sshKeys->privateKey(),
             command: $command,
             timeout: $timeout,
             input: $input,
@@ -667,9 +714,18 @@ class NodeService
      */
     private const LOG_OPTS = '--log-opt max-size=100m --log-opt max-file=5';
 
+    /**
+     * The edge keeps far less. Every access-log line it writes carries the raw playback token
+     * (Vector hashes it downstream, the file on disk does not), and every token in that file is
+     * a replayable playback link until its `exp` — the provider's token window. Sixty megabytes is a
+     * few hours of a busy node: enough for Vector to catch up after a restart, not enough to
+     * hand whoever reads the OS disk a week of live links.
+     */
+    private const PROXY_LOG_OPTS = '--log-opt max-size=20m --log-opt max-file=3';
+
     private function buildDockerRunArgs(string $name, string $image, array $options): string
     {
-        $cmd = "--name {$name} --restart unless-stopped ".self::LOG_OPTS;
+        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS);
 
         foreach ($options['env'] ?? [] as $env) {
             $cmd .= ' -e '.escapeshellarg($env);

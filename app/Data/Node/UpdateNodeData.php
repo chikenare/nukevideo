@@ -37,7 +37,8 @@ class UpdateNodeData extends RequestData
             // A POSIX login name; see StoreNodeData for why free text cannot be accepted here.
             'user' => ['nullable', 'string', 'max:32', 'regex:/^[a-z_][a-z0-9_-]*$/'],
             'ipAddress' => 'sometimes|ip',
-            'hostname' => 'nullable|max:255',
+            // A DNS name only; see StoreNodeData for where it ends up.
+            'hostname' => ['nullable', 'string', 'max:255', 'regex:/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i'],
             'isActive' => 'sometimes|boolean',
             'isDraining' => 'sometimes|boolean',
             'isStorageServer' => [

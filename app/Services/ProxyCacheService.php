@@ -56,7 +56,7 @@ class ProxyCacheService
      */
     public const FALLBACK_MAX_SIZE = '10g';
 
-    public function __construct(private SSHService $ssh) {}
+    public function __construct(private SSHService $ssh, private SshKeyService $sshKeys) {}
 
     /**
      * The host directory this node's edge caches into. One sub-directory per node and per
@@ -84,13 +84,14 @@ class ProxyCacheService
         $output = $this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: app(SshKeyService::class)->privateKey(),
+            privateKey: $this->sshKeys->privateKey(),
             command: 'bash -s',
             timeout: 30,
             // `blkid -p` reads the raw device, which needs root; without it a partitioned disk
-            // with no filesystem would pass for an empty one. `-n` so a sudo that wants a
-            // password fails here rather than hanging the request.
-            input: 'SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo -n"'."\n".NodeService::deployScript('cache-disks')."\ncache_disk_inventory\n",
+            // with no filesystem would pass for an empty one. The deploy's own sudo preamble
+            // goes first, so a user whose sudo wants a password fails here, loudly and with the
+            // same fix message, instead of the inventory quietly calling that disk `empty`.
+            input: NodeService::deployScript('sudo')."\n".NodeService::deployScript('cache-disks')."\ncache_disk_inventory\n",
         );
 
         $disks = [];

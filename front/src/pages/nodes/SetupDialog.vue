@@ -14,6 +14,7 @@ type Node = App.Data.NodeData
 type ValidationCheck = App.Data.ValidationCheckData
 type CacheDisk = App.Data.CacheDiskData
 import NodeService from '@/services/NodeService'
+import { formatBytes } from '@/utils/byteFormatter'
 import { CheckCircle2, XCircle, AlertTriangle, Terminal, Copy, Check } from '@lucide/vue'
 
 const emit = defineEmits<{
@@ -43,6 +44,9 @@ const disksConfirmed = ref(false)
 const disksToFormat = computed(() => cacheDisks.value.filter(d => d.state === 'empty' || d.state === 'foreign'))
 const poolDisks = computed(() => cacheDisks.value.filter(d => d.state === 'nukevideo'))
 const needsDiskConfirmation = computed(() => disksToFormat.value.length > 0 && !disksConfirmed.value)
+// A proxy whose disks could not be listed cannot be deployed from here: the deploy needs an
+// explicit list, and the only list this panel could send is one it never got to show.
+const disksUnknown = computed(() => node.value?.type === 'proxy' && disksError.value !== null)
 // Every spare disk is ticked by default; unticking is for the one that would only drag a
 // stripe down or is kept for something else. Untouched disks stay exactly as they are.
 const selectedDisks = ref<string[]>([])
@@ -51,7 +55,6 @@ const toggleDisk = (device: string, checked: boolean) => {
     ? [...new Set([...selectedDisks.value, device])]
     : selectedDisks.value.filter(d => d !== device)
 }
-const formatGB = (bytes: number) => `${Math.round(bytes / 1e9)} GB`
 
 // Validate tab
 const validating = ref(false)
@@ -169,7 +172,7 @@ const disableNode = async () => {
 }
 
 const runDeploy = async () => {
-  if (!node.value || deployRunning.value || needsDiskConfirmation.value || disksLoading.value) return
+  if (!node.value || deployRunning.value || needsDiskConfirmation.value || disksLoading.value || disksUnknown.value) return
 
   deployRunning.value = true
   deployFinished.value = false
@@ -177,10 +180,12 @@ const runDeploy = async () => {
   deployLines.value = []
 
   try {
+    // A proxy always gets an explicit list, `[]` included: the API reads an absent one as
+    // "every spare disk", and a list this dialog never showed is not one anyone agreed to.
     await NodeService.runDeploy(
       node.value.id,
       handleSSE,
-      node.value.type === 'proxy' && disksToFormat.value.length > 0 ? { disks: selectedDisks.value } : undefined,
+      node.value.type === 'proxy' ? { disks: selectedDisks.value } : undefined,
     )
   } catch (err) {
     deployLines.value.push(`ERROR: ${(err as Error).message}`)
@@ -268,6 +273,7 @@ defineExpose({ show })
             <div class="flex flex-col gap-1 flex-1">
               <span class="text-sm font-medium">Could not read the host's disks</span>
               <span class="text-xs text-muted-foreground font-mono break-all">{{ disksError }}</span>
+              <span class="text-xs text-muted-foreground">Fix the SSH access or the sudo rule, then reopen this dialog: a proxy is not deployed without a look at its disks.</span>
             </div>
           </div>
           <div v-else-if="disksToFormat.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
@@ -289,7 +295,7 @@ defineExpose({ show })
                     @change="toggleDisk(disk.device, ($event.target as HTMLInputElement).checked)"
                   />
                   <span class="w-28 shrink-0">{{ disk.device }}</span>
-                  <span class="w-16 shrink-0 text-right">{{ formatGB(disk.size) }}</span>
+                  <span class="w-16 shrink-0 text-right">{{ formatBytes(disk.size) }}</span>
                   <span class="truncate text-muted-foreground">{{ disk.model }}</span>
                   <span :class="disk.state === 'foreign' ? 'text-red-400' : 'text-muted-foreground'">{{ disk.detail || 'empty' }}</span>
                 </li>
@@ -333,7 +339,7 @@ defineExpose({ show })
           </div>
 
           <div class="flex justify-end gap-2">
-            <Button v-if="!deployFinished || deployError" :disabled="deployRunning || disksLoading || needsDiskConfirmation" @click="runDeploy">
+            <Button v-if="!deployFinished || deployError" :disabled="deployRunning || disksLoading || needsDiskConfirmation || disksUnknown" @click="runDeploy">
               {{ deployRunning ? 'Deploying...' : deployError ? 'Retry' : 'Deploy' }}
             </Button>
             <div v-if="deployFinished && !deployError" class="flex items-center gap-2 text-sm text-emerald-500">

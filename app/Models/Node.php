@@ -62,6 +62,17 @@ class Node extends Model
     }
 
     /**
+     * The scheme every URL to a proxy node is built with. Development terminates no TLS — the
+     * edge is plain HTTP behind Traefik's `web` entrypoint — and production only answers on
+     * `websecure`, so the link the API mints, the URL the health probe fetches and the
+     * `VOD_BASE_URL` a node is deployed with all have to agree on this one place.
+     */
+    public static function proxyScheme(?bool $local = null): string
+    {
+        return ($local ?? app()->isLocal()) ? 'http://' : 'https://';
+    }
+
+    /**
      * The container that makes this node do its job — the Horizon worker on a worker node, Traefik's
      * companion on a proxy. Built from the type and the id only, so it can never be confused with
      * the containers that serve the whole fleet from this host: the storage container is the chunk
@@ -142,10 +153,15 @@ class Node extends Model
      * A proxy the resolver may put in a playback URL: active, answering probes, not being
      * drained, and with a hostname to put there at all — a proxy without one was being
      * chosen and rendered as `https:///...`.
+     *
+     * `$requireHealthy = false` drops only the probe's verdict, for the resolver's fallback
+     * ({@see findProxyForVideo()}): draining is the operator's word and always holds.
      */
-    public function scopeRoutable($query)
+    public function scopeRoutable($query, bool $requireHealthy = true)
     {
-        return $query->proxy()->active()->healthy()->where('is_draining', false)->whereNotNull('hostname');
+        $query->proxy()->active()->where('is_draining', false)->whereNotNull('hostname');
+
+        return $requireHealthy ? $query->healthy() : $query;
     }
 
     public function isHealthy(): bool
@@ -154,12 +170,15 @@ class Node extends Model
     }
 
     /**
-     * Query-builder writes on purpose: the observer reacts to `is_active`, and health must
-     * never start or stop containers — and the probe updates many nodes a minute.
+     * Plain query-builder writes on purpose (`toBase()`): the observer reacts to `is_active`,
+     * and health must never start or stop containers, and the probe updates many nodes a
+     * minute. Bypassing Eloquent also leaves `updated_at` alone, which the probe relies on: it
+     * reads that column as "when the operator or the deploy last wrote this node", and a
+     * failed probe stamping it would renew its own grace period forever.
      */
     public function markHealthy(): void
     {
-        static::whereKey($this->id)->update(['health_failures' => 0, 'last_healthy_at' => now()]);
+        static::whereKey($this->id)->toBase()->update(['health_failures' => 0, 'last_healthy_at' => now()]);
         $this->health_failures = 0;
         $this->last_healthy_at = now();
     }
@@ -169,7 +188,7 @@ class Node extends Model
         // Capped so a node that is down for a week is not a node that needs a week of good
         // probes — one success is what clears it.
         $failures = min($this->health_failures + 1, 255);
-        static::whereKey($this->id)->update(['health_failures' => $failures]);
+        static::whereKey($this->id)->toBase()->update(['health_failures' => $failures]);
         $this->health_failures = $failures;
     }
 
@@ -190,7 +209,7 @@ class Node extends Model
 
         if ($nodes->isEmpty()) {
             // Draining stays honoured: it is the operator's word, the probe's is only a guess.
-            $nodes = static::proxy()->active()->where('is_draining', false)->whereNotNull('hostname')->orderBy('id')->get();
+            $nodes = static::routable(requireHealthy: false)->orderBy('id')->get();
 
             if ($nodes->isEmpty()) {
                 return null;

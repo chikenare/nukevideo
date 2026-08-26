@@ -37,6 +37,20 @@ class ProbeProxyNodes extends Command
     /** Seconds a probe waits. A node that takes longer to answer a 204 is not one to send viewers to. */
     private const TIMEOUT = 5;
 
+    /**
+     * Minutes after a node's row was last written during which a failed probe is not counted.
+     *
+     * A freshly deployed production proxy answers with Traefik's self-signed certificate until
+     * the ACME challenge completes, and DNS for a new or renamed hostname takes its own time to
+     * settle: either is a TLS failure to the probe, and three of those in a row would take a
+     * node out of rotation the moment it came up. `updated_at` is the right clock because only
+     * the operator's and the deploy's writes move it — {@see Node::markHealthy()} and
+     * {@see Node::markProbeFailed()} bypass Eloquent on purpose — so the grace starts on a
+     * deploy or a hostname change and never renews itself. The probe still runs during it: a
+     * good answer clears any failures at once.
+     */
+    private const GRACE_MINUTES = 10;
+
     public function handle(CdnSettings $settings): int
     {
         if ($settings->provider !== CdnDriver::SelfHosted->value) {
@@ -49,7 +63,7 @@ class ProbeProxyNodes extends Command
             return self::SUCCESS;
         }
 
-        $scheme = app()->isLocal() ? 'http://' : 'https://';
+        $scheme = Node::proxyScheme();
 
         $responses = Http::pool(fn (Pool $pool) => $nodes->map(
             fn (Node $node) => $pool->as((string) $node->id)
@@ -70,8 +84,15 @@ class ProbeProxyNodes extends Command
                 continue;
             }
 
-            $node->markProbeFailed();
             $reason = $response instanceof Response ? "HTTP {$response->status()}" : 'unreachable';
+
+            if ($node->updated_at?->gt(now()->subMinutes(self::GRACE_MINUTES))) {
+                $this->line("{$node->name}: {$reason} (not counted: deployed or edited under ".self::GRACE_MINUTES.' minutes ago)');
+
+                continue;
+            }
+
+            $node->markProbeFailed();
             $this->warn("{$node->name}: {$reason} ({$node->health_failures} consecutive)".($node->isHealthy() ? '' : ' — out of rotation'));
         }
 

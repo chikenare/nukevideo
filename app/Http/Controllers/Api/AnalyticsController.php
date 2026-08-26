@@ -7,6 +7,7 @@ use App\Data\Analytics\AnalyticsData;
 use App\Data\Analytics\BandwidthByVideoData;
 use App\Data\Analytics\BandwidthPointData;
 use App\Data\Analytics\EdgeDeliveryData;
+use App\Data\Analytics\EdgeDeliveryQueryData;
 use App\Data\Analytics\EncodingPointData;
 use App\Data\Analytics\TopExternalUserData;
 use App\Data\Analytics\TopIpData;
@@ -17,6 +18,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Models\Video;
 use App\Services\AnalyticsService;
+use App\Support\TrackingId;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -53,15 +55,10 @@ class AnalyticsController extends Controller
      * names the operator's infrastructure and its origin egress, which no project key has any
      * business reading.
      */
-    public function edges(Request $request): JsonResponse
+    public function edges(EdgeDeliveryQueryData $data): JsonResponse
     {
-        $request->validate([
-            'from' => 'required|date_format:Y-m-d',
-            'to' => 'required|date_format:Y-m-d',
-        ]);
-
         return response()->json([
-            'data' => EdgeDeliveryData::collect($this->analyticsService->edgeDelivery($request->input('from'), $request->input('to'))),
+            'data' => EdgeDeliveryData::collect($this->analyticsService->edgeDelivery($data->from, $data->to)),
         ]);
     }
 
@@ -75,7 +72,7 @@ class AnalyticsController extends Controller
             // against columns written from CDN access logs, so they are bound parameters in the
             // service, never interpolated; the shapes below are what those columns can hold.
             'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
-            'tracking_id' => 'nullable|string|max:64|regex:/^[A-Za-z0-9_-]*$/',
+            'tracking_id' => TrackingId::rules(),
             // Which kind of delivery to report. Anything outside this list is refused rather than
             // passed through: `usage` also holds upload volume and encoding seconds in the same
             // `value` column, and letting one of those names reach the bandwidth queries would

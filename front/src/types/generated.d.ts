@@ -216,6 +216,10 @@ deliveredBytes: number,
 originBytes: number,
 hitRatio: number | null,
 };
+export type EdgeDeliveryQueryData = {
+from: string,
+to: string,
+};
 export type EncodingPointData = {
 date: string,
 device: string,
@@ -271,6 +275,9 @@ password: string,
 };
 }
 namespace Node {
+export type DeployNodeData = {
+disks?: Array<any> | null,
+};
 export type StoreNodeData = {
 name: string,
 ipAddress: string,

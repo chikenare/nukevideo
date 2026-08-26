@@ -34,6 +34,22 @@ export VOD_TOKEN_NAME="${VOD_TOKEN_NAME:-__hdnea__}"
 # docker volume on the OS disk, which the edge must not be allowed to fill. Sizes use `g`/`m`:
 # nginx does not parse a `t` suffix.
 CACHE_DIR=/var/cache/nginx/vod
+
+# The deploy that mounted a pool into CACHE_DIR leaves a marker file at its root and says so
+# with VOD_CACHE_EXPECT_POOL=1. The pool is mounted `nofail`, so a host can boot without it and
+# the bind mount then hands this container the empty mount point directory on the OS disk — and
+# sizing the cache to *that* filesystem would let the edge fill the OS disk. Missing marker with
+# the flag set means exactly that: say so loudly and cap the cache at the fallback size instead.
+# The marker is a hidden file, not a cache entry: nginx's cache loader only indexes files whose
+# names are hex keys under the `levels` directories and ignores anything else in the root.
+# The cap mirrors App\Services\ProxyCacheService::FALLBACK_MAX_SIZE, what a host with no pool
+# at all gets.
+POOL_MARKER="$CACHE_DIR/.nukevideo-pool"
+POOL_FALLBACK_MAX_SIZE=10g
+if [ "${VOD_CACHE_EXPECT_POOL:-}" = "1" ] && [ ! -e "$POOL_MARKER" ]; then
+    echo "WARNING: cache pool NOT mounted: $POOL_MARKER is missing, so $CACHE_DIR is the OS disk. Capping the cache at $POOL_FALLBACK_MAX_SIZE; mount the pool and restart the edge." >&2
+    export VOD_CACHE_MAX_SIZE="$POOL_FALLBACK_MAX_SIZE"
+fi
 TOTAL_KB=$(df -Pk "$CACHE_DIR" | awk 'NR==2 { print $2 }')
 TOTAL_MB=$((TOTAL_KB / 1024))
 

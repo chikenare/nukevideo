@@ -5,6 +5,10 @@
 CACHE_POOL_MOUNT=/var/lib/nukevideo/cache
 CACHE_POOL_LABEL=nukevideo-cache
 CACHE_POOL_MD=/dev/md/nukevideo-cache
+# Written at the root of the node's cache directory on the pool; the edge's entrypoint looks for
+# it to tell a mounted pool from the bare mount point directory on the OS disk (`nofail` lets
+# the host boot without the pool, and the directory is then just a directory).
+CACHE_POOL_MARKER=.nukevideo-pool
 
 # One line per whole disk on the host: `device<TAB>size<TAB>model<TAB>state<TAB>detail`. The
 # state is the whole decision:
@@ -131,6 +135,10 @@ cache_mount_pool() {
     mountpoint -q "$CACHE_POOL_MOUNT" || { echo "ERROR: cache pool could not be mounted at $CACHE_POOL_MOUNT"; exit 1; }
 
     $SUDO mkdir -p "$CACHE_DIRECTORY"
+    # The marker lives on the pool itself, so it is absent exactly when the pool is not there.
+    # Hidden, and never a cache entry: nginx's cache loader only indexes files whose names are
+    # hex keys under its `levels` directories and ignores anything else it finds in the root.
+    $SUDO touch "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"
     CACHE_MOUNT=$CACHE_DIRECTORY
     df -h "$CACHE_POOL_MOUNT" | tail -1 | awk '{ print "Cache pool: " $2 " total, " $4 " free, mounted at " $6 }'
 }

@@ -8,6 +8,7 @@ class DockerService
 {
     public function __construct(
         private SSHService $ssh,
+        private SshKeyService $sshKeys,
     ) {}
 
     public function run(Node $node, string $command, int $timeout = 30): string
@@ -15,7 +16,7 @@ class DockerService
         return trim($this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: app(SshKeyService::class)->privateKey(),
+            privateKey: $this->sshKeys->privateKey(),
             command: "docker {$command}",
             timeout: $timeout,
         ));

@@ -18,17 +18,32 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('nodes', function (Blueprint $table) {
-            $table->boolean('is_draining')->default(false)->after('is_active');
-            // Consecutive failed probes. Reset by a successful one, a deploy or a start.
-            $table->unsignedTinyInteger('health_failures')->default(0)->after('is_draining');
-            $table->timestamp('last_healthy_at')->nullable()->after('health_failures');
+            if (! Schema::hasColumn('nodes', 'is_draining')) {
+                $table->boolean('is_draining')->default(false)->after('is_active');
+            }
+
+            if (! Schema::hasColumn('nodes', 'health_failures')) {
+                // Consecutive failed probes. Reset by a successful one, a deploy or a start.
+                $table->unsignedTinyInteger('health_failures')->default(0)->after('is_draining');
+            }
+
+            if (! Schema::hasColumn('nodes', 'last_healthy_at')) {
+                $table->timestamp('last_healthy_at')->nullable()->after('health_failures');
+            }
         });
     }
 
     public function down(): void
     {
         Schema::table('nodes', function (Blueprint $table) {
-            $table->dropColumn(['is_draining', 'health_failures', 'last_healthy_at']);
+            $present = array_filter(
+                ['is_draining', 'health_failures', 'last_healthy_at'],
+                fn (string $column) => Schema::hasColumn('nodes', $column),
+            );
+
+            if ($present !== []) {
+                $table->dropColumn(array_values($present));
+            }
         });
     }
 };

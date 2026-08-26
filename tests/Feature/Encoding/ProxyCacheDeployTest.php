@@ -110,13 +110,29 @@ describe('a production proxy deploy', function () {
             ->and($script)->not->toContain('mdadm');
     });
 
-    it('caps every container\'s log', function () {
+    it('caps every container\'s log, the edge\'s tighter than the rest', function () {
         // With the cache surviving redeploys, the edge's per-segment access log was the one file
-        // on the OS disk that nothing ever truncated.
+        // on the OS disk that nothing ever truncated. The edge's log also carries the raw playback
+        // token of every request, replayable until it expires, so it keeps a much shorter window.
         $script = app(NodeService::class)->buildDeployScript(cacheNode());
 
         expect(substr_count($script, '--log-opt max-size=100m --log-opt max-file=5'))
-            ->toBe(preg_match_all('/^[A-Z_]*RUN_ARGS=\'--name/m', $script));
+            ->toBe(preg_match_all('/^[A-Z_]*RUN_ARGS=\'--name/m', $script) - 1)
+            ->and($script)->toMatch('/^RUN_ARGS=\'--name nukevideo_proxy_\d+ --restart unless-stopped --log-opt max-size=20m --log-opt max-file=3 /m');
+    });
+
+    it('tells the edge to expect the pool, so a boot without it caps the cache', function () {
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        expect($script)->toContain('${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}')
+            ->and($script)->toContain('CACHE_EXPECT_POOL=1')
+            ->and($script)->toContain('touch "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"');
+    });
+
+    it('checks for sudo before anything else runs on the node', function () {
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        expect(strpos($script, 'cannot sudo without a password'))->toBeLessThan(strpos($script, 'set -e'));
     });
 });
 
@@ -141,7 +157,7 @@ describe('a development proxy deploy', function () {
         $captured = '';
         $ssh = Mockery::mock(SSHService::class);
         $ssh->shouldReceive('run')->once()->andReturnUsing(function (...$args) use (&$captured) {
-            $captured = $args['input'] ?? $args[5];   // named when mocked directly, positional otherwise
+            $captured = $args['input'] ?? $args[5] ?? $captured;   // named when mocked directly, positional otherwise
 
             return '';
         });
@@ -218,6 +234,91 @@ describe('choosing the disks', function () {
 
         expect($none)->toContain("CHOSEN_DISKS=''")
             ->and($all)->not->toContain('CHOSEN_DISKS=');
+    });
+
+    it('refuses a production proxy deploy that does not say which disks', function () {
+        // The service reads a missing list as "every spare disk". The panel omitted the field
+        // whenever it had nothing to show — including after failing to read the host's disks —
+        // and that silence formatted every disk it had not been able to list.
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+        $node = cacheNode();
+
+        $this->postJson("/api/nodes/{$node->id}/deploy")->assertUnprocessable();
+        $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => null])->assertUnprocessable();
+    });
+
+    it('accepts an empty list as "format none"', function () {
+        $node = cacheNode();
+        $captured = '';
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->once()->andReturnUsing(function (...$args) use (&$captured) {
+            $captured = $args['input'] ?? $args[5] ?? $captured;
+
+            return '';
+        });
+        app()->instance(SSHService::class, $ssh);
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $body = $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => []])->assertOk()->streamedContent();
+        expect($body)->not->toContain('"type":"error"');
+        expect($captured)->toContain("CHOSEN_DISKS=''");
+    });
+
+    it('still deploys a worker without a list', function () {
+        $node = cacheNode(['type' => 'worker', 'is_storage_server' => true, 'storage_endpoint' => 'http://10.0.0.99:9000']);
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->once()->andReturn('');
+        app()->instance(SSHService::class, $ssh);
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        expect($this->postJson("/api/nodes/{$node->id}/deploy")->assertOk()->streamedContent())
+            ->not->toContain('"type":"error"');
+    });
+});
+
+describe('the pool check', function () {
+    beforeEach(fn () => inProduction());
+
+    it('reports a host that never had a pool as a notice, and an unmounted pool as an error', function () {
+        $node = cacheNode();
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->andReturnUsing(function (...$args) {
+            $command = $args['command'] ?? $args[3];
+            if (str_contains($command, 'mountpoint -q')) {
+                expect($command)->toContain('blkid -L '.ProxyCacheService::FS_LABEL)
+                    ->and($command)->toContain('no cache pool provisioned')
+                    ->and($command)->toContain('NOT mounted');
+
+                return 'no cache pool provisioned, edge caches on a docker volume';
+            }
+
+            return 'ok';
+        });
+        app()->instance(SSHService::class, $ssh);
+
+        $checks = collect(app(NodeService::class)->runValidation($node))->keyBy('key');
+
+        expect($checks['cache']['status'])->toBe('ok')
+            ->and($checks['cache']['output'])->toContain('docker volume');
+    });
+});
+
+describe('the node env overrides', function () {
+    beforeEach(fn () => inProduction());
+
+    it('cannot replace what the deploy owns', function () {
+        // A node's env is a free-text field. Merged last, one line in it re-pointed the edge at
+        // another API, another bucket, or a token secret of the editor's choosing.
+        $node = cacheNode(['env' => "VOD_TOKEN_SECRET=mine\nINTERNAL_API_URL=http://evil.example\nAWS_SECRET_ACCESS_KEY=mine\nSECURE_TOKEN_EXPIRES_TIME=5d"]);
+
+        $env = app(NodeService::class)->getEnvironmentVariables($node);
+
+        expect($env)->toContain('VOD_TOKEN_SECRET=secret')
+            ->and($env)->not->toContain('VOD_TOKEN_SECRET=mine')
+            ->and($env)->not->toContain('INTERNAL_API_URL=http://evil.example')
+            ->and($env)->not->toContain('AWS_SECRET_ACCESS_KEY=mine')
+            // Tuning knobs still override.
+            ->and($env)->toContain('SECURE_TOKEN_EXPIRES_TIME=5d');
     });
 
     it('refuses a device path that is not one', function () {
