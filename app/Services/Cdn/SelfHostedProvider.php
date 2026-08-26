@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Services\Cdn;
 
 use App\Data\SelfHostedConfigData;
-use App\Data\Stream\DownloadStreamData;
 use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Node;
 use App\Models\Video;
@@ -15,17 +14,16 @@ use App\Settings\CdnSettings;
  * Our own CDN: the URL points at a per-video proxy node (edge nginx) and carries an Akamai
  * `__hdnea__` token. The edge validates it and re-signs the segment URLs in the manifest body.
  *
- * A tracking id travels as the FIRST path segment (`/{trackingId}/{videoUlid}/play/...`), never
- * as a query parameter: the path is what the ACL signs, so the id cannot be altered without
- * invalidating the token, and relative segment URLs resolve under it, so every segment request
- * carries it into the edge log. The edge strips it before the cache and the bucket
- * ({@see vod/nginx/nginx.conf.template}), so it costs no cache space.
+ * The URL names no viewer. Attribution rides on the token: the edge logs the `__hdnea__` value
+ * of every request a link produces, and the mint records what that token means
+ * ({@see TrackingRegistry}). Relative segment URLs resolve under the manifest's directory, so
+ * they inherit the query the edge re-signs into the manifest body.
  */
 class SelfHostedProvider implements CdnProvider
 {
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?string $trackingId = null): string
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
     {
         $node = Node::findProxyForVideo($video->ulid);
 
@@ -34,30 +32,9 @@ class SelfHostedProvider implements CdnProvider
         }
 
         $scheme = $local ? 'http://' : 'https://';
-        $url = "{$scheme}{$node->hostname}".$this->trackedPath($path, $trackingId);
+        $url = "{$scheme}{$node->hostname}/".ltrim($path, '/');
 
         return $this->sign($url, $ip);
-    }
-
-    /**
-     * The object's path with the tracking id in front of it, or the path alone. The alphabet
-     * is the one the request validation accepts ({@see DownloadStreamData}),
-     * so a value that reached here was already shaped; the check is what keeps a `/` out of a
-     * path segment regardless.
-     */
-    private function trackedPath(string $path, ?string $trackingId): string
-    {
-        $path = '/'.ltrim($path, '/');
-
-        if ($trackingId === null || $trackingId === '') {
-            return $path;
-        }
-
-        if (preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) !== 1) {
-            throw new \InvalidArgumentException('Tracking id is not a valid path segment.');
-        }
-
-        return "/{$trackingId}{$path}";
     }
 
     public function assetUrl(string $videoUlid, string $key, bool $local): string
@@ -77,7 +54,7 @@ class SelfHostedProvider implements CdnProvider
      * against the running edge — the same token on a sibling rendition returns 403, which is the
      * whole point, since the renditions of one video are neighbours in `download/video/`.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string
+    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
     {
         $node = Node::findProxyForVideo($videoUlid);
 
@@ -85,10 +62,7 @@ class SelfHostedProvider implements CdnProvider
             throw new NoCdnNodeAvailableException;
         }
 
-        // The id is part of the signed path, so it is no longer caller-alterable as it was when it
-        // rode in the query: a link edited to carry another id is a link whose token no longer
-        // matches. Still the integrator's own label, still never an authorization input.
-        $path = $this->trackedPath($key, $trackingId);
+        $path = '/'.ltrim($key, '/');
 
         return $this->sign(
             ($local ? 'http://' : 'https://').$node->hostname.$path,
@@ -97,12 +71,17 @@ class SelfHostedProvider implements CdnProvider
         );
     }
 
-    private function sign(string $url, ?string $ip, ?string $acl = null): string
+    /**
+     * The token handed back is the whole `__hdnea__` value (`exp=…~acl=…~hmac=…`), exactly as it
+     * sits in the URL and in the edge's log — that is what the ingest will hash to look the
+     * link up, so the two sides must agree on the bytes.
+     */
+    private function sign(string $url, ?string $ip, ?string $acl = null): SignedLink
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);
 
         if ($config->tokenSecret === '') {
-            return $url;
+            return new SignedLink($url, null);
         }
 
         $exp = now()->timestamp + $config->tokenWindow;
@@ -118,7 +97,7 @@ class SelfHostedProvider implements CdnProvider
 
         $separator = str_contains($url, '?') ? '&' : '?';
 
-        return "{$url}{$separator}{$config->tokenName}={$token}";
+        return new SignedLink("{$url}{$separator}{$config->tokenName}={$token}", $token);
     }
 
     /**

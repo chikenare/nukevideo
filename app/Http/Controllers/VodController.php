@@ -9,12 +9,16 @@ use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Output;
 use App\Models\Video;
 use App\Services\Cdn\CdnProvider;
+use App\Services\Cdn\TrackingRegistry;
 use App\Support\TrackingId;
 use Illuminate\Http\Request;
 
 class VodController extends Controller
 {
-    public function __construct(private CdnProvider $cdn) {}
+    public function __construct(
+        private CdnProvider $cdn,
+        private TrackingRegistry $tracking,
+    ) {}
 
     public function getOutputLink(Request $request, VodData $data, string $ulid)
     {
@@ -62,17 +66,20 @@ class VodController extends Controller
         ?string $trackingId = null,
     ): VodOutputData {
         try {
-            $url = $this->cdn->manifestUrl(
+            $link = $this->cdn->manifestUrl(
                 $video,
                 $output->manifestPath($format, $cap),
                 $ip,
                 app()->isLocal(),
-                $trackingId,
             );
         } catch (NoCdnNodeAvailableException) {
             abort(503, 'No node available');
         }
 
-        return VodOutputData::fromOutput($output, $url, $video->ulid);
+        // Attribution is a side effect of the mint, not of the URL: the token inside the link is
+        // what every segment request logs, and this is the only moment anyone knows whose it is.
+        $this->tracking->record($link, $trackingId);
+
+        return VodOutputData::fromOutput($output, $link, $video->ulid);
     }
 }

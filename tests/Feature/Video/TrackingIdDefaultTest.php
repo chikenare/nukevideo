@@ -2,10 +2,10 @@
 
 /**
  * The fallback attribution for minted links. A session or personal-token request that names no
- * `tid` is the account user acting as their own viewer — the panel never sends one — so the link
- * carries their ULID and the traffic lands in the analytics instead of the unattributed bucket.
- * A project key without a `tid` stays unattributed on purpose: there is no user behind it, and
- * inventing one would pollute the integrator's own id space.
+ * tracking id is the account user acting as their own viewer — the panel never sends one — so the
+ * link's token is recorded under their ULID and the traffic lands in the analytics instead of the
+ * unattributed bucket. A project key without one stays unattributed on purpose: there is no user
+ * behind it, and inventing one would pollute the integrator's own id space.
  */
 
 use App\Models\Node;
@@ -15,6 +15,8 @@ use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\ApiTokenService;
+use App\Services\Cdn\TrackingRegistry;
+use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -34,6 +36,14 @@ function attributableVideo(): Video
     ]);
 }
 
+/** The tracking id recorded for a minted link, read the way the ingest will: off the token in the URL. */
+function attributedTo(string $url): ?string
+{
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    return app(TrackingRegistry::class)->resolve(hash('sha256', $query['__hdnea__']));
+}
+
 function attributableTrack(Video $video): Stream
 {
     $stream = $video->streams()->create([
@@ -49,6 +59,12 @@ function attributableTrack(Video $video): Stream
 
 beforeEach(function () {
     Storage::fake('s3');
+
+    // Signed links only: attribution hangs off the token, and an unsigned edge mints none.
+    CdnSettings::fake([
+        'provider' => 'self_hosted',
+        'providers' => ['self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600], 'bunny' => []],
+    ]);
 
     Node::create([
         'name' => 'edge',
@@ -71,7 +87,7 @@ it('attributes a session-minted download link to the user when no tracking id is
 
     $url = $this->postJson("/api/streams/{$stream->ulid}/download")->assertOk()->json('data.url');
 
-    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/{$this->user->ulid}/");
+    expect(attributedTo($url))->toBe($this->user->ulid);
 });
 
 it('lets an explicit tracking id override the session fallback', function () {
@@ -83,7 +99,7 @@ it('lets an explicit tracking id override the session fallback', function () {
     $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
         ->assertOk()->json('data.url');
 
-    expect(parse_url($url, PHP_URL_PATH))->toStartWith('/client-42/');
+    expect(attributedTo($url))->toBe('client-42');
 });
 
 it('leaves a project-key download link unattributed when no tracking id is sent', function () {
@@ -97,7 +113,8 @@ it('leaves a project-key download link unattributed when no tracking id is sent'
     $url = $this->withToken($key)->postJson("/api/streams/{$stream->ulid}/download")
         ->assertOk()->json('data.url');
 
-    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/{$video->ulid}/download/");
+    expect($url)->toContain('__hdnea__=')
+        ->and(attributedTo($url))->toBeNull();
 });
 
 it('attributes a session-minted playback link to the user when no tracking id is sent', function () {
@@ -110,5 +127,7 @@ it('attributes a session-minted playback link to the user when no tracking id is
 
     $url = $this->postJson("/api/outputs/{$output->ulid}")->assertOk()->json('data.url');
 
-    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/{$this->user->ulid}/{$video->ulid}/");
+    // The URL names nobody — the attribution is the mapping the mint recorded under the token.
+    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/{$video->ulid}/")
+        ->and(attributedTo($url))->toBe($this->user->ulid);
 });

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Video;
+use App\Services\Cdn\TrackingRegistry;
 use ClickHouseDB\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -16,9 +17,11 @@ use Illuminate\Support\Str;
  * Writes a batch of aggregated bandwidth events to ClickHouse `usage`, the single metrics table.
  *
  * The video and IP come straight from the edge log (the URL path + request); the owning account and
- * the integrator's own customer are resolved here, from the video, in one batched lookup. That
+ * the integrator's own customer are resolved here, from the video, in one batched lookup, and the
+ * tracking id from the hash of the link's token, in another ({@see TrackingRegistry}). That
  * resolution is the reason nothing has to travel in the URL to be trustworthy: a viewer can rewrite
- * a link all they like and it cannot change who the bytes are billed to.
+ * a link all they like and it cannot change who the bytes are billed to, nor whose label they
+ * land under.
  */
 class IngestBandwidthJob implements ShouldQueue
 {
@@ -67,21 +70,50 @@ class IngestBandwidthJob implements ShouldQueue
      */
     private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, tracking_id?: string, tid?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, token_hash?: string, tracking_id?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
     public function __construct(public array $events) {}
 
     /**
-     * The caller's own tracking id, as it survived a round trip through a CDN access log. Treated
-     * as hostile text: it is echoed into a URL by an API client and read back out of a log line, so
-     * it is clamped to the same alphabet the request validation accepts rather than trusted. An
-     * empty string is the column's own default and simply means "not attributed".
+     * The tracking ids of a batch, keyed by token hash. A producer sends either `token_hash` (the
+     * self-hosted edge: Vector hashes the token off the log line, and the mapping the mint
+     * recorded is only reachable from here) or an already resolved `tracking_id` (a producer that
+     * resolved it itself); an event with neither, or with a hash nothing was recorded under, is
+     * unattributed. One cache round trip per batch, not per row: a session is hundreds of lines
+     * under one token.
+     *
+     * @param  list<array<string, mixed>>  $events
+     * @return array<string, string|null>
+     */
+    private function resolveTrackingIds(array $events): array
+    {
+        $hashes = [];
+
+        foreach ($events as $event) {
+            $hash = (string) ($event['token_hash'] ?? '');
+
+            // The hash is computed by our own Vector, but it still arrives over HTTP: anything
+            // that is not a hex SHA-256 never becomes a cache key.
+            if (preg_match('/^[a-f0-9]{64}\z/', $hash) === 1) {
+                $hashes[] = $hash;
+            }
+        }
+
+        return $hashes === [] ? [] : app(TrackingRegistry::class)->resolveMany($hashes);
+    }
+
+    /**
+     * The caller's own tracking id for one event. Resolved from the token hash when the event
+     * carries one, else taken as sent. Either way it is clamped to the alphabet the request
+     * validation accepts rather than trusted: a mapped value was validated at the mint, but a
+     * `tracking_id` sent as-is is text that crossed a log and a queue. An empty string is the
+     * column's own default and simply means "not attributed".
      *
      * @param  array<string, mixed>  $event
+     * @param  array<string, string|null>  $resolved
      */
-    private function trackingId(array $event): string
+    private function trackingId(array $event, array $resolved): string
     {
-        // `tid` is the key an edge or a batch from before the rename still sends.
-        $id = (string) ($event['tracking_id'] ?? $event['tid'] ?? '');
+        $id = $resolved[(string) ($event['token_hash'] ?? '')] ?? (string) ($event['tracking_id'] ?? '');
 
         return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $id) === 1 ? $id : '';
     }
@@ -115,6 +147,7 @@ class IngestBandwidthJob implements ShouldQueue
     {
         $valid = [];
         $ulids = [];
+        $resolved = $this->resolveTrackingIds($this->events);
 
         foreach ($this->events as $event) {
             $videoUlid = (string) ($event['video_ulid'] ?? '');
@@ -131,7 +164,7 @@ class IngestBandwidthJob implements ShouldQueue
             }
 
             $valid[] = [
-                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event), $this->metric($event),
+                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event, $resolved), $this->metric($event),
                 $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)),
             ];
             $ulids[$videoUlid] = true;

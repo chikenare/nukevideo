@@ -69,7 +69,7 @@ function signedVideo(): array
 function aclOf(Video $video, string $path): string
 {
     return signedAclPrefix(
-        app(SelfHostedProvider::class)->manifestUrl($video, $path, '1.2.3.4', true)
+        app(SelfHostedProvider::class)->manifestUrl($video, $path, '1.2.3.4', true)->url
     );
 }
 
@@ -145,19 +145,33 @@ it('refuses to sign a bucket-wide ACL', function () {
     app(SelfHostedProvider::class)->manifestUrl($video, 'manifest.mpd', '1.2.3.4', true);
 })->throws(InvalidArgumentException::class);
 
-describe('a tracking id on a playback link', function () {
-    it('leads the path and is inside the ACL, so the segments inherit it and the token pins it', function () {
+describe('the token handed back with a link', function () {
+    it('is the __hdnea__ value byte for byte, and hashes to the tracking key', function () {
         [$video, $output] = signedVideo();
 
-        $url = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false, 'campaign-7');
+        // The ingest will hash the `__hdnea__` value it reads off the edge log; the mint recorded
+        // its mapping under the hash of THIS token, so the two must be the same bytes — the whole
+        // `exp=…~acl=…~hmac=…` string, not the hmac alone.
+        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false);
 
-        expect(parse_url($url, PHP_URL_PATH))->toStartWith("/campaign-7/{$video->ulid}/play/")
-            ->and(signedAclPrefix($url))->toBe("/campaign-7/{$video->ulid}/play/");
+        parse_str((string) parse_url($link->url, PHP_URL_QUERY), $query);
+
+        expect($link->token)->toBe($query['__hdnea__'])
+            ->and($link->tokenHash)->toBe(hash('sha256', $query['__hdnea__']))
+            ->and(parse_url($link->url, PHP_URL_PATH))->toStartWith("/{$video->ulid}/play/");
     });
 
-    it('refuses an id that is not a path segment', function () {
+    it('is null when the edge signs nothing', function () {
+        CdnSettings::fake([
+            'provider' => 'self_hosted',
+            'providers' => ['self_hosted' => ['token_secret' => '', 'token_window' => 3600], 'bunny' => []],
+        ]);
         [$video, $output] = signedVideo();
 
-        app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false, 'a/b');
-    })->throws(InvalidArgumentException::class);
+        $link = app(SelfHostedProvider::class)->manifestUrl($video, $output->manifestPath('dash'), '1.2.3.4', false);
+
+        expect($link->token)->toBeNull()
+            ->and($link->tokenHash)->toBeNull()
+            ->and($link->url)->not->toContain('__hdnea__');
+    });
 });

@@ -14,9 +14,11 @@ use App\Jobs\IngestBandwidthJob;
 use App\Models\Project;
 use App\Models\User;
 use App\Models\Video;
+use App\Services\Cdn\TrackingRegistry;
 use ClickHouseDB\Client;
 use ClickHouseDB\Statement;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 
 uses(RefreshDatabase::class);
 
@@ -116,7 +118,7 @@ it('attributes traffic for a video that no longer exists to no user', function (
 it('keeps traffic from different tracking ids in separate rows', function () {
     $video = videoOwnedBySomeone();
 
-    // `tid` is part of the sorting key of a SummingMergeTree, so two customers' bytes must arrive
+    // `tracking_id` is part of the sorting key of a SummingMergeTree, so two customers' bytes must arrive
     // as distinct rows; collapsing them here would be indistinguishable from a merge later.
     $rows = insertedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'customer-a'],
@@ -130,8 +132,8 @@ it('keeps traffic from different tracking ids in separate rows', function () {
 it('blanks a tracking id that did not survive the round trip intact', function () {
     $video = videoOwnedBySomeone();
 
-    // The value is echoed into a URL by an API client and read back out of a CDN log line, so it
-    // reaches here as untrusted text and is clamped to the alphabet the request validation accepts.
+    // A `tracking_id` sent as-is is text that crossed a log and a queue, so it reaches here
+    // untrusted and is clamped to the alphabet the request validation accepts.
     $rows = insertedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'a&b=c'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => str_repeat('x', 65)],
@@ -219,12 +221,46 @@ it('books what the edge fetched from the origin as its own metric, under nobody\
         ->and($rows[2][2])->toBe('streaming_bytes');
 });
 
-it('still reads the tracking id under the key an older edge sends', function () {
+it('resolves the tracking id from the token hash the edge sends', function () {
     $video = videoOwnedBySomeone();
 
+    // The self-hosted edge logs the link's token and Vector ships its SHA-256; the id it was
+    // minted for lives in the mapping the mint recorded, which only the API can reach. A hash
+    // nothing was recorded under (expired, pre-feature, cache restart) costs the label, never
+    // the bytes — and a hash-shaped value that is not one never becomes a cache key.
+    $known = hash('sha256', 'exp=1~acl=/x/*~hmac=ff');
+    Cache::put(TrackingRegistry::cacheKey($known), 'customer-a', 600);
+
     $rows = insertedRows([
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'tid' => 'legacy-9'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $known],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'play', 'token_hash' => str_repeat('0', 64)],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'zone' => 'play', 'token_hash' => 'not-a-hash'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 40, 'zone' => 'play', 'token_hash' => ''],
     ]);
 
-    expect($rows[0][6])->toBe('legacy-9');
+    expect(array_column($rows, 6))->toBe(['customer-a', '', '', ''])
+        ->and(array_column($rows, 9))->toBe([10, 20, 30, 40]);
+});
+
+it('looks every hash of a batch up in one round trip', function () {
+    $video = videoOwnedBySomeone();
+
+    $a = hash('sha256', 'a');
+    $b = hash('sha256', 'b');
+    Cache::put(TrackingRegistry::cacheKey($a), 'customer-a', 600);
+    Cache::put(TrackingRegistry::cacheKey($b), 'customer-b', 600);
+
+    Cache::spy();
+    Cache::shouldReceive('many')->once()->andReturn([
+        TrackingRegistry::cacheKey($a) => 'customer-a',
+        TrackingRegistry::cacheKey($b) => 'customer-b',
+    ]);
+
+    $rows = insertedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $a],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $a],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $b],
+    ]);
+
+    expect(array_column($rows, 6))->toBe(['customer-a', 'customer-a', 'customer-b']);
 });

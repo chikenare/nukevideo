@@ -54,16 +54,17 @@ List a video's tracks first with `GET /api/videos/{ulid}`, then request a link p
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `tracking_id` | string \| null | Your own tracking id — a customer, a tenant. Echoed into the link so the CDN's request log attributes the transfer to it, and the bytes land against that id in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
+| `tracking_id` | string \| null | Your own tracking id — a customer, a tenant. The bytes of the transfer land against it in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
 
-The id is inside the signature on both delivery layers, so it can be neither altered nor added
-after the fact — both answer `403`. On Bunny it is a signed query parameter; on a self-hosted edge
-it is the first segment of the signed path (`/{tracking_id}/{videoUlid}/download/...`), which the edge
-strips again before its cache and the bucket. Either way, treat it as a label you chose, never as
-an authorization input. Traffic with no id is still recorded, under an empty one — except on a
-session or personal-token request, where an omitted `tracking_id` defaults to the ULID of the
-authenticated user, so the panel's own downloads stay attributed. A project key that omits it
-leaves the traffic unattributed: naming the viewer is the integrator's job.
+The id never enters the link, nor the response. The mint records the link's token against your id
+server-side, and the CDN's access log — which carries the token on every request the link
+produces — is attributed through it. The same link is minted
+whoever asked for it, so treat the id as a label you chose, never as an authorization input. The
+mapping is best-effort: it lives server-side for the token's lifetime plus a margin. Traffic with
+no id is still recorded, under an empty one — except on a session or personal-token request, where
+an omitted `tracking_id` defaults to the ULID of the authenticated user, so the panel's own
+downloads stay attributed. A project key that omits it leaves the traffic unattributed: naming the
+viewer is the integrator's job.
 
 Read the bytes back per id with `topTrackingIds` on the
 [Analytics API](/api/users#bandwidth-by-tracking-id), optionally narrowed to one video. The id is
@@ -75,7 +76,7 @@ self-hosted edge reports within seconds, a Bunny pull zone within about seven mi
 ```json
 {
   "data": {
-    "url": "https://cdn.example.com/01J.../download/audio/01J....mp4?...",
+    "url": "https://cdn.example.com/01J.../download/audio/01J....mp4?token=HS256-...&expires=1787709204",
     "expiresAt": "2026-08-13T02:41:24+00:00",
     "filename": "01KZW4GN1K3B7Y4RFQBGM0KQF6.mp4",
     "type": "audio",

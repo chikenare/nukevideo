@@ -2,16 +2,13 @@
 
 namespace App\Services;
 
-use App\Data\BunnyConfigData;
 use App\Data\DownloadLinkData;
-use App\Data\SelfHostedConfigData;
-use App\Enums\CdnDriver;
 use App\Enums\VideoStatus;
 use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Project;
 use App\Models\Stream;
 use App\Services\Cdn\CdnProvider;
-use App\Settings\CdnSettings;
+use App\Services\Cdn\TrackingRegistry;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -33,7 +30,7 @@ class DownloadLinkService
 
     public function __construct(
         private CdnProvider $cdn,
-        private CdnSettings $settings,
+        private TrackingRegistry $tracking,
     ) {}
 
     /**
@@ -73,16 +70,20 @@ class DownloadLinkService
         }
 
         try {
-            $url = $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal(), $trackingId);
+            $link = $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal());
         } catch (NoCdnNodeAvailableException) {
             // Same answer playback gives ({@see \App\Http\Controllers\VodController}): the track
             // exists and the caller is entitled to it, there is just nothing to serve it right now.
             abort(503, 'No node available');
         }
 
+        // The id never enters the URL: the token does, on every request the link produces, and
+        // the mint is the only moment anyone knows whose it is.
+        $this->tracking->record($link, $trackingId);
+
         return new DownloadLinkData(
-            url: $url,
-            expiresAt: now()->addSeconds($this->tokenWindow())->toIso8601String(),
+            url: $link->url,
+            expiresAt: now()->addSeconds($this->tracking->tokenWindow())->toIso8601String(),
             // The stored name as-is: a ULID plus its extension. Unique by construction, so a caller
             // fetching several tracks never has two land on the same name, and there is nothing to
             // sanitise before it touches a filesystem or a Content-Disposition header.
@@ -90,20 +91,5 @@ class DownloadLinkService
             type: $stream->type,
             size: $stream->file_size,
         );
-    }
-
-    /**
-     * How long the link the active provider just signed stays valid. Each provider keeps its own
-     * window, so reading one of them unconditionally would have reported the self-hosted lifetime
-     * for a link Bunny signed with a different one.
-     */
-    private function tokenWindow(): int
-    {
-        $config = $this->settings->providers[$this->settings->provider] ?? [];
-
-        return match (CdnDriver::from($this->settings->provider)) {
-            CdnDriver::Bunny => BunnyConfigData::from($config)->tokenWindow,
-            CdnDriver::SelfHosted => SelfHostedConfigData::from($config)->tokenWindow,
-        };
     }
 }

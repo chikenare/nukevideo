@@ -6,6 +6,7 @@ use App\Data\BunnyConfigData;
 use App\Enums\CdnDriver;
 use App\Jobs\IngestBandwidthJob;
 use App\Services\Cdn\BunnyProvider;
+use App\Services\Cdn\TrackingRegistry;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -206,7 +207,7 @@ class IngestBunnyLogs extends Command
      * The tracking id of a logged request, or '' when it carried none. Two carriers, tried in
      * order: the `tid` query parameter of a download link ({@see BunnyProvider::downloadUrl}),
      * and for playback the `bcdn_token=` path prefix, resolved through the token → id mapping
-     * recorded when the link was minted ({@see BunnyProvider::trackingCacheKey}).
+     * recorded when the link was minted ({@see TrackingRegistry}).
      *
      * Clamped to the alphabet the request validation accepts rather than trusted: the query value
      * is echoed into a URL by an API client and read back out of a log line. An id that did not
@@ -237,7 +238,7 @@ class IngestBunnyLogs extends Command
             return '';
         }
 
-        return $this->tokenTracking[$match[1]] ??= (string) Cache::get(BunnyProvider::trackingCacheKey($match[1]), '');
+        return $this->tokenTracking[$match[1]] ??= (string) app(TrackingRegistry::class)->resolve(hash('sha256', $match[1]));
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Models\Project;
 use App\Models\Stream;
 use App\Models\User;
 use App\Models\Video;
+use App\Services\Cdn\TrackingRegistry;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
@@ -47,6 +48,12 @@ function track(Video $video, string $type, array $attributes = []): Stream
 
 beforeEach(function () {
     Storage::fake('s3');
+
+    // Signed links only: attribution hangs off the token, and an unsigned edge mints none.
+    CdnSettings::fake([
+        'provider' => 'self_hosted',
+        'providers' => ['self_hosted' => ['token_secret' => bin2hex('secret'), 'token_window' => 3600], 'bunny' => []],
+    ]);
 
     Node::create([
         'name' => 'edge',
@@ -137,42 +144,32 @@ it('answers 503 rather than 500 when no node can serve it', function () {
     $this->postJson("/api/streams/{$stream->ulid}/download")->assertStatus(503);
 });
 
-it('carries the caller tracking id into the link on Bunny', function () {
-    CdnSettings::fake(['provider' => 'bunny', 'providers' => [
-        'self_hosted' => [],
-        'bunny' => ['host' => 'cdn.example.com', 'token_key' => 'k', 'token_window' => 600],
-    ]]);
-
+it('records the tracking id against the token hash instead of putting it in the link', function () {
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
-        ->assertOk()->json('data.url');
+    $data = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
+        ->assertOk()->json('data');
 
-    expect($url)->toContain('tid=client-42');
-});
+    parse_str((string) parse_url($data['url'], PHP_URL_QUERY), $query);
 
-it('carries the tracking id on the self-hosted edge as the leading path segment', function () {
-    $video = downloadableVideo();
-    $stream = track($video, 'audio');
-
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
-        ->assertOk()->json('data.url');
-
-    // In the path, not the query: the edge's ACL is compared against the request URI, so this
-    // is what puts the id inside the signature — and what the edge strips again before its cache
-    // and the bucket, so the file is cached once however many ids point at it.
-    expect(parse_url($url, PHP_URL_PATH))->toStartWith("/client-42/{$video->ulid}/download/audio/")
-        ->and((string) parse_url($url, PHP_URL_QUERY))->not->toContain('tid=');
+    // The URL is the same whoever asked for it: no leading path segment, no `tid`, and the
+    // response carries nothing about the viewer either. The attribution is the mapping the mint
+    // recorded under the hash of the token inside the link.
+    expect($data)->toHaveKeys(['url', 'expiresAt'])
+        ->and($data)->not->toHaveKeys(['token', 'tokenHash'])
+        ->and(parse_url($data['url'], PHP_URL_PATH))->toStartWith("/{$video->ulid}/download/audio/")
+        ->and($query)->not->toHaveKey('tid')
+        ->and(app(TrackingRegistry::class)->resolve(hash('sha256', $query['__hdnea__'])))->toBe('client-42');
 });
 
 it('rejects a tracking id that could reshape the signed parameters', function () {
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    // Bunny serialises the signed parameters as `key=value` joined by `&`; letting either character
-    // through would let a caller split its value into parameters of its own. Both spellings, because
-    // Spatie also binds the bare property name — a payload using it must not skip the charset check.
+    // The alphabet is the contract: the id is a cache label and an analytics column, and was once a
+    // URL component, so it stays narrow. Both spellings, because Spatie also binds the bare
+    // property name — a payload using it must not skip the charset check.
     foreach (['tracking_id', 'trackingId'] as $key) {
         foreach (['a&b=c', 'a=b', 'has space', str_repeat('x', 65)] as $bad) {
             $this->postJson("/api/streams/{$stream->ulid}/download", [$key => $bad])->assertStatus(422);

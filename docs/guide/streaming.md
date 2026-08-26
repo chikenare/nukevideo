@@ -45,7 +45,7 @@ The response contains the signed URL for the requested format (HLS or DASH). The
 | `format` | `dash` \| `hls` | Defaults to the output's first available format. |
 | `resolution` | integer | Caps the ladder at this height. |
 | `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
-| `tracking_id` | string | Your own tracking id for this viewer — a customer, a campaign. On a self-hosted edge it becomes the first segment of the signed path (`/{tracking_id}/{videoUlid}/play/...`), so every segment the player fetches carries it and the bytes land against it in the [bandwidth analytics](/api/users#bandwidth-by-tracking-id). Up to 64 characters of `A-Z a-z 0-9 _ -`. On Bunny the URL cannot carry it — the directory token leaves no room and segments would not inherit a query — so the mint records what the signed token means and the log ingest attributes the session through it; the label there is best-effort (it rides a server-side mapping, not the link). When omitted on a session or personal-token request the link carries the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
+| `tracking_id` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/users#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 
 ## Token-Based Access Control
 
@@ -61,7 +61,7 @@ The exact signing scheme depends on the delivery layer:
 
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks). A tracking id in the path costs no cache space: the edge strips it before the cache and the bucket, so one cached copy of a segment serves every id.
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

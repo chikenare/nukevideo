@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace App\Services\Cdn;
 
-use App\Console\Commands\IngestBunnyLogs;
 use App\Data\BunnyConfigData;
 use App\Models\Video;
 use App\Settings\CdnSettings;
@@ -20,39 +19,31 @@ use Illuminate\Support\Facades\Cache;
  *
  * IP is not folded into the signature: pull-zone IP validation is off, and a signed IP Bunny
  * doesn't check just fails validation.
+ *
+ * The URL never names the viewer. A directory token refuses extra signed parameters (verified
+ * against the edge: `tid=`, `nonce=`, even the documented `limit=` answer 403), an unsigned one
+ * would be viewer-editable, and a query would not be inherited by the segments anyway. The token
+ * is the carrier instead — it reaches the log on every segment — and the mint records what it
+ * means ({@see TrackingRegistry}).
  */
 class BunnyProvider implements CdnProvider
 {
     /**
-     * Extra seconds a tracked token's expiry may be jittered by to make its hash unique
-     * ({@see tokenFor}), and part of the mapping TTL for the same reason.
+     * Extra seconds a playback token's expiry may be jittered by to make its hash unique
+     * ({@see tokenFor}). Also the extra lifetime the tracking mapping allows for
+     * ({@see TrackingRegistry}).
      */
-    private const TRACKING_JITTER = 300;
+    public const EXPIRY_JITTER = 300;
 
     public function __construct(private CdnSettings $settings) {}
 
-    /**
-     * Cache key of the token → tracking id mapping a playback mint records, and the ingest reads
-     * back ({@see IngestBunnyLogs}). Keyed by the token itself: it is the
-     * one per-mint value every segment request carries into the access log.
-     */
-    public static function trackingCacheKey(string $token): string
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
     {
-        return "bunny-tracking:{$token}";
-    }
-
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?string $trackingId = null): string
-    {
-        // $trackingId cannot travel in the URL here: the directory token refuses extra signed
-        // parameters (verified against the edge), an unsigned one would be viewer-editable, and a
-        // query would not be inherited by the segments anyway. The token itself is the carrier
-        // instead — a path prefix every segment inherits and the access log keeps — so the mint
-        // records what the token means ({@see tokenFor}) and the ingest resolves it.
         $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
         // Directory scope: the manifest and the relative segments it lists share a prefix, so one
         // token covers the whole session.
-        return $this->signed($urlPath, $this->directoryOf($urlPath), $trackingId);
+        return $this->signed($urlPath, $this->directoryOf($urlPath));
     }
 
     /**
@@ -61,56 +52,31 @@ class BunnyProvider implements CdnProvider
      * segments it lists share one token; it is a directory PREFIX, and using it here would scope a
      * download link to everything sharing that prefix instead of to the one object.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?string $trackingId = null): string
+    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
         $urlPath = '/'.ltrim($key, '/');
 
-        // `tid` is the caller's own tracking id. It has to be SIGNED, not merely appended: Bunny
-        // folds every query parameter into the signature, so an unsigned extra would fail
-        // validation outright. The reward is that it lands in the v2 logging API's `path`, which
-        // carries the query string — which is what makes per-caller bandwidth attribution possible
-        // ({@see \App\Console\Commands\IngestBunnyLogs}). `tid` is not one of Bunny's reserved
-        // parameter names.
-        //
-        // Re-checked here, not just at the request boundary, and mirroring
-        // {@see SelfHostedProvider::trackedPath()}: the signature serialises the parameters as
-        // `key=value` joined by `&`, so an `&` or `=` that slipped past validation would let the
-        // value reshape the signed parameter set. Refusing beats escaping — the value also has to
-        // survive a log line intact to be attributable at all.
-        if ($trackingId !== null && $trackingId !== '' && preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) !== 1) {
-            throw new \InvalidArgumentException('Tracking id is not a valid signed parameter.');
-        }
-
-        $parameters = $trackingId === null || $trackingId === '' ? [] : ['tid' => $trackingId];
-
         if ($config->tokenKey === '') {
-            $query = $parameters === [] ? '' : '?'.$this->joinParams($parameters, rawEncode: true);
-
-            return "https://{$config->host}{$urlPath}{$query}";
+            return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
         $expires = now()->timestamp + $config->tokenWindow;
-        ksort($parameters);
 
-        $signingData = $this->joinParams($parameters, rawEncode: false);
-        $urlData = $this->joinParams($parameters, rawEncode: true);
+        // Advanced token auth, no parameters and no IP: the hashable base is the signature path
+        // plus the expiry, and the token rides as a query parameter.
+        $token = $this->token($urlPath.$expires, $config->tokenKey);
 
-        // Advanced token auth, no IP: the hashable base is the signature path, the expiry and the
-        // alphabetically-sorted parameters, and the token rides as a query parameter.
-        $token = $this->token($urlPath.$expires.$signingData, $config->tokenKey);
-        $extra = $urlData === '' ? '' : "&{$urlData}";
-
-        return "https://{$config->host}{$urlPath}?token={$token}&expires={$expires}{$extra}";
+        return new SignedLink("https://{$config->host}{$urlPath}?token={$token}&expires={$expires}", $token);
     }
 
-    private function signed(string $urlPath, string $tokenPath, ?string $trackingId = null): string
+    private function signed(string $urlPath, string $tokenPath): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
 
         if ($config->tokenKey === '') {
             // No token, no identifier in the log: an unsigned zone cannot attribute playback.
-            return "https://{$config->host}{$urlPath}";
+            return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
         // Bunny signs the alphabetically-sorted parameters; token_path is our only one.
@@ -120,51 +86,38 @@ class BunnyProvider implements CdnProvider
         $signingData = $this->joinParams($parameters, rawEncode: false);
         $urlData = $this->joinParams($parameters, rawEncode: true);
 
-        [$token, $expires] = $this->tokenFor($tokenPath, $signingData, $config, $trackingId);
+        [$token, $expires] = $this->tokenFor($tokenPath, $signingData, $config);
 
-        return "https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}";
+        return new SignedLink("https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}", $token);
     }
 
     /**
-     * The signed token and its expiry — plus, when a tracking id rides along, the token → id
-     * mapping the ingest resolves. The token is an opaque HMAC: it identifies nothing by itself,
-     * so what it means has to be recorded at the only moment anyone knows — when it is minted.
+     * The signed token and its expiry, unique to this mint.
      *
-     * The hash input is (token_path, expires), so two viewers minting the same directory in the
-     * same second would share a token, and with it a label. The expiry is jittered until the
-     * mapping claims a token of its own; if every attempt finds the token claimed by another id
-     * (hundreds of same-second mints of one video), the shared label is kept — a smaller wrong
-     * than overwriting the other session's, and the bytes are counted either way.
+     * The hash input is (token_path, expires) and nothing else the edge lets us vary, so two
+     * viewers minting the same directory in the same second would share a token — and, since the
+     * token is what attribution hangs off ({@see TrackingRegistry}), a label. The expiry is
+     * jittered until this mint claims a token nobody else has; if every attempt finds it claimed
+     * (hundreds of same-second mints of one video), the shared token is kept — the bytes are
+     * counted either way, only the label may land on the other session's id.
      *
-     * The mapping outlives the token by the jitter plus a margin: a segment fetched just before
-     * expiry reaches the ingest minutes later ({@see IngestBunnyLogs}).
+     * The claim key lives as long as the token can: a token is only free to reuse once nothing
+     * minted before can still be attributed through it.
      *
      * @return array{string, int}
      */
-    private function tokenFor(string $tokenPath, string $signingData, BunnyConfigData $config, ?string $trackingId): array
+    private function tokenFor(string $tokenPath, string $signingData, BunnyConfigData $config): array
     {
         $base = now()->timestamp + $config->tokenWindow;
-
-        if ($trackingId === null || $trackingId === '') {
-            return [$this->token($tokenPath.$base.$signingData, $config->tokenKey), $base];
-        }
-
-        // Same clamp as the download links: the value only reaches our own cache here, but a label
-        // outside the alphabet could never have come from the request validation.
-        if (preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) !== 1) {
-            throw new \InvalidArgumentException('Tracking id is not a valid label.');
-        }
-
-        $ttl = $config->tokenWindow + self::TRACKING_JITTER + 1800;
+        $ttl = $config->tokenWindow + self::EXPIRY_JITTER;
         $expires = $base;
         $token = '';
 
         for ($attempt = 0; $attempt < 5; $attempt++) {
-            $expires = $attempt === 0 ? $base : $base + random_int(1, self::TRACKING_JITTER);
+            $expires = $attempt === 0 ? $base : $base + random_int(1, self::EXPIRY_JITTER);
             $token = $this->token($tokenPath.$expires.$signingData, $config->tokenKey);
-            $key = self::trackingCacheKey($token);
 
-            if (Cache::add($key, $trackingId, $ttl) || Cache::get($key) === $trackingId) {
+            if (Cache::add("bunny-token-claim:{$token}", 1, $ttl)) {
                 break;
             }
         }
