@@ -37,6 +37,12 @@ const handleFileChange = (event: Event) => {
   // here made a file the browser cannot decode block the whole selection: nothing appeared in
   // the list, and every file after it in the loop was swallowed too.
   for (const file of Array.from(selectedFiles ?? [])) {
+    // The same file picked twice — "Add more files" and the same selection again, or a dialog
+    // reopened on a list that already has it — used to queue two rows and upload two videos.
+    // Identity is name + size + mtime: the browser exposes nothing more stable without reading
+    // the bytes, and it is enough to tell a re-pick from a different file with the same name.
+    if (files.value.some(f => isSameFile(f.file, file))) continue
+
     files.value.push({
       title: file.name,
       file: file,
@@ -59,6 +65,9 @@ const handleFileChange = (event: Event) => {
   // Reset so re-selecting the same file (e.g. after removing it) still fires @change.
   target.value = ''
 }
+
+const isSameFile = (a: File, b: File) =>
+  a.name === b.name && a.size === b.size && a.lastModified === b.lastModified
 
 const handleRetry = (index: number) => {
   uploadStore.retryUpload(index)
