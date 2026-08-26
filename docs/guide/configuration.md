@@ -60,8 +60,8 @@ The segment cache itself is not configured: the node's deploy builds it from the
 |----------|---------|---------|-------------|
 | `VOD_TOKEN_SECRET` | — | Proxy | Secret for signing and validating stream tokens |
 | `VOD_TOKEN_NAME` | `__hdnea__` | Proxy | Query argument carrying the token. Lowercase, digits and `_` only; changing it requires redeploying the proxy, and links already signed with the old name stop validating |
-| `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | Stream token expiration (e.g., `100d`, `24h`) |
-| `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | Query/segment token expiration |
+| `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | `Cache-Control`/`Expires` the edge puts on responses it does not tokenize (segments), e.g. `100d`, `24h`. Not a token lifetime: the link's token is minted by the API with the provider's token window, and the edge propagates it to the segments |
+| `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | `Cache-Control`/`Expires` on the rewritten manifests, which carry the token in their segment URLs |
 
 ## CDN
 
@@ -90,10 +90,10 @@ On a node that shares its box with other services, set `DOCKER_MEMORY` (and opti
 |----------|---------|---------|-------------|
 | `CLICKHOUSE_HOST` | `clickhouse` | API | ClickHouse hostname |
 | `CLICKHOUSE_PORT` | `8123` | API | ClickHouse HTTP port |
-| `CLICKHOUSE_DATABASE` | `default` | API, Vector | ClickHouse database name |
-| `CLICKHOUSE_USER` | `default` | API, Vector | ClickHouse username |
-| `CLICKHOUSE_PASSWORD` | — | API, Vector | ClickHouse password |
-| `CLICKHOUSE_ENDPOINT` | `http://clickhouse:8123` | Vector | Full ClickHouse URL used by Vector for log ingestion |
+| `CLICKHOUSE_DATABASE` | `default` | API | ClickHouse database name |
+| `CLICKHOUSE_USER` | `default` | API | ClickHouse username |
+| `CLICKHOUSE_PASSWORD` | — | API | ClickHouse password |
+| `CLICKHOUSE_ENDPOINT` | `http://clickhouse:8123` | API | Full ClickHouse URL the API writes usage to. Vector never talks to ClickHouse: it posts to the API's internal bandwidth endpoint and receives only `INTERNAL_API_URL` and `INTERNAL_API_SECRET` |
 
 
 ## Monitoring
@@ -125,6 +125,6 @@ Proxy containers receive the [S3 Storage](#s3-storage) variables (to read packag
 
 Worker containers receive their environment from the worker node environment configuration. Typically includes Redis connection details and encoding-related settings.
 
-### Vector (Both Nodes)
+### Vector (Proxy Nodes, self-hosted CDN only)
 
-Vector runs on both proxy and worker nodes as a log collector. It receives the ClickHouse variables (`CLICKHOUSE_ENDPOINT`, `CLICKHOUSE_DATABASE`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`) plus `NODE_ID` which is injected automatically per node.
+Vector runs on proxy nodes when the CDN provider is `self_hosted` — nothing else produces the access-log lines it ships, and a deploy removes it anywhere else. It reads the edge nginx's log from the Docker socket, sums bytes per video, viewer and link token on the node (the token is hashed there; it never leaves), and posts the aggregates to the API's internal bandwidth endpoint, which writes them to ClickHouse. Its config is rendered from `vector/vector.yaml` at deploy time; to watch what it emits on a node, `docker exec <vector container> vector tap aggregate_bandwidth_logs`.

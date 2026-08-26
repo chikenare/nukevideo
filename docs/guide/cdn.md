@@ -13,7 +13,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Validates Akamai-style stream tokens (HMAC) on incoming requests.
 - Reads the pre-packaged CMAF segments from S3 using AWS authentication.
 - Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests bypass the cache** to stay fresh, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
-- Carries a caller's tracking id as the first path segment of a playback or download link, signed with it and inherited by every segment; stripped before the cache, so it costs nothing. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
+- Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
 - Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` in ClickHouse — the operator's cost, never a customer's usage.
 - Answers CORS itself, for any origin: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site.
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
@@ -65,14 +65,13 @@ same `usage` table the self-hosted Vector pipeline feeds, so both providers answ
 - **Zones.** The directory after the video ULID — `play`, `download`, `assets` — decides which
   metric the bytes land under. It is read from the logged path, the only place the distinction
   survives; a path whose zone cannot be read still counts, under the generic `bandwidth_bytes`.
-- **Tracking ids.** Two carriers. A download link's id rides its query string, which the v2 log's
-  `path` keeps — see [Download a Track](/api/streams#download-a-track). A playback link cannot carry
-  one (the directory token leaves no room, and segments would not inherit a query), so the mint
-  records what each signed token means and the ingest resolves the `bcdn_token=` prefix every
-  segment inherits back to that id. The mapping lives in the cache for the token's lifetime plus a
-  margin: a token the ingest no longer recognises — expired, minted before the mapping existed, a
-  cache restart — costs the label, never the bytes. An id that arrives malformed is counted the
-  same way, as unattributed.
+- **Tracking ids.** Never in the URL. The mint records each link's token against the caller's id,
+  and the ingest hashes the token a logged line carries — the `bcdn_token=` prefix every segment
+  of a playback session inherits, or the `token` query parameter of a download, both of which the
+  v2 log's `path` keeps — and hands the hash to the same job the self-hosted edges feed, which
+  resolves it. The mapping lives in the cache for the token's lifetime plus a margin: a token the
+  ingest no longer recognises — expired, minted before the mapping existed, a cache restart —
+  costs the label, never the bytes.
 - **Client IPs.** If the pull zone has **Log IP Anonymization** enabled (Bunny's default), Bunny
   zeroes the last octet before you ever see the line. Bandwidth totals are unaffected, but the
   "unique IPs" figures become an approximation. Turn it off in the Bunny panel if you need exact

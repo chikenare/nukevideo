@@ -49,15 +49,19 @@ The response contains the signed URL for the requested format (HLS or DASH). The
 
 ## Token-Based Access Control
 
-Playback URLs are signed with a time-limited token so segments can't be fetched without authorization:
-
-- **Stream token** — Long-lived (configurable, e.g. 100 days) and scoped to a video's content, used for the manifest.
-- **Query/segment token** — Short-lived (e.g. 1 hour) for the individual segment requests the player derives from the manifest.
+Playback URLs are signed with a time-limited token so segments can't be fetched without authorization.
+One token covers a whole playback session — the manifest and every segment the player derives from
+it — and it is minted by the API with the provider's **token window** (one hour by default). The
+segments do not get a window of their own: they expire with the link, so a session that outlives
+the window has to request a fresh link.
 
 The exact signing scheme depends on the delivery layer:
 
-- **Proxy nodes** validate Akamai-style stream tokens (HMAC) and then read segments from S3 using AWS authentication.
+- **Proxy nodes** validate Akamai-style tokens (HMAC) scoped to the manifest's directory, rewrite the manifest so its segment URLs carry that same token, and read the segments from S3 using AWS authentication.
 - **Bunny CDN** uses HMAC-SHA256 tokens in directory mode: the token is a path prefix scoped to the video's directory, so the manifest and all of its relative segments authenticate under one token.
+
+Either way the token is what ties a session's traffic back to the link that was minted, which is
+how a `tracking_id` is attributed without ever appearing in the URL.
 
 ## Caching
 
