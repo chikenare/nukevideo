@@ -2,46 +2,139 @@
 
 namespace App\Services;
 
-use App\Models\SshKey;
+use App\Data\AppSettings\NodeRotationData;
+use App\Data\AppSettings\SshKeyRotationData;
+use App\Models\Node;
+use App\Settings\AppSettings;
+use Illuminate\Support\Facades\Log;
 use phpseclib3\Crypt\EC;
 use phpseclib3\Crypt\PublicKeyLoader;
 
+/**
+ * The panel's one SSH key ({@see AppSettings}): what every connection to a node authenticates
+ * with, and the only thing an operator has to install on a node for the panel to manage it.
+ */
 class SshKeyService
 {
-    /**
-     * Create a key from a private key, or generate one when none is given.
-     *
-     * The private key is the only input that matters: it is what the panel connects with. The
-     * public half and the fingerprint are derived from it here rather than accepted from the
-     * caller, so what the panel shows — and what the operator pastes into a node's
-     * `authorized_keys` — is guaranteed to be the pair the panel will actually present.
-     *
-     * Generated keys are Ed25519: small, fast, and what every OpenSSH from the last decade
-     * accepts; there is no reason to offer a choice.
-     *
-     * @param  array{name: string, private_key?: string|null}  $data
-     */
-    public function createKey(array $data): SshKey
-    {
-        $privateKey = $data['private_key'] ?? null;
+    /** The comment on the public key line, so a node's authorized_keys says whose line it is. */
+    private const COMMENT = 'nukevideo';
 
+    public function __construct(
+        private AppSettings $settings,
+        private SSHService $ssh,
+    ) {}
+
+    /**
+     * The private key every SSH call uses. Absent means the installation was never set up for
+     * nodes; saying so beats an SSH error about an empty identity file.
+     */
+    public function privateKey(): string
+    {
+        if ($this->settings->ssh_private_key === '') {
+            throw new \RuntimeException('No SSH key is configured. Generate or import one under Settings → App before managing nodes.');
+        }
+
+        return $this->settings->ssh_private_key;
+    }
+
+    /**
+     * Replace the key: with the private key given, or a freshly generated Ed25519 pair. The
+     * public half and the fingerprint are always derived from the private key, so what the panel
+     * shows — and what the operator pastes into a node's authorized_keys — is the pair the panel
+     * will actually present. Nothing is done to the nodes: this is for the first key, or when the
+     * new public half already reached them by other means; {@see rotate} for a live fleet.
+     */
+    public function set(?string $privateKey): AppSettings
+    {
         if ($privateKey === null || $privateKey === '') {
+            // Ed25519: small, fast, accepted by every OpenSSH of the last decade.
             $privateKey = EC::createKey('Ed25519')->toString('OpenSSH');
         }
 
-        // The comment is the trailing word of an OpenSSH public line; phpseclib writes its own,
-        // and the key's name is what an operator reading `authorized_keys` on a node wants there.
-        $publicKey = PublicKeyLoader::load($privateKey)->getPublicKey()->toString('OpenSSH', ['comment' => $data['name']]);
+        $publicKey = self::publicKeyOf($privateKey);
 
-        return SshKey::create([
-            'name' => $data['name'],
-            'private_key' => $privateKey,
-            'public_key' => $publicKey,
-            'fingerprint' => $this->generateFingerprint($publicKey),
-        ]);
+        $this->settings->ssh_private_key = $privateKey;
+        $this->settings->ssh_public_key = $publicKey;
+        $this->settings->ssh_fingerprint = self::fingerprintOf($publicKey);
+        $this->settings->save();
+
+        return $this->settings;
     }
 
-    private function generateFingerprint(string $publicKey): string
+    /**
+     * Swap the fleet to a new key without losing access to it on the way.
+     *
+     * Order is what matters: the new public key is installed on every node with the CURRENT key,
+     * the new private key is proven to log in, and only then does the panel switch — a swap done
+     * the other way round locks the panel out of every node it has not reached yet, with no key
+     * left to reach them with. If any active node refuses, nothing is switched and the per-node
+     * result says which; an inactive node is tried but cannot block, since it may be gone for
+     * good and the fleet cannot stay on a leaked key for its sake. After the switch the old public
+     * line is removed from the nodes that took the new one; a failure there only leaves a stale
+     * line behind, so it is logged rather than reported.
+     */
+    public function rotate(): SshKeyRotationData
+    {
+        $oldPrivate = $this->privateKey();
+        $oldPublic = $this->settings->ssh_public_key;
+        $newPrivate = EC::createKey('Ed25519')->toString('OpenSSH');
+        $newPublic = self::publicKeyOf($newPrivate);
+
+        $results = [];
+        $blocked = false;
+
+        foreach (Node::orderBy('id')->get() as $node) {
+            try {
+                $this->ssh->run($node->ip_address, $node->user, $oldPrivate, $this->installCommand($newPublic), timeout: 30);
+                $this->ssh->run($node->ip_address, $node->user, $newPrivate, 'true', timeout: 15);
+                $results[] = new NodeRotationData($node->id, $node->name, true, null);
+            } catch (\Throwable $e) {
+                $results[] = new NodeRotationData($node->id, $node->name, false, $e->getMessage());
+                $blocked = $blocked || $node->is_active;
+            }
+        }
+
+        if ($blocked) {
+            return new SshKeyRotationData(false, $results);
+        }
+
+        $this->set($newPrivate);
+
+        foreach (Node::orderBy('id')->get() as $node) {
+            try {
+                $this->ssh->run($node->ip_address, $node->user, $newPrivate, $this->removeCommand($oldPublic), timeout: 30);
+            } catch (\Throwable $e) {
+                Log::warning("Old SSH public key left on node {$node->id}: {$e->getMessage()}");
+            }
+        }
+
+        return new SshKeyRotationData(true, $results);
+    }
+
+    /** Append the line once, creating the file with the permissions sshd insists on. */
+    private function installCommand(string $publicKey): string
+    {
+        $line = escapeshellarg($publicKey);
+
+        return 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
+            ." && (grep -qxF {$line} ~/.ssh/authorized_keys || echo {$line} >> ~/.ssh/authorized_keys)";
+    }
+
+    private function removeCommand(string $publicKey): string
+    {
+        $line = escapeshellarg($publicKey);
+
+        // A rewrite through a temp file rather than `sed -i`, which is not portable across the
+        // BSD and GNU flavours a node may run.
+        return "grep -vxF {$line} ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.new && mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys";
+    }
+
+    public static function publicKeyOf(string $privateKey): string
+    {
+        return PublicKeyLoader::load($privateKey)->getPublicKey()->toString('OpenSSH', ['comment' => self::COMMENT]);
+    }
+
+    public static function fingerprintOf(string $publicKey): string
     {
         $parts = explode(' ', trim($publicKey));
         $keyData = base64_decode($parts[1] ?? $parts[0]);

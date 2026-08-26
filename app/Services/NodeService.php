@@ -651,7 +651,7 @@ class NodeService
         return $sshService->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: app(SshKeyService::class)->privateKey(),
             command: $command,
             timeout: $timeout,
             input: $input,

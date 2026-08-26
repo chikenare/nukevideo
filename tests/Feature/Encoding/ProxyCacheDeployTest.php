@@ -1,11 +1,11 @@
 <?php
 
 use App\Models\Node;
-use App\Models\SshKey;
 use App\Models\User;
 use App\Services\NodeService;
 use App\Services\ProxyCacheService;
 use App\Services\SSHService;
+use App\Settings\AppSettings;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
@@ -14,12 +14,8 @@ uses(RefreshDatabase::class);
 
 function cacheNode(array $attributes = []): Node
 {
-    $key = SshKey::create([
-        'name' => 'test',
-        'public_key' => 'ssh-ed25519 AAAA',
-        'private_key' => 'PRIVATE',
-        'fingerprint' => 'SHA256:test',
-    ]);
+    // The panel's one key, as any SSH-backed call reads it ({@see \App\Services\SshKeyService}).
+    AppSettings::fake(['ssh_private_key' => 'PRIVATE', 'ssh_public_key' => 'ssh-ed25519 AAAA nukevideo', 'ssh_fingerprint' => 'ff']);
 
     return Node::create([
         'ip_address' => '10.0.0.99',
@@ -28,7 +24,6 @@ function cacheNode(array $attributes = []): Node
         'type' => 'proxy',
         'hostname' => 'edge.example.com',
         'is_active' => true,
-        'ssh_key_id' => $key->id,
         ...$attributes,
     ]);
 }

@@ -23,11 +23,11 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 │   ├── Http/Controllers/   # plus Controllers/Api for admin and account endpoints
 │   ├── Http/Middleware/    # ResolveProject, DenyProjectKey, EnsureAdmin, Verify*
 │   ├── Jobs/ + Jobs/Concerns/
-│   ├── Models/             # Video, Output, Stream, Template, Node, Project, User, SshKey
+│   ├── Models/             # Video, Output, Stream, Template, Node, Project, User
 │   ├── Observers/          # registered with #[ObservedBy] on the model
 │   ├── Rules/              # rules used inside the Data objects' rules()
 │   ├── Services/           # plus Services/Cdn (providers) and Services/Concerns (traits)
-│   ├── Settings/           # spatie/laravel-settings
+│   ├── Settings/           # spatie/laravel-settings (AppSettings holds the one SSH key)
 │   └── Support/            # stateless helpers: Cpu, Gpu, MediaDuration, MediaSource
 ├── database/
 │   ├── migrations/             # MariaDB in production, SQLite in tests

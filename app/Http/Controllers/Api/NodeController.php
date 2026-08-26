@@ -56,8 +56,6 @@ class NodeController extends Controller
 
     public function deploy(Node $node)
     {
-        $node->load('sshKey');
-
         // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
         $drain = request()->boolean('drain', true);
 
@@ -107,8 +105,6 @@ class NodeController extends Controller
 
     public function validateNode(Node $node)
     {
-        $node->load('sshKey');
-
         $checks = $this->nodeService->runValidation($node);
 
         return response()->json(['checks' => ValidationCheckData::collect($checks)]);
@@ -124,8 +120,6 @@ class NodeController extends Controller
             return response()->json(['data' => ['preselect' => false, 'disks' => []]]);
         }
 
-        $node->load('sshKey');
-
         return response()->json(['data' => [
             // Whether the panel ticks the spare disks by default. Not from a development panel,
             // whose deploy target is often the developer's own machine.
@@ -136,7 +130,7 @@ class NodeController extends Controller
 
     public function destroy(string $id)
     {
-        $node = Node::with('sshKey')->findOrFail($id);
+        $node = Node::findOrFail($id);
 
         try {
             $docker = app(DockerService::class);

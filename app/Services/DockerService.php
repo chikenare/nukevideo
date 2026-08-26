@@ -15,7 +15,7 @@ class DockerService
         return trim($this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: app(SshKeyService::class)->privateKey(),
             command: "docker {$command}",
             timeout: $timeout,
         ));

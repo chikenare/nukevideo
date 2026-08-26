@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Data\SshKey;
+namespace App\Data\AppSettings;
 
 use App\Data\RequestData;
 use App\Services\SshKeyService;
@@ -8,15 +8,17 @@ use phpseclib3\Crypt\PublicKeyLoader;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Mappers\CamelCaseMapper;
 
-class StoreSshKeyData extends RequestData
+class UpdateSshKeyData extends RequestData
 {
     public function __construct(
-        public string $name,
         /**
          * The private half only, and only when importing a pair made elsewhere. Absent, the
-         * server generates one ({@see SshKeyService::createKey}). The public half is
-         * never accepted: it is derived from the private key, so the two can never disagree, and
-         * a pasted public key that did not match the private one used to be stored as if it did.
+         * server generates one ({@see SshKeyService::set}). The public half is
+         * never accepted: it is derived from the private key, so the two can never disagree.
+         *
+         * Replaces the current key outright, without touching the nodes — for a first key, or
+         * when the new public half already reached the fleet by other means. To swap keys on a
+         * running fleet use the rotation instead ({@see SshKeyService::rotate}).
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?string $privateKey = null,
@@ -25,7 +27,6 @@ class StoreSshKeyData extends RequestData
     public static function rules(): array
     {
         return [
-            'name' => 'required|max:50',
             'privateKey' => [
                 'nullable',
                 'string',

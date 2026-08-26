@@ -21,8 +21,6 @@ class UpdateNodeData extends RequestData
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isDraining,
         #[MapInputName(CamelCaseMapper::class)]
-        public int|Optional|null $sshKeyId,
-        #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isStorageServer,
         #[MapInputName(CamelCaseMapper::class)]
         public string|Optional|null $storageEndpoint,
@@ -42,7 +40,6 @@ class UpdateNodeData extends RequestData
             'hostname' => 'nullable|max:255',
             'isActive' => 'sometimes|boolean',
             'isDraining' => 'sometimes|boolean',
-            'sshKeyId' => 'nullable|exists:ssh_keys,id',
             'isStorageServer' => [
                 'sometimes', 'boolean',
                 function ($attribute, $value, $fail) use ($node) {

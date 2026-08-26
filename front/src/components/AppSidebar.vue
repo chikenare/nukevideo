@@ -62,10 +62,6 @@ const navMain = [
         url: "/nodes",
       },
       {
-        title: "SSH Keys",
-        url: "/settings/ssh-keys",
-      },
-      {
         title: "App Settings",
         url: "/settings/app",
       },

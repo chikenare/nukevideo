@@ -25,7 +25,6 @@ class NodeData extends Data
         public ?string $lastHealthyAt,
         public bool $isStorageServer,
         public ?string $storageEndpoint,
-        public ?int $sshKeyId,
         /** @var ServiceStatusData[] */
         public array $services,
         public ?string $log,
@@ -51,7 +50,6 @@ class NodeData extends Data
             lastHealthyAt: $node->last_healthy_at?->toIso8601String(),
             isStorageServer: (bool) $node->is_storage_server,
             storageEndpoint: $node->storage_endpoint,
-            sshKeyId: $node->ssh_key_id,
             services: ServiceStatusData::collect($node->services ?? []),
             log: $node->log,
             env: $node->env,

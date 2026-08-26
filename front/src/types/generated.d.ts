@@ -22,6 +22,10 @@ createdAt: string,
 expiresAt: string | null,
 token?: string,
 };
+export type AppSettingsData = {
+sshPublicKey: string | null,
+sshFingerprint: string | null,
+};
 export type BunnyConfigData = {
 host: string,
 tokenKey: string,
@@ -64,7 +68,6 @@ healthFailures: number,
 lastHealthyAt: string | null,
 isStorageServer: boolean,
 storageEndpoint: string | null,
-sshKeyId: number | null,
 services: App.Data.ServiceStatusData[],
 log: string | null,
 env: string | null,
@@ -103,13 +106,6 @@ name: string,
 running: number,
 desired: number | null,
 state: string,
-};
-export type SshKeyData = {
-id: number,
-name: string,
-publicKey: string,
-fingerprint: string | null,
-createdAt: string,
 };
 export type StreamData = {
 ulid: string,
@@ -253,6 +249,21 @@ export type StoreApiTokenData = {
 name: string,
 };
 }
+namespace AppSettings {
+export type NodeRotationData = {
+id: number,
+name: string,
+ok: boolean,
+error: string | null,
+};
+export type SshKeyRotationData = {
+rotated: boolean,
+nodes: App.Data.AppSettings.NodeRotationData[],
+};
+export type UpdateSshKeyData = {
+privateKey: string | null,
+};
+}
 namespace Auth {
 export type LoginData = {
 email: string,
@@ -268,7 +279,6 @@ accel: string | null,
 user?: string,
 isStorageServer?: boolean,
 hostname: string | null,
-sshKeyId: number | null,
 storageEndpoint: string | null,
 };
 export type UpdateNodeData = {
@@ -278,7 +288,6 @@ ipAddress?: string,
 hostname?: string | null,
 isActive?: boolean,
 isDraining?: boolean,
-sshKeyId?: number | null,
 isStorageServer?: boolean,
 storageEndpoint?: string | null,
 accel?: string | null,
@@ -303,12 +312,6 @@ settings?: App.Data.ProjectSettingsData,
 export type UpdateProjectData = {
 name?: string,
 settings?: App.Data.ProjectSettingsData,
-};
-}
-namespace SshKey {
-export type StoreSshKeyData = {
-name: string,
-privateKey: string | null,
 };
 }
 namespace Stream {

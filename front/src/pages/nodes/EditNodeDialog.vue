@@ -20,9 +20,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
-import SshKeyService from '@/services/SshKeyService'
 type Node = App.Data.NodeData
-type SshKey = App.Data.SshKeyData
 import { ValidationException } from '@/exceptions/ValidationException'
 
 const emit = defineEmits<{ updated: [node: Node] }>()
@@ -31,17 +29,15 @@ const dialogOpen = ref(false)
 const loading = ref(false)
 const errors = ref<Record<string, string[]>>({})
 
-type EditableNode = Omit<Node, 'accel' | 'sshKeyId'> & {
+type EditableNode = Omit<Node, 'accel'> & {
   user: string
   hostname: string
   storageEndpoint: string
   accel: string
-  sshKeyId: number | undefined
 }
 const node = ref<EditableNode>({} as EditableNode)
-const sshKeys = ref<SshKey[]>([])
 
-const show = async (initialNode: Node) => {
+const show = (initialNode: Node) => {
   const raw: Node = JSON.parse(JSON.stringify(initialNode))
   node.value = {
     ...raw,
@@ -49,13 +45,9 @@ const show = async (initialNode: Node) => {
     hostname: raw.hostname ?? '',
     storageEndpoint: raw.storageEndpoint ?? '',
     accel: raw.accel ?? 'none',
-    sshKeyId: raw.sshKeyId ?? undefined,
   }
   errors.value = {}
   dialogOpen.value = true
-  // Fetched on open rather than on mount: a key added on the SSH keys page after this dialog was
-  // mounted would otherwise be missing from the list until a full reload.
-  sshKeys.value = await SshKeyService.getAll()
 }
 
 const handleUpdate = async () => {
@@ -66,7 +58,6 @@ const handleUpdate = async () => {
     const updated = await NodeService.updateNode(node.value.id, {
       ...node.value,
       accel: node.value.accel === 'none' ? null : node.value.accel,
-      sshKeyId: node.value.sshKeyId ?? null,
       // A hostname is a proxy's public address; a worker has no use for one and an empty string
       // would be stored as a hostname of its own.
       hostname: node.value.type === 'proxy' && node.value.hostname ? node.value.hostname : null,
@@ -102,19 +93,6 @@ defineExpose({ show })
           <Label for="edit_node_ip">IP</Label>
           <Input id="edit_node_ip" v-model="node.ipAddress" placeholder="e.g. 10.0.0.0" required />
           <p v-if="errors.ipAddress" class="text-sm text-destructive">{{ errors.ipAddress }}</p>
-        </div>
-        <div class="grid gap-2">
-          <Label for="edit_node_ssh_key">SSH Key</Label>
-          <Select v-model="node.sshKeyId">
-            <SelectTrigger>
-              <SelectValue placeholder="Select SSH key" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem v-for="key in sshKeys" :key="key.id" :value="key.id">{{ key.name }}</SelectItem>
-            </SelectContent>
-          </Select>
-          <p class="text-xs text-muted-foreground">The key the panel connects with. Its public half has to be in the user's authorized_keys on the node.</p>
-          <p v-if="errors.sshKeyId" class="text-sm text-destructive">{{ errors.sshKeyId[0] }}</p>
         </div>
         <div class="grid gap-2">
           <Label for="edit_node_user">User</Label>

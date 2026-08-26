@@ -7,7 +7,6 @@ use App\Enums\NodeType;
 use App\Observers\NodeObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Log;
 
@@ -28,7 +27,6 @@ class Node extends Model
         'last_healthy_at',
         'is_storage_server',
         'storage_endpoint',
-        'ssh_key_id',
         'log',
         'env',
     ];
@@ -43,11 +41,6 @@ class Node extends Model
             'is_storage_server' => 'boolean',
             'last_healthy_at' => 'datetime',
         ];
-    }
-
-    public function sshKey(): BelongsTo
-    {
-        return $this->belongsTo(SshKey::class);
     }
 
     public function videos(): HasMany

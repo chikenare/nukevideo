@@ -3,12 +3,12 @@
 use App\Http\Controllers\Api\ActivityLogController;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiTokenController;
+use App\Http\Controllers\Api\AppSettingsController;
 use App\Http\Controllers\Api\CdnSettingsController;
 use App\Http\Controllers\Api\NodeController;
 use App\Http\Controllers\Api\NodeEnvironmentController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\SettingsController;
-use App\Http\Controllers\Api\SshKeyController;
 use App\Http\Controllers\Api\UsageController;
 use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\AuthController;
@@ -110,8 +110,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // Admin
     Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
-        Route::apiResource('ssh-keys', SshKeyController::class)->except(['update']);
-
         Route::apiResource('nodes', NodeController::class);
         Route::post('nodes/{node}/deploy', [NodeController::class, 'deploy']);
         Route::post('nodes/{node}/validate', [NodeController::class, 'validateNode']);
@@ -121,6 +119,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
         Route::get('node-environment', [NodeEnvironmentController::class, 'show']);
         Route::patch('node-environment', [NodeEnvironmentController::class, 'update']);
+
+        Route::get('app-settings', [AppSettingsController::class, 'show']);
+        Route::put('app-settings/ssh-key', [AppSettingsController::class, 'updateSshKey']);
+        Route::post('app-settings/ssh-key/rotate', [AppSettingsController::class, 'rotateSshKey']);
 
         Route::get('cdn-settings', [CdnSettingsController::class, 'show']);
         Route::patch('cdn-settings', [CdnSettingsController::class, 'update']);

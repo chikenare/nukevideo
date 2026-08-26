@@ -84,7 +84,7 @@ class ProxyCacheService
         $output = $this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
-            privateKey: $node->sshKey->private_key,
+            privateKey: app(SshKeyService::class)->privateKey(),
             command: 'bash -s',
             timeout: 30,
             // `blkid -p` reads the raw device, which needs root; without it a partitioned disk

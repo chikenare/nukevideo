@@ -100,12 +100,12 @@ panel decides: the released version in production, `node-dev` from `DOCKER_REGIS
 development. For a development node, build and push that tag from the checkout first —
 `bin/push-node-dev` — then deploy; repeat after every change you want the node to run.
 
-**The SSH key.** The panel connects with a key it holds. Generate one on the SSH keys page
-(or `POST /api/ssh-keys` with just a `name`), copy the public key it shows and add it to
-`~/.ssh/authorized_keys` of the SSH user on the node. A pair made elsewhere can be imported by
-its private half alone; the public key is derived from it. One key is enough for a fleet — a
-node created without naming one gets the only key that exists — and several are for rotation
-or for hosts that come with a key of their own.
+**The SSH key.** The panel connects to every node with one key, kept under Settings → App
+(`PUT /api/app-settings/ssh-key`). Generate it there, copy the public key it shows and add it to
+`~/.ssh/authorized_keys` of the SSH user on each node — the same line on every node. A pair made
+elsewhere can be imported by its private half alone; the public key is derived from it. To
+replace the key on a running fleet, **Rotate** installs the new key on every node with the old
+one before switching, so the panel never loses access — see [Rotate the SSH Key](/api/nodes#rotate-the-ssh-key).
 
 ### Creating a Node
 
@@ -116,7 +116,6 @@ POST /api/nodes
   "ip_address": "203.0.113.10",
   "user": "root",
   "type": "worker",
-  "ssh_key_id": 1,
   "hostname": "worker-1.nukevideo.com"
 }
 ```
