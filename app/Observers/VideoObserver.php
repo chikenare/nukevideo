@@ -20,6 +20,14 @@ class VideoObserver
         // the observer clean up that object. An archived one is covered by the sweep below too.
         $video->streams()->where('type', 'original')->get()->each->delete();
 
+        // A video deleted mid-encode (a FAILED one pruned while chunk jobs are still queued, an
+        // operator deleting a stuck one) leaves batches whose remaining jobs would each load a
+        // video that no longer exists. Cancelling them is what makes the batch drop those jobs;
+        // otherwise they linger until `queue:prune-batches` a week later. The progress hashes are
+        // TTL-bound but would sit in Redis for a day for nothing.
+        $video->cancelEncodeBatches();
+        $video->outputs()->get()->each->clearChunkProgress();
+
         // One prefix covers all four zones (`play/`, `download/`, `assets/`, `original/`), so a zone
         // added later cannot be forgotten here and leave its objects orphaned.
         DeleteResourceWithPath::dispatch($video->ulid);

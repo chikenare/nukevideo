@@ -98,9 +98,13 @@ class RetryVideos extends Command
         if ($this->option('reprobe')) {
             // Outputs too: CreateVideoStreamsService creates a fresh one per template output, so
             // keeping the old ones would leave a second, streamless set attached to the video.
-            // The output_stream pivot cascades on both sides.
+            // The output_stream pivot cascades on both sides. Both go through Eloquent, never a
+            // mass delete on the builder: the observers are what remove the old renditions,
+            // segments and manifests from S3, and a re-probe mints new ULIDs, so anything they
+            // miss is never pointed at again — and the video row survives, so the prefix wipe a
+            // video delete would do never comes either.
             $video->outputs()->get()->each->delete();
-            $video->streams()->where('type', '!=', 'original')->delete();
+            $video->streams()->where('type', '!=', 'original')->get()->each->delete();
         } else {
             $video->outputs()->update(['status' => VideoStatus::PENDING->value]);
         }

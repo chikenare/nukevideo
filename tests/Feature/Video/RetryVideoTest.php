@@ -180,6 +180,32 @@ describe('videos:retry', function () {
             ->and($video->outputs()->count())->toBe(0);
     });
 
+    it('reclaims the old renditions, segments and manifests when it re-probes', function () {
+        $video = failedVideo();
+        $rendition = $video->streams()->where('type', 'video')->first();
+        $output = $video->outputs()->first();
+
+        // A partial run had already synced these before the failure. The re-probe mints new
+        // ULIDs, so nothing will ever point at them again, and the video row lives on — the
+        // prefix wipe a video delete performs never comes. Only the observers can reclaim them,
+        // and a mass delete on the relation would have skipped them silently.
+        $disk = Storage::disk('s3');
+        $disk->put($rendition->storedPath($video), 'mp4');
+        $disk->put("{$rendition->segmentsPath($video)}/init.mp4", 'seg');
+        $disk->put($output->manifestPath('dash'), 'mpd');
+        $disk->put($output->manifestPath('hls', 480), 'm3u8');
+        $disk->put($video->playPrefix().'/other.mpd', 'keep');
+
+        $this->artisan('videos:retry', ['video' => [$video->id], '--reprobe' => true])->assertSuccessful();
+
+        $disk->assertMissing($rendition->storedPath($video));
+        $disk->assertMissing("{$rendition->segmentsPath($video)}/init.mp4");
+        $disk->assertMissing($output->manifestPath('dash'));
+        $disk->assertMissing($output->manifestPath('hls', 480));
+        $disk->assertExists($video->playPrefix().'/other.mpd');
+        $disk->assertExists(originalPath($video));
+    });
+
     it('changes nothing with --dry-run', function () {
         $video = failedVideo();
 
