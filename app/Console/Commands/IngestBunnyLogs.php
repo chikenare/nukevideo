@@ -6,7 +6,6 @@ use App\Data\BunnyConfigData;
 use App\Enums\CdnDriver;
 use App\Jobs\IngestBandwidthJob;
 use App\Services\Cdn\BunnyProvider;
-use App\Services\Cdn\TrackingRegistry;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Support\Carbon;
@@ -92,10 +91,10 @@ class IngestBunnyLogs extends Command
     }
 
     /**
-     * Aggregated events keyed by video + ip + tracking id + day, or null on API failure so the
-     * cursor stays put and the whole window is retried next run.
+     * Aggregated events keyed by video + ip + token hash + day + zone, or null on API failure so
+     * the cursor stays put and the whole window is retried next run.
      *
-     * @return array<string, array{video_ulid: string, ip: string, bytes: int, date: string, tracking_id: string, zone: string}>|null
+     * @return array<string, array{video_ulid: string, ip: string, bytes: int, date: string, token_hash: string, zone: string}>|null
      */
     private function fetch(BunnyConfigData $config, Carbon $from, Carbon $to): ?array
     {
@@ -150,9 +149,10 @@ class IngestBunnyLogs extends Command
                 // pipeline already dates per line ({@see vector/vector.yaml}); this matches it.
                 $date = $this->eventDate($line) ?? $from->toDateString();
 
-                // The v2 log's `path` carries the query string, which is the only reason a
-                // download link's `tid` can be attributed at all ({@see \App\Services\Cdn\BunnyProvider::downloadUrl}).
-                $trackingId = $this->trackingId((string) ($line['path'] ?? ''));
+                // The hash of the token the request carried, the same way the self-hosted edge
+                // ships it ({@see vector/vector.yaml}): the job resolves it to the tracking id the
+                // link was minted for, and the token itself goes no further than this loop.
+                $tokenHash = $this->tokenHash((string) ($line['path'] ?? ''));
 
                 // The zone directory that follows the ULID is what separates a playback segment
                 // from a downloaded master ({@see \App\Jobs\IngestBandwidthJob}); the log path is
@@ -160,15 +160,15 @@ class IngestBunnyLogs extends Command
                 $zone = $this->zone((string) ($line['path'] ?? ''), $match[1]);
 
                 // Everything that distinguishes one stored row from another joins the key, for the
-                // same reason it does in Vector's reduce: summing across zones, tracking ids or a
+                // same reason it does in Vector's reduce: summing across zones, tokens or a
                 // midnight boundary would collapse rows that have to stay apart.
-                $key = "{$match[1]}|{$ip}|{$trackingId}|{$date}|{$zone}";
+                $key = "{$match[1]}|{$ip}|{$tokenHash}|{$date}|{$zone}";
                 $events[$key] ??= [
                     'video_ulid' => $match[1],
                     'ip' => $ip,
                     'bytes' => 0,
                     'date' => $date,
-                    'tracking_id' => $trackingId,
+                    'token_hash' => $tokenHash,
                     'zone' => $zone,
                 ];
                 $events[$key]['bytes'] += $bytes;
@@ -200,45 +200,25 @@ class IngestBunnyLogs extends Command
         return $slash === false ? '' : substr($rest, 0, $slash);
     }
 
-    /** Token → id resolutions memoised per run: a session logs hundreds of lines under one token. */
-    private array $tokenTracking = [];
-
     /**
-     * The tracking id of a logged request, or '' when it carried none. Two carriers, tried in
-     * order: the `tid` query parameter of a download link ({@see BunnyProvider::downloadUrl}),
-     * and for playback the `bcdn_token=` path prefix, resolved through the token → id mapping
-     * recorded when the link was minted ({@see TrackingRegistry}).
-     *
-     * Clamped to the alphabet the request validation accepts rather than trusted: the query value
-     * is echoed into a URL by an API client and read back out of a log line. An id that did not
-     * survive that round trip intact is reported as unattributed — never dropped, because the
-     * bytes behind it were really delivered and really cost money.
+     * The SHA-256 of the token a logged request carried, or '' when it carried none. Two
+     * carriers, one per link kind ({@see BunnyProvider}): a playback link's token is the
+     * `bcdn_token=` path prefix every segment inherits, a download link's is the `token` query
+     * parameter — and the v2 log's `path` keeps both. The bytes must match what the mint hashed,
+     * so the value is taken as it sits in the URL: Bunny's token alphabet is URL-safe, and a
+     * value outside it could not have come from our signer, so it is treated as no token rather
+     * than decoded into something the registry never saw.
      */
-    private function trackingId(string $path): string
+    private function tokenHash(string $path): string
     {
+        if (preg_match('#^/bcdn_token=([A-Za-z0-9_-]+)#', $path, $match) === 1) {
+            return hash('sha256', $match[1]);
+        }
+
         parse_str((string) parse_url($path, PHP_URL_QUERY), $query);
+        $token = (string) ($query['token'] ?? '');
 
-        $trackingId = (string) ($query['tid'] ?? '');
-
-        if ($trackingId === '') {
-            $trackingId = $this->tokenTrackingId($path);
-        }
-
-        return preg_match('/^[A-Za-z0-9_-]{1,64}\z/', $trackingId) === 1 ? $trackingId : '';
-    }
-
-    /**
-     * A playback line's tracking id, from the token its path carries. A token with no mapping —
-     * expired, minted before the mapping existed, or lost to a cache restart — costs the label,
-     * never the bytes: the line still counts, as unattributed.
-     */
-    private function tokenTrackingId(string $path): string
-    {
-        if (preg_match('#^/bcdn_token=([A-Za-z0-9_-]+)#', $path, $match) !== 1) {
-            return '';
-        }
-
-        return $this->tokenTracking[$match[1]] ??= (string) app(TrackingRegistry::class)->resolve(hash('sha256', $match[1]));
+        return preg_match('/^[A-Za-z0-9_-]+\z/', $token) === 1 ? hash('sha256', $token) : '';
     }
 
     /**

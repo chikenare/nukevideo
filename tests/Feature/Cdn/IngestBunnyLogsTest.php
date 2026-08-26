@@ -1,7 +1,6 @@
 <?php
 
 use App\Jobs\IngestBandwidthJob;
-use App\Services\Cdn\TrackingRegistry;
 use App\Settings\CdnSettings;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -37,10 +36,10 @@ function fakeBunnySettings(string $provider = 'bunny', string $apiKey = 'api-key
  */
 function eventsWithoutDate(IngestBandwidthJob $job): array
 {
-    // `tid` and `zone` are dropped alongside `date`: these assertions are about aggregation shape,
-    // and each is covered by its own case below.
+    // `token_hash` and `zone` are dropped alongside `date`: these assertions are about aggregation
+    // shape, and each is covered by its own case below.
     return array_map(
-        fn (array $event) => collect($event)->except(['date', 'tracking_id', 'zone'])->all(),
+        fn (array $event) => collect($event)->except(['date', 'token_hash', 'zone'])->all(),
         array_values($job->events),
     );
 }
@@ -181,8 +180,8 @@ it('dates every event by its own log line, so a window that straddles midnight s
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
         return array_values($job->events) === [
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'tracking_id' => '', 'zone' => ''],
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'tracking_id' => '', 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
         ];
     });
 });
@@ -205,7 +204,7 @@ it('drops non-2xx lines even when the API filter does not', function () {
     // customer's bill. A parameter the API renames or ignores must not silently start billing the
     // 403s an expired token produces.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
-        ['statusCode' => 403, 'bytesSent' => 2538, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.m4s?tid=spoofed'],
+        ['statusCode' => 403, 'bytesSent' => 2538, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.m4s'],
         ['statusCode' => 404, 'bytesSent' => 1207, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
         // 206 is what a resumed download or a ranged player request reports, and Bunny's own
         // `2xx` filter returns it. It has to count.
@@ -219,37 +218,40 @@ it('drops non-2xx lines even when the API filter does not', function () {
     ]);
 });
 
-it('attributes traffic to the tracking id carried in the logged query string', function () {
+it('ships the hash of a download token, one row per token', function () {
     fakeBunnySettings();
 
-    // The v2 logging API reports `path` WITH the query string, which is the only reason a download
-    // link's `tid` can be attributed at all. Two ids must not collapse into one row.
+    // The v2 logging API reports `path` WITH the query string, which is where a download link's
+    // token sits. Two tokens are two viewers and must not collapse into one row; resolving them
+    // to tracking ids is the job's business ({@see \App\Jobs\IngestBandwidthJob}), not this
+    // command's — the token goes no further than the hash.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
-        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-a'],
-        ['statusCode' => 200, 'bytesSent' => 50, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=t&expires=1&tid=customer-b'],
+        ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=HS256-aaa&expires=1'],
+        ['statusCode' => 200, 'bytesSent' => 50, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=HS256-bbb&expires=1'],
         ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/play/x.mpd'],
     ]))]);
 
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        $byTid = collect($job->events)->keyBy('tracking_id')->map->bytes;
+        $byHash = collect($job->events)->keyBy('token_hash')->map->bytes;
 
-        return $byTid->get('customer-a') === 100
-            && $byTid->get('customer-b') === 50
-            && $byTid->get('') === 25;
+        return $byHash->get(hash('sha256', 'HS256-aaa')) === 100
+            && $byHash->get(hash('sha256', 'HS256-bbb')) === 50
+            && $byHash->get('') === 25
+            && ! collect($job->events)->contains(fn (array $event) => array_key_exists('tracking_id', $event));
     });
 });
 
-it('counts the bytes of a tracking id that did not survive the round trip, as unattributed', function () {
+it('counts the bytes of a token that could not have been ours, as unattributed', function () {
     fakeBunnySettings();
 
-    // The point of the whole pipeline is bandwidth. A malformed id is a broken LABEL, never a
-    // reason to drop the line: those bytes were really delivered and really cost money, and
-    // `usage` is a SummingMergeTree where a dropped row is gone for good.
+    // The point of the whole pipeline is bandwidth. A token outside the signer's alphabet is a
+    // broken LABEL, never a reason to drop the line: those bytes were really delivered and really
+    // cost money, and `usage` is a SummingMergeTree where a dropped row is gone for good.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
-        ['statusCode' => 200, 'bytesSent' => 70, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?tid=a%26b%3Dc'],
-        ['statusCode' => 200, 'bytesSent' => 30, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?tid='.str_repeat('x', 65)],
+        ['statusCode' => 200, 'bytesSent' => 70, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=a%26b%3Dc'],
+        ['statusCode' => 200, 'bytesSent' => 30, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
     ]))]);
 
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
@@ -298,27 +300,25 @@ it('keeps the zones apart instead of summing them into one row', function () {
     ]);
 });
 
-it('attributes playback lines through the minted token mapping', function () {
+it('ships the hash of the playback token prefix every segment inherits', function () {
     fakeBunnySettings();
 
-    // Playback links carry no `tid` — the directory token leaves no room for one — but the token
-    // prefix itself reaches the log on every segment, and the mint recorded what it means
-    // under the token's hash ({@see \App\Services\Cdn\TrackingRegistry}). An unmapped token
-    // (expired, pre-feature, cache restart) costs the label, never the bytes.
-    Cache::put(TrackingRegistry::cacheKey(hash('sha256', 'HS256-known_token')), 'customer-42', 600);
-
+    // A playback link's token is the `bcdn_token=` path prefix, which the relative segment URLs
+    // inherit — so every line of a session carries it, and hashes to the key the mint recorded
+    // the tracking id under ({@see \App\Services\Cdn\TrackingRegistry}). The command does not
+    // resolve it: it sums per hash and leaves the lookup to the job, like the self-hosted edge.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
         ['statusCode' => 200, 'bytesSent' => 100, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
         ['statusCode' => 200, 'bytesSent' => 40, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-known_token&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00002.m4s'],
-        ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-unknown&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
+        ['statusCode' => 200, 'bytesSent' => 25, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=HS256-other&token_path=%2F'.ULID_A.'%2Fplay%2F&expires=123/'.ULID_A.'/play/segment_00001.m4s'],
     ]))]);
 
     $this->artisan('bunny:ingest-logs')->assertExitCode(0);
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
-        $byTid = collect($job->events)->keyBy('tracking_id')->map->bytes;
+        $byHash = collect($job->events)->keyBy('token_hash')->map->bytes;
 
-        return $byTid->get('customer-42') === 140
-            && $byTid->get('') === 25;
+        return $byHash->get(hash('sha256', 'HS256-known_token')) === 140
+            && $byHash->get(hash('sha256', 'HS256-other')) === 25;
     });
 });
