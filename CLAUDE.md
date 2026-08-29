@@ -224,7 +224,8 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
 - **`Project` extends `Model`, not `Authenticatable`.** A project API key authenticates *as the
   project*, so `$request->user()` can be a Project: `getAuthIdentifier()` fatals on it, and its `id`
   comes from a different sequence than a user's, so reading it as a user id silently answers with
-  another account's data. Use the `$request->accountId()` and `$request->isAdmin()` macros.
+  another account's data — use `$request->user()->accountId()`, which both models implement.
+  `is_admin` needs nothing: the attribute is simply absent on a Project, so Eloquent answers null.
 - The ClickHouse client cannot bind an array through `select()` — the bindings go through
   `http_build_query`, so `param_x[0]=…` never reaches the server. Use `selectWithParams()` for any
   `{name:Array(String)}` parameter.

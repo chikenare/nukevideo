@@ -64,4 +64,10 @@ class User extends Authenticatable
     {
         return $this->hasMany(Project::class);
     }
+
+    /** A user reads its own account. */
+    public function accountId(): int
+    {
+        return $this->id;
+    }
 }

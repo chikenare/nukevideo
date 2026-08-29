@@ -12,6 +12,7 @@
  */
 
 use App\Data\Stream\DownloadStreamData;
+use App\Models\Project;
 use App\Models\User;
 use App\Services\AnalyticsService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -27,7 +28,17 @@ const VIDEO_ULID = '01HZXW3V5N8Q9R2T4Y6B8D0F1G';
 // customer's chart next to everyone else's totals.
 const BANDWIDTH_QUERIES = ['summary', 'bandwidthOverTime', 'topIps', 'topVideos', 'bandwidthByTrackingId', 'bandwidthByVideo'];
 
-beforeEach(fn () => Sanctum::actingAs(User::factory()->create(['is_admin' => true])));
+beforeEach(function () {
+    $user = User::factory()->create();
+    $project = Project::factory()->for($user)->create();
+
+    Sanctum::actingAs($user);
+
+    // With no project named, the four breakdowns that name things are withheld and never reach the
+    // service at all — so a case about what the filters do to them has to name one, which is also
+    // how the panel calls this.
+    $this->withHeader('X-Project-Ulid', $project->ulid);
+});
 
 /**
  * Stubs the service and hands back a collector that fills with `method => [video, tracking_id, metric]` as
@@ -43,10 +54,11 @@ function recordAnalyticsFilters(): ArrayObject
     // service and the recorded calls stayed empty.
     $mock = Mockery::mock(AnalyticsService::class, function (MockInterface $mock) use ($seen) {
         foreach (BANDWIDTH_QUERIES as $method) {
-            // The three filters are the last parameters of every one of these signatures; the ones
-            // before them (from, to, limit) differ per method and are not what is under test.
             $mock->shouldReceive($method)->once()->andReturnUsing(function (...$args) use ($seen, $method) {
-                $seen[$method] = array_slice($args, -3);
+                // The three filters sit immediately before the project scope, which is last in
+                // every one of these signatures. Mockery binds named arguments back to their
+                // positions, so this stays positional however the controller spells the call.
+                $seen[$method] = array_slice($args, -4, 3);
 
                 return $method === 'summary'
                     ? ['total_bytes' => 0, 'unique_videos' => 0, 'unique_ips' => 0, 'unique_tracking_ids' => 0]

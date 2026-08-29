@@ -59,18 +59,11 @@ class Project extends Model
     }
 
     /**
-     * The ULIDs this project actually owns, among those named.
-     *
-     * The tenant boundary of every metrics read that takes a list of videos. `usage` cannot enforce
-     * it — `video_ulid` there is a string parsed out of a public request path — so it has to be
-     * enforced before the query, and a ULID that belongs to someone else drops out silently rather
-     * than being refused: answering differently would say whether that video exists.
-     *
-     * @param  list<string>  $ulids
-     * @return list<string>
+     * A project key reads the account that owns the project, never the project itself: `usage` is
+     * keyed by `user_id`, and a project id comes from a different sequence entirely.
      */
-    public function ownedVideoUlids(array $ulids): array
+    public function accountId(): int
     {
-        return $ulids === [] ? [] : $this->videos()->whereIn('ulid', $ulids)->pluck('ulid')->all();
+        return (int) $this->user_id;
     }
 }

@@ -9,15 +9,22 @@ Everything on this page is readable with **any authenticated token** — a perso
 [project API key](/api/authentication) — except [per-node delivery](#per-node-delivery), which is
 admin-only. Reading these numbers back is what an integrating backend holds a key for.
 
-::: warning Most figures are instance-wide
-`usage` has no project column, so bandwidth, videos and viewer IPs are aggregated across the **whole
-instance**, not scoped to the calling project: a project key sees totals that include other projects'
-traffic. NukeVideo is meant to sit behind your own backend, reached server to server with a key that
-never leaves it — do not proxy these endpoints to a browser or to an untrusted tenant.
+What a caller may see is decided by the **project it names**, not by whether it is an administrator:
+there is no operator shortcut on these endpoints, and an administrator that names no project sees
+exactly what a tenant would.
 
-Two endpoints are exceptions, and they are the ones to reach for when the answer has to be safe to
-pass on: [batch bandwidth by video](#batch-bandwidth-by-video) is scoped to your project, and
-[usage](#usage) is scoped to your account.
+::: tip Send your project and the answer is yours alone
+Every read below narrows to one project when the request carries project context — the
+`X-Project-Ulid` header, or a project API key, which carries its own. Scoped that way, the numbers
+and the identifiers in them are your project's and nobody else's.
+
+Without project context the aggregates are **instance-wide**: totals across every project on the
+installation. Those name nobody, which is why they are shared at all. The breakdowns that *do* name
+things — viewer addresses, viewer labels, video ULIDs — are then withheld or must be asked for by
+name, because unscoped they would enumerate other tenants'.
+
+This is not an administrator/tenant distinction. An administrator that names no project gets the
+same aggregates, and the same withheld breakdowns, as anyone else.
 :::
 
 ## The metric catalogue
@@ -59,7 +66,6 @@ GET /api/analytics?from=2026-04-01&to=2026-04-30
 |-----------|------|----------|-------------|
 | `from` | date | Yes | Start date (`YYYY-MM-DD`), inclusive |
 | `to` | date | Yes | End date (`YYYY-MM-DD`), inclusive |
-| `user_id` | integer | No | **Administrators only.** Whose *upload* volume to report in `topExternalUsers` and the upload card. Any other caller always reads its own account and this is ignored |
 | `video` | string | No | Narrow every bandwidth series to one video ULID |
 | `tracking_id` | string | No | Narrow every bandwidth series to one tracking id. Pass it **empty** (`?tracking_id=`) to isolate traffic that carried no id |
 | `metric` | string | No | Narrow to one delivery metric. Omit for all of them |
@@ -93,16 +99,14 @@ all of them, whether or not they rank — use [`/api/metrics`](#metrics-query) o
 below. That is the difference between a dashboard and an invoice.
 :::
 
-::: warning The identifier lists are administrator-only
-`topIps`, `topVideos`, `topTrackingIds` and `bandwidthByVideo` come back **empty** for anyone but an
-administrator, and that is not an oversight. A total is instance-wide and names nobody, which is the
-trade this endpoint has always made; a *list of identifiers* is a different thing — unscoped, those
-four enumerate other tenants' viewer addresses, viewer labels and video ULIDs.
+::: warning The identifier lists need project context
+`topIps`, `topVideos`, `topTrackingIds`, `topExternalUsers` and `bandwidthByVideo` come back
+**empty** unless the request carries project context. A total names nobody; a *list of identifiers*
+is a different thing, and unscoped those five would enumerate whoever else is on the installation —
+viewer addresses, viewer labels, customer labels and video ULIDs.
 
-Read the same numbers scoped instead: [`/api/metrics`](#metrics-query) and
-[batch bandwidth by video](#batch-bandwidth-by-video) answer them for values you own or can name.
-
-`cards`, `bandwidthOverTime` and `encodingOverTime` are unaffected — they are aggregates.
+Send `X-Project-Ulid` (or call with a project API key) and they are populated with your project's
+own. `cards`, `bandwidthOverTime` and `encodingOverTime` are unaffected — they are aggregates.
 :::
 
 #### Card keys
@@ -186,28 +190,34 @@ POST /api/metrics
 ### Dimensions, and what each one requires
 
 The dimensions of `usage` are **not equally shareable**, and that is what the rules below are about.
-The table is instance-wide — it has no project column — so each dimension can only be offered as far
-as it can be scoped.
+The table is shared across the installation, so each dimension can only be offered as far as it can
+be scoped.
 
 | Dimension | Who | What it requires |
 |-----------|-----|------------------|
 | `date` | anyone | — |
 | `metric` | anyone | — |
 | `external_user_id` | anyone | Pins the whole query to your account, automatically |
-| `video` | anyone | Project context **and** a `videos` list of your own titles |
-| `ip` | anyone | Project context **and** a `videos` list — viewer addresses are readable only for titles you own |
-| `tracking_id` | anyone | A `tracking_ids` list — nothing in the table says whose an id is, so you may only read the ones you name |
-| `node_id` | administrators | — |
-| `cache` | administrators | — |
+| `video` | anyone | Project context **or** a `videos` list of your own titles |
+| `ip` | anyone | Project context **or** a `videos` list |
+| `tracking_id` | anyone | Project context **or** a `tracking_ids` list |
+| `node_id` | anyone | Project context — no list can stand in |
+| `cache` | anyone | Project context — no list can stand in |
 
-Asking for one without what it requires responds `422` and says which field is missing. Asking for a
-dimension you are not entitled to responds `422` and lists the ones you are.
+The ones that name something take **either** route: scope the query to a project, and they are yours
+by construction; or name exactly what you are asking about, and the question is bounded to values
+you already had. Without one of the two the answer would enumerate whoever else is on the
+installation, so it responds `422` and says which field would satisfy it.
 
-::: tip Why `ip` is the strictest
-A viewer's address is personal data, and in `usage` it belongs to nobody in particular — it is a
-viewer of *some* video on a shared table. The only way to establish that a row is yours is through a
-video you own, which is why that dimension asks for a list of titles rather than answering for the
-instance.
+`node_id` and `cache` take only the first route: inside a project they say which edge served *your*
+traffic and how well its cache did, which is your business — but there is no list of edges you could
+name, because you own none. The fleet-wide view is the admin-only
+[per-node delivery](#per-node-delivery) report.
+
+::: tip Why those three and not `date` or `metric`
+A date is not anybody's. A viewer's address, a viewer label and a video ULID are: unscoped, grouping
+by one of them hands back a list of identifiers belonging to whoever happens to be on the same
+installation. A viewer's address is also personal data, which is why it gets no exception.
 :::
 
 ::: warning Account pinning is automatic, not optional
@@ -318,7 +328,10 @@ to a viewer's own file host are usually not the same line on an invoice. One row
 (id, metric) pair — or per (id, metric, day) when `granularity=daily` — so add them up for a single
 total.
 
-This endpoint is **not** scoped to a project. It reports on the ids you name, so name only your own.
+This endpoint reports on the ids you name, whatever project they belong to — so name only your own.
+Unlike the rest of this page it does not narrow to project context, deliberately: traffic whose video
+has since been deleted keeps its tracking id but loses its project, and dropping it would quietly
+under-report the bandwidth a subscriber actually consumed.
 
 ## Batch bandwidth by video
 
@@ -348,14 +361,13 @@ POST /api/analytics/videos
 }
 ```
 
-::: tip This one IS scoped to your project
-Unlike every other endpoint on this page, it requires project context — the `X-Project-Ulid` header,
-or a project API key, which carries its own. The list is narrowed to videos your project owns before
-the query runs, so the answer is safe to pass on to a tenant. Without project context it responds
-`400`.
+::: tip Always scoped to your project
+It requires project context — the `X-Project-Ulid` header, or a project API key, which carries its
+own — and responds `400` without it. The scoping is `project_id` in the query itself, so a ULID that
+is not yours simply matches nothing.
 
-A ULID that is not yours and one that moved no bytes produce the same answer — **no row** — on
-purpose: answering differently would turn this into a way to find out which videos exist on the
+A ULID that is not yours and one that moved no bytes therefore produce the same answer — **no row** —
+on purpose: answering differently would turn this into a way to find out which videos exist on the
 instance.
 :::
 

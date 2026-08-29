@@ -113,6 +113,7 @@ class ProcessChunkJob implements ShouldQueue
                 'encoding_cpu',
                 round(microtime(true) - $startedAt, 2),
                 $video->external_user_id ?? '',
+                (int) $video->project_id,
             );
         }
 

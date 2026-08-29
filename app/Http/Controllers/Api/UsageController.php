@@ -30,7 +30,7 @@ class UsageController extends Controller
 
         $where = ['user_id = {user_id:UInt32}', 'date >= {from:Date}', 'date <= {to:Date}'];
         $params = [
-            'user_id' => $request->accountId(),
+            'user_id' => $request->user()->accountId(),
             'from' => $request->input('from'),
             'to' => $request->input('to'),
         ];

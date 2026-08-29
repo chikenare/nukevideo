@@ -4,12 +4,13 @@
  * The general read over `usage`: any breakdown the allowlist permits, rather than a new endpoint
  * per question.
  *
- * A query endpoint over an instance-wide table is only defensible because of what these cases pin.
- * The dimensions of `usage` are not equally shareable, and each one carries its own requirement:
- * the operator's fleet columns need an operator; the video and viewer-address columns need a
- * resolved project and an explicit list of titles the caller owns; the customer-label column pins
- * the whole query to the caller's account; and `tracking_id`, which nothing in the table can attach
- * an owner to, may only be read for ids the caller can name.
+ * A query endpoint over a shared table is only defensible because of what these cases pin. The
+ * dimensions of `usage` are not equally shareable, so there are two ways to be allowed to break
+ * down by one that NAMES something — a video, a viewer, a viewer's address: either the query is
+ * narrowed to one project, in which case those identifiers are the caller's own, or the caller
+ * names exactly what it is asking about, which bounds the question to values it already had. The
+ * customer-label column pins the query to the caller's account on top of that, and the two fleet
+ * columns take only the first route, because there is no list of edges a tenant could name.
  *
  * The service is stubbed — the suite has no ClickHouse fixture — so what is under test is the
  * authorization and the shaping, which is where this endpoint can go wrong.
@@ -115,7 +116,10 @@ it('resolves a project key to its owning account, not to the project id', functi
         ->and($seen['args'][5])->not->toBe($this->project->id);
 });
 
-it('narrows a video list to the titles the project owns', function () {
+it('scopes the query to the caller project rather than pre-filtering the list', function () {
+    // The list goes to ClickHouse as given; `project_id` in the WHERE is what makes another
+    // tenant's ULID match nothing. One clause instead of a MariaDB round trip and a narrowing that
+    // could be got wrong.
     $mine = projectVideo($this->project);
     $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');
 
@@ -128,68 +132,93 @@ it('narrows a video list to the titles the project owns', function () {
         'videos' => [$mine->ulid, $theirs->ulid],
     ])->assertOk();
 
-    expect($seen['args'][3]['video_ulid'])->toBe([$mine->ulid]);
+    expect($seen['args'][3]['video_ulid'])->toBe([$mine->ulid, $theirs->ulid])
+        ->and($seen['args'][6])->toBe($this->project->id);
 });
 
-it('answers nothing rather than instance-wide when no named video is the caller\'s', function () {
-    // The dangerous case: an ownership filter that empties out must not fall through to "no filter".
-    $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');
-    $seen = stubMetricsQuery([['video' => 'x', 'value' => 1.0]]);
+it('lets project context stand in for naming what you ask about', function () {
+    // Scoped to a project, the identifiers ARE the caller's, so no list is needed — which is the
+    // whole reason `usage` grew a project column.
+    $seen = stubMetricsQuery();
 
     $this->postJson(METRICS_ENDPOINT, [
         'from' => '2026-04-01',
         'to' => '2026-04-30',
-        'dimensions' => ['video'],
-        'videos' => [$theirs->ulid],
-    ])->assertOk()->assertExactJson(['data' => []]);
+        'dimensions' => ['tracking_id', 'ip', 'video'],
+    ])->assertOk();
 
-    expect($seen)->not->toHaveKey('args');
+    expect($seen['args'][6])->toBe($this->project->id);
 });
 
-it('refuses the identifier dimensions unless the caller says what it is asking about', function (array $payload, string $field) {
-    $this->postJson(METRICS_ENDPOINT, $payload + ['from' => '2026-04-01', 'to' => '2026-04-30'])
+it('refuses the identifier dimensions when neither scoped nor named', function (array $payload, string $field) {
+    // No project header: nothing narrows the query, so the caller has to say what it is asking
+    // about or it would enumerate other tenants'.
+    $this->withHeader('X-Project-Ulid', '')
+        ->postJson(METRICS_ENDPOINT, $payload + ['from' => '2026-04-01', 'to' => '2026-04-30'])
         ->assertStatus(422)
         ->assertJsonValidationErrors($field);
 })->with([
     // Each of these, unbounded, enumerates something belonging to other tenants.
-    'videos, which would list every title on the instance' => [['dimensions' => ['video']], 'videos'],
+    'videos, which would list every title on the installation' => [['dimensions' => ['video']], 'videos'],
     'viewer addresses, which are personal data' => [['dimensions' => ['ip']], 'videos'],
     'viewer labels, which nothing can attach an owner to' => [['dimensions' => ['tracking_id']], 'tracking_ids'],
+    'the edges, which no list can stand in for' => [['dimensions' => ['node_id']], 'dimensions'],
 ]);
 
-it('refuses the operator fleet dimensions to a tenant', function (string $dimension) {
+it('answers the fleet dimensions inside a project, where they describe its own traffic', function (string $dimension) {
+    // Which edge served THIS project's bytes, and whether its cache had them, is the project's own
+    // business. What is not on offer is the same question across the installation.
+    $seen = stubMetricsQuery();
+
     $this->postJson(METRICS_ENDPOINT, [
         'from' => '2026-04-01',
         'to' => '2026-04-30',
         'dimensions' => [$dimension],
-    ])->assertStatus(422)->assertJsonValidationErrors('dimensions');
+    ])->assertOk();
+
+    expect($seen['args'][6])->toBe($this->project->id);
 })->with(['node_id', 'cache']);
 
-it('lets an operator read the instance without naming anything', function () {
-    Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
-    $seen = stubMetricsQuery();
-
-    // Without clearing it, the beforeEach header still names the tenant's project, which this
-    // operator does not own — ResolveProject would 404 before the query was ever considered.
+it('refuses the fleet dimensions with no project, and offers no list instead', function (string $dimension) {
+    // A caller can name its own videos or its own tracking ids; it cannot name an edge it owns,
+    // because it owns none. So for these two the project is the only way in.
     $this->withHeader('X-Project-Ulid', '')->postJson(METRICS_ENDPOINT, [
         'from' => '2026-04-01',
         'to' => '2026-04-30',
-        'dimensions' => ['node_id', 'cache', 'ip', 'tracking_id'],
-    ])->assertOk();
+        'dimensions' => [$dimension],
+        'videos' => ['01HZXW3V5N8Q9R2T4Y6B8D0F1G'],
+        'tracking_ids' => ['customer-42'],
+    ])->assertStatus(422)->assertJsonValidationErrors('dimensions');
+})->with(['node_id', 'cache']);
 
-    // No account pin, no list required: the operator's own fleet and its own instance.
-    expect($seen['args'][5])->toBeNull();
+it('gives an operator no more than anyone else', function () {
+    // There is no operator branch left in this controller. An administrator that names no project
+    // gets the same refusal a tenant would; the fleet-wide view lives on the admin-only per-node
+    // report, not here.
+    Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+    stubMetricsQuery();
+
+    $this->withHeader('X-Project-Ulid', '')->postJson(METRICS_ENDPOINT, [
+        'from' => '2026-04-01',
+        'to' => '2026-04-30',
+        'dimensions' => ['node_id'],
+    ])->assertStatus(422);
 });
 
-it('demands project context for a dimension that can only be answered inside one', function () {
+it('answers an unscoped query that names its own videos', function () {
+    // The other half of the rule: no project, but the caller named the titles, so the question is
+    // bounded to things it can only have learned from its own account.
     $video = projectVideo($this->project);
+    $seen = stubMetricsQuery();
 
     $this->withHeader('X-Project-Ulid', '')->postJson(METRICS_ENDPOINT, [
         'from' => '2026-04-01',
         'to' => '2026-04-30',
         'dimensions' => ['video'],
         'videos' => [$video->ulid],
-    ])->assertStatus(400);
+    ])->assertOk();
+
+    expect($seen['args'][6])->toBeNull();
 });
 
 it('needs no project context for a query that names no project data', function () {

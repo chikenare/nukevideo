@@ -101,7 +101,7 @@ class OnVideoUploadedService
             ->event('video_processing_started')
             ->log("Video queued for processing: {$video->name}");
 
-        UsageService::record($user->id, 'upload_bytes', $size, $this->meta->externalUserId ?? '');
+        UsageService::record($user->id, 'upload_bytes', $size, $this->meta->externalUserId ?? '', (int) $video->project_id);
 
         $this->uppyService->forgetUploadMeta($key);
 

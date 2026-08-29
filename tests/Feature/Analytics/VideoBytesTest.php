@@ -5,14 +5,14 @@
  * Same shape as the tracking-id batch on the other dimension, with one difference that is the whole
  * point of the file — this one IS scoped to a project.
  *
- * `usage` has no project column, so none of the other metrics endpoints can be scoped; a video does
- * have one, so the list is narrowed to the caller's own videos before it ever reaches ClickHouse.
- * What is pinned here is that the narrowing actually happens, and that a ULID belonging to someone
- * else is answered exactly like one with no traffic — with nothing — so the endpoint cannot be used
- * to find out which videos exist.
+ * The scoping is `project_id` in the query itself. It used to be a round trip to MariaDB that
+ * narrowed the ULIDs to the ones the project owns, because `usage` had no column to say whose a row
+ * was; the column removed both the query and the chance of getting that narrowing wrong. What is
+ * pinned here is that the project reaches the query, and that a ULID belonging to someone else is
+ * answered exactly like one with no traffic — with nothing — so the endpoint cannot be used to find
+ * out which videos exist.
  *
- * The service is stubbed: the suite has no ClickHouse fixture and CI does not run one. What these
- * cases test is the tenant boundary, which is Eloquent's side of the call.
+ * The service is stubbed: the suite has no ClickHouse fixture and CI does not run one.
  */
 
 use App\Models\Project;
@@ -70,10 +70,9 @@ it('reports bytes for a batch of the project videos, split by metric', function 
         ->assertJsonPath('data.0.date', null);
 });
 
-it('never lets a ULID from another project reach the query', function () {
-    // The tenant boundary. `usage` cannot enforce it — `video_ulid` there is a string parsed out of
-    // a public request path — so it has to be enforced before the query, and this is the case that
-    // says it is.
+it('scopes the query to the caller project', function () {
+    // The tenant boundary, and now the only thing enforcing it: the list goes to ClickHouse as
+    // given, and `project_id` in the WHERE is what makes another tenant's ULID match nothing.
     $mine = projectVideo($this->project);
     $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');
 
@@ -82,21 +81,8 @@ it('never lets a ULID from another project reach the query', function () {
     $this->getJson(VIDEOS_ENDPOINT."?from=2026-04-01&to=2026-04-30&videos[]={$mine->ulid}&videos[]={$theirs->ulid}")
         ->assertOk();
 
-    expect($seen['args'][2])->toBe([$mine->ulid]);
-});
-
-it('answers a ULID it does not own exactly like one with no traffic', function () {
-    // Both produce no row, on purpose: a 403 or a 404 for the first would turn the endpoint into a
-    // way to ask whether a given video exists on the instance.
-    $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');
-    $seen = stubVideoBatchService();
-
-    $this->getJson(VIDEOS_ENDPOINT."?from=2026-04-01&to=2026-04-30&videos[]={$theirs->ulid}")
-        ->assertOk()
-        ->assertExactJson(['data' => []]);
-
-    // Nothing owned survived the filter, so the service is handed an empty list and short-circuits.
-    expect($seen['args'][2])->toBe([]);
+    expect($seen['args'][2])->toBe([$mine->ulid, $theirs->ulid])
+        ->and($seen['args'][5])->toBe($this->project->id);
 });
 
 it('adds the day to the breakdown when asked for a daily read', function () {
@@ -123,7 +109,7 @@ it('accepts the same batch in a POST body', function () {
         'metric' => 'streaming_bytes',
     ])->assertOk();
 
-    expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', [$video->ulid], 'streaming_bytes', false]);
+    expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', [$video->ulid], 'streaming_bytes', false, $this->project->id]);
 });
 
 it('lets a project API key read its own titles', function () {

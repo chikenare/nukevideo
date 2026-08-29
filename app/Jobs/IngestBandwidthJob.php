@@ -175,10 +175,10 @@ class IngestBandwidthJob implements ShouldQueue
             return;
         }
 
-        // One batched lookup for both attributes the log cannot carry. A video that is gone leaves
-        // its bytes under account 0 rather than dropping them.
+        // One batched lookup for every attribute the log cannot carry. A video that is gone leaves
+        // its bytes under account 0 and project 0 rather than dropping them.
         $videos = Video::whereIn('ulid', array_keys($ulids))
-            ->get(['ulid', 'user_id', 'external_user_id'])
+            ->get(['ulid', 'user_id', 'project_id', 'external_user_id'])
             ->keyBy('ulid');
 
         // Ingest time, not traffic time — the ingest runs every five minutes over a window that
@@ -187,7 +187,7 @@ class IngestBandwidthJob implements ShouldQueue
         // partition key, so that slice is misattributed permanently. Prefer a date carried on the
         // event; the fallback is only for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
+        $columns = ['date', 'user_id', 'project_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
         $rows = [];
 
         foreach ($valid as [$videoUlid, $ip, $bytes, $date, $trackingId, $metric, $nodeId, $cache, $origin]) {
@@ -196,6 +196,7 @@ class IngestBandwidthJob implements ShouldQueue
             $rows[] = [
                 $date ?? $ingestedOn,
                 (int) ($video->user_id ?? 0),
+                (int) ($video->project_id ?? 0),
                 $metric,
                 (string) ($video->external_user_id ?? ''),
                 $videoUlid,
@@ -210,7 +211,9 @@ class IngestBandwidthJob implements ShouldQueue
             // fetched from S3 cannot ride along on the delivery row. Keyed by node and video —
             // what the operator asks about — and by nothing a customer is billed on.
             if ($origin > 0) {
-                $rows[] = [$date ?? $ingestedOn, 0, self::ORIGIN_METRIC, '', $videoUlid, $ip, '', $nodeId, '', $origin];
+                // Project 0 as well as account 0: origin egress is the operator's cost, not any
+                // tenant's traffic, and must not fall inside a project-scoped read.
+                $rows[] = [$date ?? $ingestedOn, 0, 0, self::ORIGIN_METRIC, '', $videoUlid, $ip, '', $nodeId, '', $origin];
             }
         }
 
