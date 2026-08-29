@@ -222,4 +222,4 @@ When creating an upload, you can pass optional metadata to associate the video w
 | `metadata.externalUserId` | string | Optional. ID of the user in your external system |
 | `metadata.externalResourceId` | string | Optional. ID of the resource (post, product, etc.) in your external system |
 
-These fields are stored on the video record and returned in API responses as `externalUserId` and `externalResourceId`. The `externalUserId` is also recorded in usage tracking, allowing you to query per-user metrics via the [Usage API](/api/users#usage).
+These fields are stored on the video record and returned in API responses as `externalUserId` and `externalResourceId`. The `externalUserId` is also recorded in usage tracking, allowing you to query per-user metrics via the [Usage API](/api/analytics#usage).

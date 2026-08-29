@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\AnalyticsController;
 use App\Http\Controllers\Api\ApiTokenController;
 use App\Http\Controllers\Api\AppSettingsController;
 use App\Http\Controllers\Api\CdnSettingsController;
+use App\Http\Controllers\Api\MetricsController;
 use App\Http\Controllers\Api\NodeController;
 use App\Http\Controllers\Api\NodeEnvironmentController;
 use App\Http\Controllers\Api\ProfileController;
@@ -46,6 +47,15 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // endpoints reads `$request->user()`, which for a project key is a Project and not a User.
     Route::get('analytics', [AnalyticsController::class, 'index']);
     Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
+
+    // Delivered bytes for a batch of tracking ids — the same numbers `analytics` reports, for a
+    // list the caller names, which is what billing a per-subscriber quota needs. Same group and
+    // same reasoning as the two above. POST as well as GET because the input is a list and a
+    // thousand ids do not fit in a query string; it still only reads.
+    //
+    // Its sibling `analytics/videos` is NOT here: a video belongs to a project, so that one can be
+    // scoped and therefore must be. See the resolve.project group below.
+    Route::match(['get', 'post'], 'analytics/tracking-ids', [AnalyticsController::class, 'trackingIds']);
 
     // Upload and encoding consumption, for the same reason and with one extra step: this one IS
     // keyed by user, so the controller resolves a project key back to the account that owns it
@@ -94,6 +104,19 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);
         Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
         Route::post('streams/{stream}/download', [StreamController::class, 'download']);
+
+        // The general read over `usage`: any breakdown the allowlist permits, rather than a new
+        // endpoint per question. Inside this group so that a project resolves when the caller has
+        // one — `ResolveProject` never aborts, it only makes the project available — which lets the
+        // controller demand project context for exactly the dimensions that need it (`video`,
+        // `ip`) and for no others.
+        Route::match(['get', 'post'], 'metrics', [MetricsController::class, 'query']);
+
+        // Per-title delivered bytes, for a batch of the project's videos. The one metrics endpoint
+        // inside this group, and deliberately: `usage` has no project column, but a video does, so
+        // the list is narrowed to the caller's own videos before the query runs. Leaving it with
+        // the unscoped metrics would have let any key read any project's per-title bandwidth.
+        Route::match(['get', 'post'], 'analytics/videos', [AnalyticsController::class, 'videos']);
 
         // Activity log (scoped to the project's videos)
         Route::get('activity-log', [ActivityLogController::class, 'index']);

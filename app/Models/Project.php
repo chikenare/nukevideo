@@ -57,4 +57,20 @@ class Project extends Model
     {
         return $this->hasMany(Template::class);
     }
+
+    /**
+     * The ULIDs this project actually owns, among those named.
+     *
+     * The tenant boundary of every metrics read that takes a list of videos. `usage` cannot enforce
+     * it — `video_ulid` there is a string parsed out of a public request path — so it has to be
+     * enforced before the query, and a ULID that belongs to someone else drops out silently rather
+     * than being refused: answering differently would say whether that video exists.
+     *
+     * @param  list<string>  $ulids
+     * @return list<string>
+     */
+    public function ownedVideoUlids(array $ulids): array
+    {
+        return $ulids === [] ? [] : $this->videos()->whereIn('ulid', $ulids)->pluck('ulid')->all();
+    }
 }

@@ -9,7 +9,6 @@
 
 use App\Jobs\DeleteResourceWithPath;
 use App\Models\Project;
-use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,26 +16,6 @@ use Illuminate\Support\Facades\Queue;
 use Laravel\Sanctum\Sanctum;
 
 uses(RefreshDatabase::class);
-
-function projectVideo(Project $project, string $status = 'completed'): Video
-{
-    $template = Template::create([
-        'name' => 'AV1',
-        'query' => [],
-        'user_id' => $project->user_id,
-        'project_id' => $project->id,
-    ]);
-
-    return Video::create([
-        'user_id' => $project->user_id,
-        'project_id' => $project->id,
-        'template_id' => $template->id,
-        'name' => 'Movie',
-        'duration' => 10,
-        'aspect_ratio' => '16:9',
-        'status' => $status,
-    ]);
-}
 
 beforeEach(function () {
     Queue::fake();
@@ -60,7 +39,7 @@ it('deletes a project through Eloquent so the video observer runs', function () 
 });
 
 it('refuses to delete a project while a video is still encoding', function () {
-    $video = projectVideo($this->project, 'running');
+    $video = projectVideo($this->project, status: 'running');
 
     $this->deleteJson("/api/projects/{$this->project->ulid}")->assertStatus(409);
 

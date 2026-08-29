@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { formatBytes } from '@/utils/byteFormatter'
+import { formatSecondsToDetailedTime } from '@/utils/timeFormatter'
 import { VisXYContainer, VisArea, VisAxis, VisLine } from '@unovis/vue'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -17,6 +18,20 @@ type BandwidthOverTime = App.Data.Analytics.BandwidthPointData
 const { data, loading, from, to, fetchAnalytics } = useAnalytics()
 
 const queue = ref<Record<string, number> | null>(null)
+
+// The panel's own words for the API's card keys. The server sends `total_bandwidth`, not
+// 'Total Bandwidth': display copy belongs to whoever is displaying it, and an API that shipped
+// English would make this page untranslatable and every other consumer map it away. Same pattern
+// as statusConfig below, which has always done it this way.
+const cardLabels: Record<string, string> = {
+  total_bandwidth: 'Total Bandwidth',
+  unique_ips: 'Unique IPs',
+  active_videos: 'Active Videos',
+  tracking_ids: 'Tracking IDs',
+  nodes: 'Nodes',
+  cpu_encoding: 'CPU Encoding',
+  upload_volume: 'Upload Volume',
+}
 
 const statusConfig: Record<string, { label: string; class: string }> = {
   pending: { label: 'Pending', class: 'border-yellow-500 text-yellow-500' },
@@ -44,24 +59,23 @@ const bwChartConfig = {
 } satisfies ChartConfig
 
 function formatDate(d: string) {
-  return new Date(d).toLocaleDateString('es', { month: 'short', day: 'numeric' })
+  return new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
 function pctOfTotal(bytes: number): string {
   if (!data.value) return '0%'
-  const total = data.value.cards.find(c => c.label === 'Total Bandwidth')?.value ?? 0
+  // Matched on the key, not on a display string. This used to look for 'Total Bandwidth' and every
+  // percentage column silently read 0% if that wording ever changed.
+  const total = data.value.cards.find(c => c.key === 'total_bandwidth')?.value ?? 0
   if (total === 0) return '0%'
   return `${((bytes / total) * 100).toFixed(1)}%`
 }
 
 function formatCardValue(card: AnalyticsCard): string {
-  switch (card.format) {
+  // The API says what the number is; how it reads is this page's business.
+  switch (card.unit) {
     case 'bytes': return formatBytes(card.value)
-    case 'seconds': {
-      if (card.value < 60) return `${card.value.toFixed(1)}s`
-      if (card.value < 3600) return `${(card.value / 60).toFixed(1)}m`
-      return `${(card.value / 3600).toFixed(1)}h`
-    }
+    case 'seconds': return formatSecondsToDetailedTime(card.value)
     default: return card.value.toLocaleString()
   }
 }
@@ -109,9 +123,9 @@ function formatCardValue(card: AnalyticsCard): string {
           </CardContent>
         </Card>
       </template>
-      <Card v-else v-for="card in data?.cards" :key="card.label">
+      <Card v-else v-for="card in data?.cards" :key="card.key">
         <CardHeader class="pb-2">
-          <CardTitle class="text-sm font-medium text-muted-foreground">{{ card.label }}</CardTitle>
+          <CardTitle class="text-sm font-medium text-muted-foreground">{{ cardLabels[card.key] ?? card.key }}</CardTitle>
         </CardHeader>
         <CardContent>
           <div class="text-2xl font-bold tracking-tight">{{ formatCardValue(card) }}</div>

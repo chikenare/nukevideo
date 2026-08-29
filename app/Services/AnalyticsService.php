@@ -2,31 +2,50 @@
 
 namespace App\Services;
 
+use App\Data\Analytics\MetricsQueryData;
+use App\Data\Analytics\TrackingIdBytesQueryData;
 use App\Data\Stream\DownloadStreamData;
+use App\Enums\MetricDimension;
+use App\Enums\UsageMetric;
+use App\Http\Controllers\Api\AnalyticsController;
+use App\Http\Controllers\Api\MetricsController;
 use App\Jobs\IngestBandwidthJob;
 use ClickHouseDB\Client;
+use ClickHouseDB\Query\Degeneration\Bindings;
+use Illuminate\Validation\ValidationException;
 
 class AnalyticsService
 {
     /**
-     * The metrics of `usage` that measure delivered bytes. `usage` holds every metric in one
-     * `value` column — bytes here, seconds for `encoding_cpu` — so a bandwidth query that did not
-     * constrain this would silently add seconds to bytes and return a number that means nothing.
-     *
-     * Interpolated rather than bound because the client cannot bind an `Array(String)` parameter,
-     * and because this is a class constant: no caller-supplied text ever reaches it. Every value a
-     * caller CAN influence stays a bound parameter below.
-     *
-     * `bandwidth_bytes` is the generic one: the zone-less fallback, and what the pre-merge history
-     * was carried over under ({@see database/clickhouse-migrations}).
+     * The top-N size every flat breakdown falls back to. Public and named because those sizes are
+     * request parameters now, so the controller and the queries would otherwise each carry their
+     * own copy of the same 10 and drift.
      */
-    private const BANDWIDTH_METRICS = "'streaming_bytes', 'download_bytes', 'asset_bytes', 'bandwidth_bytes'";
+    public const TOP_N_DEFAULT = 10;
+
+    /**
+     * The default for {@see bandwidthByVideo()}, smaller for a reason: that one is a time series,
+     * so its row count is the limit TIMES the length of the range, where the flat breakdowns
+     * return the limit itself.
+     */
+    public const SERIES_TOP_N_DEFAULT = 5;
 
     private Client $client;
 
     public function __construct()
     {
         $this->client = app(Client::class);
+    }
+
+    /**
+     * {@see UsageMetric::delivery()} as a quoted SQL list. Interpolated rather than bound: the set
+     * comes from an enum, so no caller-supplied text ever reaches it, and `select()` cannot carry a
+     * list anyway ({@see batchBytes()}). Every value a caller CAN influence stays a bound
+     * parameter.
+     */
+    private static function bandwidthMetricList(): string
+    {
+        return "'".implode("', '", UsageMetric::delivery())."'";
     }
 
     /**
@@ -43,7 +62,7 @@ class AnalyticsService
      */
     private function bandwidthFilter(string $from, string $to, ?string $video, ?string $trackingId, array &$params, ?string $metric = null): string
     {
-        $where = ['date >= {from:Date}', 'date <= {to:Date}', 'metric IN ('.self::BANDWIDTH_METRICS.')'];
+        $where = ['date >= {from:Date}', 'date <= {to:Date}', 'metric IN ('.self::bandwidthMetricList().')'];
         $params += ['from' => $from, 'to' => $to];
 
         // Narrowing to a single delivery metric — streaming alone, downloads alone. Bound, and
@@ -116,7 +135,7 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function topIps(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function topIps(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
         $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
@@ -130,7 +149,7 @@ class AnalyticsService
              WHERE {$where}
              GROUP BY ip
              ORDER BY bytes DESC
-             LIMIT {limit:UInt8}",
+             LIMIT {limit:UInt16}",
             $params
         );
 
@@ -144,8 +163,12 @@ class AnalyticsService
      *
      * Traffic that carried no id is reported under an empty tracking id rather than dropped — it
      * is real bandwidth, and hiding it would make the breakdown fail to add up to the total.
+     *
+     * `$limit` is a request parameter, so it is bound as UInt16 rather than the UInt8 the other
+     * top-N queries use: a caller with more than 255 tracking ids was silently reading a top 10
+     * and had no way to see it, let alone widen it.
      */
-    public function bandwidthByTrackingId(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function bandwidthByTrackingId(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
         $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
@@ -160,14 +183,219 @@ class AnalyticsService
              WHERE {$where}
              GROUP BY tracking_id
              ORDER BY bytes DESC
-             LIMIT {limit:UInt8}",
+             LIMIT {limit:UInt16}",
             $params
         );
 
         return $result->rows();
     }
 
-    public function topVideos(string $from, string $to, int $limit = 10, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    /**
+     * The general read over `usage`: sum `value` grouped by the dimensions the caller named.
+     *
+     * Every named endpoint on this service answers one question that was worth naming. This answers
+     * the ones that were not — and the ones nobody has asked yet, which for an API that other
+     * projects embed is most of them. What keeps it from being an open query surface is that the
+     * caller picks {@see MetricDimension} cases and value lists, never column names or SQL: the
+     * dimensions become a class-controlled expression each, and every value the caller supplies is
+     * a bound `Array(String)` parameter.
+     *
+     * Authorization is NOT here. Which dimensions a caller may name, and whether the query is
+     * pinned to its account or its project, is decided before the call ({@see MetricsController})
+     * and arrives as `$accountId` and already-narrowed lists. A service that also policed this
+     * would be the second place to get it wrong.
+     *
+     * The metric constraint is the one thing that is never optional. `value` is a shared Float64
+     * whose unit lives in the metric name, so an unconstrained sum adds encoding seconds to bytes;
+     * with no `$metrics` the default is the delivery set, exactly like every other read here.
+     *
+     * @param  list<MetricDimension>  $dimensions
+     * @param  array<string, list<string>>  $filters  keyed by `usage` column, values bound as arrays
+     * @param  list<string>  $metrics  empty for the delivery set
+     * @return array<int, array<string, mixed>>
+     */
+    public function query(string $from, string $to, array $dimensions, array $filters = [], array $metrics = [], ?int $accountId = null): array
+    {
+        $params = ['from' => $from, 'to' => $to];
+        $where = ['date >= {from:Date}', 'date <= {to:Date}'];
+
+        if ($metrics === []) {
+            $where[] = 'metric IN ('.self::bandwidthMetricList().')';
+        } else {
+            $where[] = 'metric IN {metrics:Array(String)}';
+            $params['metrics'] = array_values($metrics);
+        }
+
+        // Pinned to one account when the caller is not entitled to the instance. The column is the
+        // owning user resolved from the video at ingest, so it is the same boundary `/api/usage`
+        // enforces and it cannot be talked out of by anything in the URL.
+        if ($accountId !== null) {
+            $where[] = 'user_id = {account:UInt32}';
+            $params['account'] = $accountId;
+        }
+
+        // One bound array per filter. The column names are keys this class recognises, not caller
+        // text; an unknown one is ignored rather than concatenated.
+        foreach (['video_ulid', 'tracking_id', 'external_user_id'] as $column) {
+            $values = array_values(array_unique($filters[$column] ?? []));
+
+            if ($values !== []) {
+                // Named after the column it filters, so the statement stays readable in a slow
+                // query log. The prefix keeps it clear of ClickHouse's own parameter namespace.
+                $where[] = "{$column} IN {in_{$column}:Array(String)}";
+                $params["in_{$column}"] = $values;
+            }
+        }
+
+        $selection = implode(', ', array_map(fn (MetricDimension $d) => $d->selection(), $dimensions));
+        $grouping = implode(', ', array_map(fn (MetricDimension $d) => $d->alias(), $dimensions));
+        $predicate = implode(' AND ', $where);
+
+        // One row past the cap, so an oversized result can be refused rather than silently
+        // truncated ({@see MetricsQueryData::MAX_ROWS}).
+        $limit = MetricsQueryData::MAX_ROWS + 1;
+
+        $result = $this->client->selectWithParams(
+            "SELECT {$selection}, sum(value) AS value
+             FROM usage
+             WHERE {$predicate}
+             GROUP BY {$grouping}
+             ORDER BY {$grouping}
+             LIMIT {$limit}",
+            $params
+        );
+
+        $rows = $result->rows();
+
+        // Refused here rather than in each controller: every read that reaches ClickHouse through
+        // this method is capped by the same number, including the batch endpoints, whose daily
+        // granularity can otherwise multiply a thousand values by the length of a year.
+        if (count($rows) > MetricsQueryData::MAX_ROWS) {
+            throw ValidationException::withMessages([
+                'dimensions' => 'This query returns more than '.MetricsQueryData::MAX_ROWS
+                    .' rows. Narrow the date range, drop a dimension, or filter the lists.',
+            ]);
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Delivered bytes for a batch of values on one dimension of `usage`, split by delivery metric.
+     *
+     * This is the billing read, and it exists in the shape it does because the dashboard queries
+     * answer the wrong question for an invoice. {@see bandwidthByTrackingId()} and
+     * {@see topVideos()} answer "who used the most", which is a top-N; billing needs the totals for
+     * the values the CALLER names, all of them, whether or not they are in anyone's top N. Doing
+     * that through {@see summary()} means one HTTP call and one full `AnalyticsData` per value per
+     * period, to read a single number out of each.
+     *
+     * It is also the cheaper shape for ClickHouse. Neither `tracking_id` nor `video_ulid` is near
+     * the front of the sorting key, so a filter on one alone is never a prefix scan — it is
+     * partition pruning and then a scan. N single-value queries re-read the same partitions N times
+     * over, where this reads them once.
+     *
+     * Split by metric rather than pre-summed, because streaming and the downloads that reupload to
+     * a viewer's own file host are not the same line on an invoice; a caller that wants one number
+     * adds the rows up, and one that pre-summed could never take them apart again. Values with no
+     * traffic in the range produce no row: absence is the answer, and padding a thousand-value
+     * request with zeros would make most of the response filler.
+     *
+     * `$daily` adds the date to the grouping, for a period a subscriber joined or left halfway
+     * through. Opt-in, because it multiplies the response by the length of the range.
+     *
+     * `selectWithParams()`, not `select()`: the latter routes bindings through {@see Bindings},
+     * whose URL params go through `http_build_query`, so a list arrives as
+     * `param_batch[0]=…` and ClickHouse never sees the parameter at all. This one converts the
+     * list into an `Array(String)` literal for server-side substitution, which is what keeps caller
+     * text out of the statement — these values arrive over HTTP like anything else.
+     *
+     * No LIMIT, deliberately: the result is bounded by construction at
+     * `count($values) × count(UsageMetric::delivery())`, times the range when `$daily`, and the
+     * request caps the list ({@see TrackingIdBytesQueryData}). A LIMIT here could only truncate an
+     * answer the caller asked for in full, which for billing is worse than a large response.
+     *
+     * @param  string  $column  the dimension to group on. A class-controlled column name, never
+     *                          caller input — the caller chooses the endpoint, not the column.
+     * @param  list<string>  $values
+     * @return array<int, array{metric: string, bytes: float, date?: string}>
+     */
+    /**
+     * Delivered bytes for a batch of tracking ids — the ids an integrator minted its playback and
+     * download links with ({@see DownloadStreamData}), which is how it meters a per-subscriber
+     * bandwidth quota.
+     *
+     * Instance-wide, like every other read of `usage`: the table has no project column, and the
+     * scoping that does apply is that a caller can only get numbers for ids it can name. Passing
+     * `''` among them asks for the traffic whose id did not survive the round trip through the CDN
+     * log, which is how a caller reconciles its own ids against the total.
+     *
+     * @param  list<string>  $trackingIds
+     * @return array<int, array{tracking_id: string, metric: string, bytes: float, date?: string}>
+     */
+    public function bytesByTrackingIds(string $from, string $to, array $trackingIds, ?string $metric = null, bool $daily = false): array
+    {
+        return $this->batch(MetricDimension::TRACKING_ID, 'tracking_id', $from, $to, $trackingIds, $metric, $daily);
+    }
+
+    /**
+     * Delivered bytes for a batch of videos, by ULID — the per-title reporting read.
+     *
+     * The caller is expected to have narrowed the list to videos it owns before calling
+     * ({@see AnalyticsController::videos()}), which is what makes this the one batch read that IS
+     * scoped to a project. `usage` cannot do that scoping itself: it has no project column, only a
+     * `video_ulid` written from a public request path.
+     *
+     * @param  list<string>  $videoUlids
+     * @return array<int, array{video: string, metric: string, bytes: float, date?: string}>
+     */
+    public function bytesByVideos(string $from, string $to, array $videoUlids, ?string $metric = null, bool $daily = false): array
+    {
+        // The dimension aliases itself to `video`, the name the other video breakdowns already
+        // answer with ({@see topVideos()}), so one payload does not spell it two ways.
+        return $this->batch(MetricDimension::VIDEO, 'video_ulid', $from, $to, $videoUlids, $metric, $daily);
+    }
+
+    /**
+     * The shared body of the two batch reads: one dimension, its own values, split by metric.
+     *
+     * Built on {@see query()} rather than beside it. These endpoints predate the general one and
+     * had their own copy of the same SELECT, WHERE and GROUP BY — two query builders over one table
+     * is how the metric constraint ends up on only one of them. What is left here is what is
+     * genuinely theirs: the empty short-circuit, and `value` renamed to `bytes`, which is what their
+     * published response calls it and what a delivery-only read can honestly call it.
+     *
+     * @param  string  $column  the `usage` column the values are matched against
+     * @param  list<string>  $values
+     * @return array<int, array<string, mixed>>
+     */
+    private function batch(MetricDimension $dimension, string $column, string $from, string $to, array $values, ?string $metric, bool $daily): array
+    {
+        if ($values === []) {
+            return [];
+        }
+
+        $dimensions = $daily
+            ? [$dimension, MetricDimension::METRIC, MetricDimension::DATE]
+            : [$dimension, MetricDimension::METRIC];
+
+        $rows = $this->query(
+            $from,
+            $to,
+            $dimensions,
+            [$column => $values],
+            $metric === null || $metric === '' ? [] : [$metric],
+        );
+
+        return array_map(function (array $row) {
+            $row['bytes'] = $row['value'];
+            unset($row['value']);
+
+            return $row;
+        }, $rows);
+    }
+
+    public function topVideos(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
         $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
@@ -183,14 +411,14 @@ class AnalyticsService
              WHERE {$where} AND video_ulid != ''
              GROUP BY video
              ORDER BY bytes DESC
-             LIMIT {limit:UInt8}",
+             LIMIT {limit:UInt16}",
             $params
         );
 
         return $result->rows();
     }
 
-    public function bandwidthByVideo(string $from, string $to, int $limit = 5, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function bandwidthByVideo(string $from, string $to, int $limit = self::SERIES_TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
     {
         $params = ['limit' => $limit];
         $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
@@ -211,7 +439,7 @@ class AnalyticsService
                    WHERE {$where} AND video_ulid != ''
                    GROUP BY video_ulid
                    ORDER BY sum(value) DESC
-                   LIMIT {limit:UInt8}
+                   LIMIT {limit:UInt16}
                )
              GROUP BY date, video
              ORDER BY date, video",
@@ -239,10 +467,10 @@ class AnalyticsService
         $result = $this->client->select(
             'SELECT
                 node_id,
-                sumIf(value, metric IN ('.self::BANDWIDTH_METRICS.')) AS delivered_bytes,
+                sumIf(value, metric IN ('.self::bandwidthMetricList().')) AS delivered_bytes,
                 sumIf(value, metric = {origin:String}) AS origin_bytes,
-                sumIf(value, metric IN ('.self::BANDWIDTH_METRICS.") AND cache = 'HIT') AS hit_bytes,
-                sumIf(value, metric IN (".self::BANDWIDTH_METRICS.") AND cache NOT IN ('', 'BYPASS', 'OFF')) AS cached_bytes
+                sumIf(value, metric IN ('.self::bandwidthMetricList().") AND cache = 'HIT') AS hit_bytes,
+                sumIf(value, metric IN (".self::bandwidthMetricList().") AND cache NOT IN ('', 'BYPASS', 'OFF')) AS cached_bytes
              FROM usage
              WHERE date >= {from:Date} AND date <= {to:Date} AND node_id > 0
              GROUP BY node_id
@@ -311,7 +539,7 @@ class AnalyticsService
         return $usage;
     }
 
-    public function topExternalUsers(string $from, string $to, ?int $userId = null, int $limit = 10): array
+    public function topExternalUsers(string $from, string $to, ?int $userId = null, int $limit = self::TOP_N_DEFAULT): array
     {
         $where = "metric = 'upload_bytes' AND date >= {from:Date} AND date <= {to:Date} AND external_user_id != ''";
         $params = ['from' => $from, 'to' => $to, 'limit' => $limit];
@@ -327,7 +555,7 @@ class AnalyticsService
              WHERE {$where}
              GROUP BY external_user_id
              ORDER BY bytes DESC
-             LIMIT {limit:UInt8}",
+             LIMIT {limit:UInt16}",
             $params
         );
 

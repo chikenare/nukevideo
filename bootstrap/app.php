@@ -16,6 +16,12 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->statefulApi();
+
+        // No `throttleApi()`, deliberately. A rate limit on the whole api group also lands on the
+        // S3 multipart upload routes, which sign ONE request per part — a 5 GB source in 5 MB parts
+        // is a thousand of them for a single upload — so any per-minute ceiling that leaves room
+        // for uploading breaks nothing else, and any ceiling that protects anything breaks uploads.
+        // Rate limiting, if it is wanted, belongs on the specific routes that need it.
         $middleware->trustProxies(at: '*');
         $middleware->alias([
             'resolve.project' => ResolveProject::class,

@@ -2,11 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Enums\UsageMetric;
 use App\Http\Controllers\Controller;
-use App\Models\Project;
 use ClickHouseDB\Client;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class UsageController extends Controller
 {
@@ -15,13 +16,21 @@ class UsageController extends Controller
         $request->validate([
             'from' => 'required|date_format:Y-m-d',
             'to' => 'required|date_format:Y-m-d',
-            'metric' => 'nullable|string',
-            'external_user_id' => 'nullable|string',
+            // Constrained to the catalogue, not free text. `value` is one shared column whose
+            // unit lives in the metric name, so an unrecognised name used to answer with an empty
+            // result — which, for a caller building an invoice out of this, reads as zero rather
+            // than as a typo. `origin_bytes` is left out on purpose: it is booked under account 0,
+            // which no account-scoped read can ever be, so accepting it would only ever answer
+            // empty for a different reason.
+            'metric' => ['nullable', 'string', Rule::in(UsageMetric::account())],
+            // The same width the column and the video's own `external_user_id` are validated to,
+            // so a value this endpoint accepts is one an upload could actually have stored.
+            'external_user_id' => 'nullable|string|max:255',
         ]);
 
         $where = ['user_id = {user_id:UInt32}', 'date >= {from:Date}', 'date <= {to:Date}'];
         $params = [
-            'user_id' => $this->accountId($request),
+            'user_id' => $request->accountId(),
             'from' => $request->input('from'),
             'to' => $request->input('to'),
         ];
@@ -48,21 +57,5 @@ class UsageController extends Controller
         )->rows();
 
         return response()->json(['data' => $rows]);
-    }
-
-    /**
-     * The account whose usage this token may read.
-     *
-     * `usage` is keyed by `user_id` in ClickHouse, and a project API key authenticates AS the
-     * project — `$request->user()` is a Project, whose `id` is a project id from a different
-     * sequence entirely. Reading it as a user id would not fail; it would quietly answer with
-     * whichever account happens to share that number, or with an empty result. Resolve the owner
-     * instead.
-     */
-    private function accountId(Request $request): int
-    {
-        $caller = $request->user();
-
-        return $caller instanceof Project ? (int) $caller->user_id : (int) $caller->id;
     }
 }

@@ -159,10 +159,13 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   resolved. Every resource query starts there
   (`$request->project()->videos()->where('ulid', $ulid)->firstOrFail()`). Looking a resource up by
   ULID without that scoping is a cross-tenant leak, not a style slip.
-- **Routes** (`routes/api.php`, flat, **unversioned**): three groups inside `auth:sanctum` +
-  `throttle:api` — `no-project-key` (account-wide), `resolve.project` (project resources) and
+- **Routes** (`routes/api.php`, flat, **unversioned**): three groups inside `auth:sanctum` —
+  `no-project-key` (account-wide), `resolve.project` (project resources) and
   `['no-project-key', EnsureAdmin::class]` (admin). Picking the wrong group is a security bug: a
-  project API key authenticates **as the project**.
+  project API key authenticates **as the project**. There is **no API-wide rate limit**, and that is
+  deliberate rather than an oversight: `throttleApi()` would also cover the S3 multipart routes,
+  which sign one request per part — a thousand of them for a single large upload — so any ceiling
+  loose enough to upload through protects nothing. `throttle:login` is the only limiter.
 - **Jobs**: always set `$tries` and `$backoff` deliberately, with a comment on the reasoning; heavy
   ones also set `$timeout`. The queue goes in a class constant
   (`private const QUEUE = 'orchestration';`) and dispatch goes through `->onQueue(self::QUEUE)`.
@@ -218,6 +221,13 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   lines it ships, and Bunny is covered by `bunny:ingest-logs`.
 - Retrying a video takes more than `status = pending`: delete its `job_batches` row first (the
   chunks survive, so the retry is a cache hit).
+- **`Project` extends `Model`, not `Authenticatable`.** A project API key authenticates *as the
+  project*, so `$request->user()` can be a Project: `getAuthIdentifier()` fatals on it, and its `id`
+  comes from a different sequence than a user's, so reading it as a user id silently answers with
+  another account's data. Use the `$request->accountId()` and `$request->isAdmin()` macros.
+- The ClickHouse client cannot bind an array through `select()` — the bindings go through
+  `http_build_query`, so `param_x[0]=…` never reaches the server. Use `selectWithParams()` for any
+  `{name:Array(String)}` parameter.
 
 ## Rules for Claude
 
