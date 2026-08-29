@@ -186,9 +186,9 @@ storyboardUrl: string,
 };
 namespace Analytics {
 export type AnalyticsCardData = {
-label: string,
+key: string,
 value: number,
-format: string,
+unit: App.Enums.MetricUnit,
 };
 export type AnalyticsData = {
 cards: App.Data.Analytics.AnalyticsCardData[],
@@ -210,6 +210,7 @@ date: string,
 bytes: number,
 sessions: number,
 };
+export type BatchQueryData = object;
 export type EdgeDeliveryData = {
 nodeId: number,
 deliveredBytes: number,
@@ -224,6 +225,16 @@ export type EncodingPointData = {
 date: string,
 device: string,
 seconds: number,
+};
+export type MetricsQueryData = {
+from: string,
+to: string,
+dimensions: string[],
+metrics: string[],
+videos: string[],
+trackingIds: string[],
+externalUserIds: string[],
+shape: App.Enums.MetricShape,
 };
 export type TopExternalUserData = {
 externalUserId: string,
@@ -246,6 +257,33 @@ externalResourceId: string | null,
 bytes: number,
 sessions: number,
 uniqueIps: number,
+};
+export type TrackingIdBytesData = {
+trackingId: string,
+metric: string,
+bytes: number,
+date: string | null,
+};
+export type TrackingIdBytesQueryData = {
+from: string,
+to: string,
+trackingIds: string[],
+metric: string | null,
+granularity: App.Enums.UsageGranularity,
+includeUnattributed: boolean,
+};
+export type VideoBytesData = {
+video: string,
+metric: string,
+bytes: number,
+date: string | null,
+};
+export type VideoBytesQueryData = {
+from: string,
+to: string,
+videos: string[],
+metric: string | null,
+granularity: App.Enums.UsageGranularity,
 };
 }
 namespace ApiToken {
@@ -384,8 +422,13 @@ externalResourceId?: string | null,
 }
 namespace Enums {
 export type CdnDriver = 'self_hosted' | 'bunny';
+export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'node_id' | 'cache';
+export type MetricShape = 'long' | 'wide';
+export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';
 export type NodeType = 'worker' | 'proxy';
+export type UsageGranularity = 'total' | 'daily';
+export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
 export type VideoStatus = 'pending' | 'failed' | 'running' | 'completed' | 'uploading' | 'downloading';
 }
 }

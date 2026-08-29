@@ -67,7 +67,7 @@ downloads stay attributed. A project key that omits it leaves the traffic unattr
 viewer is the integrator's job.
 
 Read the bytes back per id with `topTrackingIds` on the
-[Analytics API](/api/users#bandwidth-by-tracking-id), optionally narrowed to one video. The id is
+[Analytics API](/api/analytics#bandwidth-by-tracking-id), optionally narrowed to one video. The id is
 attributed from the CDN's access log, so it lands **after** the transfer, not with the link: a
 self-hosted edge reports within seconds, a Bunny pull zone within about seven minutes.
 

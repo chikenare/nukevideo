@@ -1,0 +1,493 @@
+# Analytics
+
+Delivery bandwidth, viewer IPs, encoding time and account consumption, read from ClickHouse. This is
+the read side of the CDN access logs: the self-hosted edges ship them through Vector and Bunny pull
+zones are polled by `bunny:ingest-logs` ([CDN & Delivery](/guide/cdn#how-the-log-ingestion-works)),
+and both land in the same `usage` table.
+
+Everything on this page is readable with **any authenticated token** — a personal access token or a
+[project API key](/api/authentication) — except [per-node delivery](#per-node-delivery), which is
+admin-only. Reading these numbers back is what an integrating backend holds a key for.
+
+::: warning Most figures are instance-wide
+`usage` has no project column, so bandwidth, videos and viewer IPs are aggregated across the **whole
+instance**, not scoped to the calling project: a project key sees totals that include other projects'
+traffic. NukeVideo is meant to sit behind your own backend, reached server to server with a key that
+never leaves it — do not proxy these endpoints to a browser or to an untrusted tenant.
+
+Two endpoints are exceptions, and they are the ones to reach for when the answer has to be safe to
+pass on: [batch bandwidth by video](#batch-bandwidth-by-video) is scoped to your project, and
+[usage](#usage) is scoped to your account.
+:::
+
+## The metric catalogue
+
+Every number on this page comes out of one `value` column whose unit lives in the **metric name**.
+
+| Metric | Unit | Description |
+|--------|------|-------------|
+| `streaming_bytes` | bytes | Delivered to players — manifests and CMAF segments |
+| `download_bytes` | bytes | Delivered through [track download links](/api/streams#download-a-track) |
+| `asset_bytes` | bytes | Thumbnails and storyboards |
+| `bandwidth_bytes` | bytes | Delivery that predates the streaming/download split, or whose path zone could not be read |
+| `upload_bytes` | bytes | Source file size of uploaded videos |
+| `encoding_cpu` | **seconds** | CPU encoding time |
+| `origin_bytes` | bytes | What an edge had to fetch from S3 to serve a request. Booked under the operator, never an account — it surfaces only through [per-node delivery](#per-node-delivery) |
+
+::: warning Never sum across metrics
+`encoding_cpu` is seconds and everything else is bytes. Always constrain or group by `metric` —
+summing across them adds seconds to bytes and returns a number that means nothing. Every endpoint
+here refuses a metric name it does not recognise rather than answering with an empty result, because
+an empty result on an invoice reads as zero rather than as a typo.
+:::
+
+The first four are the **delivery metrics**: the set every bandwidth endpoint below is constrained
+to, and the only values their `metric` parameter accepts.
+
+## Delivery Dashboard
+
+Everything the panel's analytics screen draws, in one payload: totals, a bandwidth time series and
+several top-N breakdowns.
+
+```
+GET /api/analytics?from=2026-04-01&to=2026-04-30
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from` | date | Yes | Start date (`YYYY-MM-DD`), inclusive |
+| `to` | date | Yes | End date (`YYYY-MM-DD`), inclusive |
+| `user_id` | integer | No | **Administrators only.** Whose *upload* volume to report in `topExternalUsers` and the upload card. Any other caller always reads its own account and this is ignored |
+| `video` | string | No | Narrow every bandwidth series to one video ULID |
+| `tracking_id` | string | No | Narrow every bandwidth series to one tracking id. Pass it **empty** (`?tracking_id=`) to isolate traffic that carried no id |
+| `metric` | string | No | Narrow to one delivery metric. Omit for all of them |
+| `limit` | integer | No | How many rows each flat top-N list returns — `topIps`, `topVideos`, `topTrackingIds`, `topExternalUsers`. 1–1000, defaults to `10` |
+| `video_series_limit` | integer | No | How many videos `bandwidthByVideo` follows. 1–100, defaults to `5`. Smaller because that one is a time series: its row count is this **times** the length of the range |
+
+`video` and `tracking_id` are matched against columns written from CDN access logs, so they are
+validated to what those columns can hold — a 26-character ULID and up to 64 characters of
+`A-Z a-z 0-9 _ -` respectively. Anything else responds `422`.
+
+**Response:**
+
+```json
+{
+  "data": {
+    "cards": [{ "key": "total_bandwidth", "value": 5368709120, "unit": "bytes" }],
+    "bandwidthOverTime": [{ "date": "2026-04-16", "bytes": 1073741824, "sessions": 42 }],
+    "topIps": [{ "ip": "203.0.113.7", "bytes": 734003200, "sessions": 3 }],
+    "topVideos": [{ "video": "01J...", "externalResourceId": "", "bytes": 2147483648, "sessions": 88, "uniqueIps": 71 }],
+    "topExternalUsers": [{ "externalUserId": "user-123", "bytes": 52428800 }],
+    "topTrackingIds": [{ "trackingId": "customer-42", "bytes": 943718400, "videos": 3, "uniqueIps": 11 }],
+    "bandwidthByVideo": [{ "date": "2026-04-16", "video": "01J...", "bytes": 536870912 }],
+    "encodingOverTime": [{ "date": "2026-04-16", "device": "cpu", "seconds": 1820.5 }]
+  }
+}
+```
+
+::: tip These lists are top-N, not breakdowns
+Every `top*` list is ordered by bytes and cut at `limit`. To get the totals for values **you** name —
+all of them, whether or not they rank — use [`/api/metrics`](#metrics-query) or the batch endpoints
+below. That is the difference between a dashboard and an invoice.
+:::
+
+::: warning The identifier lists are administrator-only
+`topIps`, `topVideos`, `topTrackingIds` and `bandwidthByVideo` come back **empty** for anyone but an
+administrator, and that is not an oversight. A total is instance-wide and names nobody, which is the
+trade this endpoint has always made; a *list of identifiers* is a different thing — unscoped, those
+four enumerate other tenants' viewer addresses, viewer labels and video ULIDs.
+
+Read the same numbers scoped instead: [`/api/metrics`](#metrics-query) and
+[batch bandwidth by video](#batch-bandwidth-by-video) answer them for values you own or can name.
+
+`cards`, `bandwidthOverTime` and `encodingOverTime` are unaffected — they are aggregates.
+:::
+
+#### Card keys
+
+`key` is a stable machine name and `unit` says what the number is; neither is display copy. The API
+sends no labels, in any language — those belong to whatever is drawing them.
+
+| Key | Unit |
+|-----|------|
+| `total_bandwidth` | `bytes` |
+| `unique_ips` | `count` |
+| `active_videos` | `count` |
+| `tracking_ids` | `count` |
+| `nodes` | `count` |
+| `cpu_encoding` | `seconds` |
+| `upload_volume` | `bytes` |
+
+## Bandwidth by tracking id
+
+`topTrackingIds` is the read side of the `tracking_id` you mint links with
+([Download a Track](/api/streams#download-a-track)) — it is how an external project reports the
+transfers it handed to each of its own customers.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `trackingId` | string | The id the link was minted for. **Empty** for traffic that has none — links minted by a project key without a `tracking_id`, and links whose token → id mapping was no longer available at ingest time. Links minted from a session or personal token without a `tracking_id` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
+| `bytes` | number | Bytes served |
+| `videos` | integer | Distinct videos this id pulled |
+| `uniqueIps` | integer | Distinct client IPs. Approximate when the CDN anonymizes log IPs |
+
+::: tip Bytes are never lost to a bad label
+A tracking id that does not survive the round trip through the CDN log costs its attribution, not
+its bytes: the transfer is still counted, under the empty id. Bandwidth totals are always complete,
+whatever happens to the labels on top of them.
+:::
+
+To read one customer's traffic on one video across a month:
+
+```
+GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&tracking_id=customer-42
+```
+
+Every bandwidth series in the response is narrowed by the same filter, so the whole payload describes
+that one slice. `topExternalUsers` and the encoding series come from upload metrics instead and are
+not affected.
+
+## Metrics query
+
+One endpoint for any breakdown of `usage` you need, so that the next question you have does not
+require a new endpoint. Sum delivered bytes — or upload volume, or encoding seconds — grouped by the
+dimensions you name.
+
+```
+GET  /api/metrics?from=2026-04-01&to=2026-04-30&dimensions[]=date&dimensions[]=metric&tracking_ids[]=customer-42
+POST /api/metrics
+```
+
+**Request Body:**
+
+```json
+{
+  "from": "2026-04-01",
+  "to": "2026-04-30",
+  "dimensions": ["date", "metric", "tracking_id"],
+  "tracking_ids": ["customer-42", "reupload-9f1c"],
+  "metrics": ["streaming_bytes", "download_bytes"],
+  "shape": "long"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `from`, `to` | date | The range, inclusive. Required |
+| `dimensions` | string[] | What to group by, from the table below. Required, at least one |
+| `metrics` | string[] | Which metrics to include. Defaults to the four delivery metrics |
+| `videos` | string[] | Narrow to these video ULIDs, up to 1000. Silently intersected with the ones your project owns |
+| `tracking_ids` | string[] | Narrow to these tracking ids, up to 1000 |
+| `external_user_ids` | string[] | Narrow to these customer labels, up to 1000 |
+| `shape` | string | `long` (default) or `wide` — see [Shapes](#shapes) |
+
+### Dimensions, and what each one requires
+
+The dimensions of `usage` are **not equally shareable**, and that is what the rules below are about.
+The table is instance-wide — it has no project column — so each dimension can only be offered as far
+as it can be scoped.
+
+| Dimension | Who | What it requires |
+|-----------|-----|------------------|
+| `date` | anyone | — |
+| `metric` | anyone | — |
+| `external_user_id` | anyone | Pins the whole query to your account, automatically |
+| `video` | anyone | Project context **and** a `videos` list of your own titles |
+| `ip` | anyone | Project context **and** a `videos` list — viewer addresses are readable only for titles you own |
+| `tracking_id` | anyone | A `tracking_ids` list — nothing in the table says whose an id is, so you may only read the ones you name |
+| `node_id` | administrators | — |
+| `cache` | administrators | — |
+
+Asking for one without what it requires responds `422` and says which field is missing. Asking for a
+dimension you are not entitled to responds `422` and lists the ones you are.
+
+::: tip Why `ip` is the strictest
+A viewer's address is personal data, and in `usage` it belongs to nobody in particular — it is a
+viewer of *some* video on a shared table. The only way to establish that a row is yours is through a
+video you own, which is why that dimension asks for a list of titles rather than answering for the
+instance.
+:::
+
+::: warning Account pinning is automatic, not optional
+Grouping by `external_user_id`, filtering by `external_user_ids`, or asking for `upload_bytes` or
+`encoding_cpu` adds `user_id = <your account>` to the query. Those numbers are booked per account,
+and `external_user_id` is *your* customer label — reporting them across accounts would hand one
+tenant another's customers. Delivered bytes carry no such pin: they stay instance-wide.
+:::
+
+### Shapes
+
+```json
+{ "data": [
+  { "date": "2026-04-16", "metric": "streaming_bytes", "value": 943718400 }
+] }
+```
+
+`long` (the default) is one row per (dimensions, metric) — the honest shape of the query, and what
+you want when summing for an invoice. Every row carries its `metric`, and **the unit follows the
+metric**: `encoding_cpu` is seconds, everything else is bytes. Never sum across them.
+
+`wide` pivots the metric out into one field per series and fills the days that produced no traffic
+with zero:
+
+```json
+{ "data": [
+  { "date": "2026-04-15", "streaming_bytes": 0, "download_bytes": 0 },
+  { "date": "2026-04-16", "streaming_bytes": 943718400, "download_bytes": 52428800 }
+] }
+```
+
+That is shape, not presentation — there are no labels, formats or colours anywhere in this API. It
+is what a charting library asks for: one accessor per series, and a dense x axis, because a line
+drawn across a day ClickHouse simply omitted interpolates traffic that never happened. A field
+missing from a row means zero.
+
+Zero fill only applies to series that appear at all: a tracking id with no traffic anywhere in the
+range still gets no rows, because absence is the answer everywhere in this API.
+
+::: warning Bounded, and it will say so
+A query returning more than **50,000** rows responds `422` rather than a truncated answer, and so
+does a `wide` fill that would expand past it. Shorten the range, drop a dimension, or narrow a list.
+:::
+
+## Batch bandwidth by tracking id
+
+`topTrackingIds` answers *who used the most*, which is a dashboard question. Billing a per-subscriber
+bandwidth quota is the opposite one: the totals for the ids **you** name, all of them, whether or not
+they rank. This endpoint answers that in one call.
+
+```
+GET  /api/analytics/tracking-ids?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42&tracking_ids[]=reupload-9f1c
+POST /api/analytics/tracking-ids
+```
+
+Both verbs run the same read and take the same fields — as a query string or as a JSON body. Use
+`POST` once the list outgrows a URL: a thousand 64-character ids is roughly 80 KB of query string,
+past what most proxies will put in a request line. Nothing is written either way.
+
+**Request Body:**
+
+```json
+{
+  "from": "2026-04-01",
+  "to": "2026-04-30",
+  "tracking_ids": ["customer-42", "reupload-9f1c"],
+  "metric": "streaming_bytes",
+  "granularity": "total",
+  "include_unattributed": false
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `from` | date | Start date (`YYYY-MM-DD`), inclusive. Required |
+| `to` | date | End date (`YYYY-MM-DD`), inclusive. Required |
+| `tracking_ids` | string[] | The ids to report on, 1 to 1000 of them. Each is up to 64 characters of `A-Z a-z 0-9 _ -` — the same alphabet the links are minted with. Duplicates are folded; an empty or null entry is rejected |
+| `metric` | string | Optional. One delivery metric. Omit to get every one |
+| `granularity` | string | `total` (default) for one row per id and metric over the whole range, or `daily` to add the date |
+| `include_unattributed` | boolean | Adds the traffic whose id did not survive the CDN log, under an empty `trackingId`. This is how you reconcile the sum of your own ids against the instance total |
+
+**Response:**
+
+```json
+{
+  "data": [
+    { "trackingId": "customer-42", "metric": "streaming_bytes", "bytes": 943718400, "date": null },
+    { "trackingId": "customer-42", "metric": "download_bytes", "bytes": 52428800, "date": null },
+    { "trackingId": "reupload-9f1c", "metric": "download_bytes", "bytes": 7, "date": null }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `trackingId` | string | One of the ids you asked about, or empty for the unattributed bucket |
+| `metric` | string | The delivery metric these bytes were served under |
+| `bytes` | number | Bytes served for that id under that metric |
+| `date` | string \| null | The day, on a `daily` read. `null` when the row is the total for the whole range — the field is always present, so your type does not change shape with the query |
+
+::: warning An id with no traffic gets no row
+Ids that moved nothing in the range are **omitted**, not returned as zero — a thousand-id request
+would otherwise be mostly padding. Read a missing id as zero bytes, not as an error.
+:::
+
+The breakdown is per metric rather than pre-summed, because streaming and the downloads that reupload
+to a viewer's own file host are usually not the same line on an invoice. One row per
+(id, metric) pair — or per (id, metric, day) when `granularity=daily` — so add them up for a single
+total.
+
+This endpoint is **not** scoped to a project. It reports on the ids you name, so name only your own.
+
+## Batch bandwidth by video
+
+The same read on the other dimension: per-title delivery for a list of your videos.
+
+```
+GET  /api/analytics/videos?from=2026-04-01&to=2026-04-30&videos[]=01J...&videos[]=01K...
+POST /api/analytics/videos
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `from` | date | Start date (`YYYY-MM-DD`), inclusive. Required |
+| `to` | date | End date (`YYYY-MM-DD`), inclusive. Required |
+| `videos` | string[] | Video ULIDs, 1 to 1000 of them. Duplicates are folded |
+| `metric` | string | Optional. One delivery metric |
+| `granularity` | string | `total` (default) or `daily` |
+
+**Response:**
+
+```json
+{
+  "data": [
+    { "video": "01J...", "metric": "streaming_bytes", "bytes": 2147483648, "date": null },
+    { "video": "01J...", "metric": "asset_bytes", "bytes": 79996, "date": null }
+  ]
+}
+```
+
+::: tip This one IS scoped to your project
+Unlike every other endpoint on this page, it requires project context — the `X-Project-Ulid` header,
+or a project API key, which carries its own. The list is narrowed to videos your project owns before
+the query runs, so the answer is safe to pass on to a tenant. Without project context it responds
+`400`.
+
+A ULID that is not yours and one that moved no bytes produce the same answer — **no row** — on
+purpose: answering differently would turn this into a way to find out which videos exist on the
+instance.
+:::
+
+## Queue
+
+How many videos are waiting, running or failed right now. Not a ClickHouse read — it counts rows in
+the videos table, instance-wide.
+
+```
+GET /api/analytics/queue
+```
+
+**Response:**
+
+```json
+{ "data": { "pending": 3, "running": 1, "failed": 0 } }
+```
+
+## Per-node delivery
+
+What each proxy node served, what it had to fetch from S3 to do it, and how much of what it served
+came out of its cache. The three numbers that say whether a node needs more disk (ratio falling with
+a full pool) or the fleet needs another node (ratio fine, egress at the node's limit).
+
+```
+GET /api/analytics/edges?from=2026-04-01&to=2026-04-30
+```
+
+::: warning Admin only
+This one names the operator's infrastructure and its origin egress, which no project key has any
+business reading. A project key gets `403`.
+:::
+
+**Response:**
+
+```json
+{
+  "data": [
+    { "nodeId": 3, "deliveredBytes": 5368709120, "originBytes": 536870912, "hitRatio": 0.9 }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `nodeId` | integer | The node. Rows that predate the dimension (node 0) are left out |
+| `deliveredBytes` | number | Bytes the node served |
+| `originBytes` | number | Bytes it fetched from S3 to serve them |
+| `hitRatio` | number \| null | Share of cacheable bytes served from cache. `null` when the node served nothing the cache had a say in — no traffic, or only manifests and downloads, which are `BYPASS` and `OFF` and are left out rather than counted as misses |
+
+## Usage
+
+Consumption for the authenticated **account**, across every metric — the one read on this page that
+is scoped rather than instance-wide, and the one to bill from when your attribution happens at upload
+time rather than at link-mint time.
+
+```
+GET /api/usage?from=2026-04-01&to=2026-04-30&metric=streaming_bytes
+```
+
+A project key resolves to the account that **owns** the project, so the figures it returns are that
+account's across all of its projects — not the calling project's alone.
+
+**Query Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from` | date | Yes | Start date (`YYYY-MM-DD`) |
+| `to` | date | Yes | End date (`YYYY-MM-DD`) |
+| `metric` | string | No | One metric from the catalogue above, except `origin_bytes`. An unrecognised name responds `422` |
+| `external_user_id` | string | No | One of your own customer labels, up to 255 characters |
+
+**Response:**
+
+```json
+{
+  "data": [
+    { "metric": "streaming_bytes", "external_user_id": "user-123", "value": 52428800, "date": "2026-04-16" }
+  ]
+}
+```
+
+Rows are grouped by `(metric, external_user_id, date)` — always daily, and always broken down by
+customer, whether or not you filtered to one.
+
+### Which axis to bill from
+
+There are two ways to attribute delivered bytes to one of your users, and they are not
+interchangeable:
+
+| | `external_user_id` (this endpoint) | `tracking_id` ([batch](#batch-bandwidth-by-tracking-id)) |
+|---|---|---|
+| Where it comes from | The `externalUserId` you set on the video at [upload](/api/videos#upload-metadata), resolved server-side from the video at ingest | The id you mint each playback or download link with, recovered from the CDN log through the link's token |
+| Can it be lost? | No — nothing about it travels in the URL | Yes — a mapping that has expired leaves the traffic in the unattributed bucket |
+| Grain | Per customer | Per link, so per viewer or per session |
+| Scope | Your account | Instance-wide; you name the ids |
+| Cost in ClickHouse | Hits the table's primary key, so it is a prefix scan | Scans the range's partitions |
+
+**Ask which one names the person you are billing.** `external_user_id` is resolved from the video, so
+it names whoever your system attached to the *upload*. That is the right axis only when the uploader
+is the customer — user-generated video, per-creator hosting, a tenant uploading its own library.
+
+In a **catalogue**, it is not: staff uploads each title once and thousands of subscribers watch it,
+so every byte of a film would be attributed to the employee who added it. One user with the traffic
+of the whole catalogue is not a worse number, it is a meaningless one. There, `tracking_id` is the
+only axis that names a viewer, and its cost and fragility are the price of asking a question the
+upload label cannot answer.
+
+::: warning What the fragility costs, concretely
+A mapping lives for the link's token window plus a 35-minute grace — **1h 35m** with the default
+one-hour window ([CDN settings](/guide/cdn)) — and it lives in Redis. Traffic whose log line reaches
+the ingest after that falls into the unattributed bucket.
+
+In steady state that is the tail of a session near expiry, which the grace is sized for. It becomes
+material when the ingest falls behind by more than the grace — a stalled queue, a lagging pull-zone
+log API — or when the cache is flushed, restarted without persistence, or evicting under memory
+pressure. The loss is then proportional to the incident, not to your traffic.
+
+Watch it: query with `include_unattributed` and treat the empty-id row as an alarm rather than a
+rounding line. A bucket that is normally near zero and suddenly is not is an ingestion incident, and
+the bytes in it are bytes somebody consumed and nobody was billed for.
+:::
+
+::: tip
+Bandwidth is only as complete as the ingestion behind it: a Bunny pull zone is polled every five
+minutes over a window that trails two minutes behind, so the last few minutes of traffic are
+normally not in yet.
+:::
+
+::: warning Deleted videos leave their bytes behind
+Delivery whose video no longer exists is booked to the operator, not to an account — the ingest
+resolves the owner **from the video**, and there is none. Those bytes are still in the instance-wide
+reads on this page, but they are not in this one. A video deleted mid-period therefore leaves a gap
+between what `/api/usage` reports and what the CDN actually served.
+:::

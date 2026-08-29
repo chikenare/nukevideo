@@ -1,6 +1,9 @@
 <?php
 
+use App\Models\Project;
 use App\Models\Stream;
+use App\Models\Template;
+use App\Models\Video;
 use Tests\TestCase;
 
 /*
@@ -54,6 +57,33 @@ const MATRIX_SOURCE = [
     'source_bit_rate' => 6_000_000,
     'source_fps' => 23.976,
 ];
+
+/**
+ * A persisted video belonging to a project, with the columns the schema insists on.
+ *
+ * Only User and Project have factories, so every test that needs a video was building one by hand.
+ * There were three copies, already drifted on the template payload and on which argument came
+ * second — and because Pest helpers are global, the third one was a fatal rather than a warning.
+ */
+function projectVideo(Project $project, string $name = 'clip', string $status = 'completed'): Video
+{
+    $template = Template::create([
+        'user_id' => $project->user_id,
+        'project_id' => $project->id,
+        'name' => $name.'-template',
+        'query' => [],
+    ]);
+
+    return Video::create([
+        'user_id' => $project->user_id,
+        'project_id' => $project->id,
+        'template_id' => $template->id,
+        'name' => $name,
+        'duration' => 10,
+        'aspect_ratio' => '16:9',
+        'status' => $status,
+    ]);
+}
 
 /** A video/audio stream with no database behind it, for the argument builders. */
 function matrixStream(array $inputParams, string $type = 'video', array $meta = MATRIX_SOURCE, ?int $width = null, ?int $height = null): Stream

@@ -49,7 +49,7 @@ With the API key and pull zone ID set, the scheduler polls Bunny's [Logging API]
 
 `bunny:ingest-logs` reads `GET https://logging.bunnycdn.com/v2/pullzones/{id}/logs` and writes to the
 same `usage` table the self-hosted Vector pipeline feeds, so both providers answer the same
-[Analytics API](/api/users#analytics) and the same [Usage API](/api/users#usage).
+[Analytics API](/api/analytics) and the same [Usage API](/api/analytics#usage).
 
 - **Window and cursor.** Each run reads from where the last one stopped up to two minutes ago, so a
   window is only read once Bunny has finished writing it. The cursor lives in the cache; losing it

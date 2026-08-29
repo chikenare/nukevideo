@@ -5,8 +5,13 @@
  * `$request->user()` is a Project, whose `id` comes from a different sequence than a user's. Now
  * that a project key may read this endpoint, taking that id at face value would not error — it
  * would answer with whatever account happens to share the number, or with nothing at all.
+ *
+ * The metric filter is pinned here too, for a related reason: this endpoint is what an integrator
+ * builds an invoice out of, and an unrecognised metric name used to answer with an empty result —
+ * which reads as zero, not as a typo.
  */
 
+use App\Enums\UsageMetric;
 use App\Models\Project;
 use App\Models\User;
 use App\Services\ApiTokenService;
@@ -62,4 +67,32 @@ it('reads the authenticated user when the caller holds a personal token', functi
     $params = usageQueryParams(fn () => $this->getJson('/api/usage?from=2026-01-01&to=2026-01-31')->assertOk());
 
     expect($params['user_id'])->toBe($user->id);
+});
+
+it('accepts every metric an account can actually be charged for', function (string $metric) {
+    Sanctum::actingAs(User::factory()->create());
+
+    $params = usageQueryParams(fn () => $this->getJson("/api/usage?from=2026-01-01&to=2026-01-31&metric={$metric}")->assertOk());
+
+    expect($params['metric'])->toBe($metric);
+})->with(UsageMetric::account());
+
+it('refuses a metric it could only answer emptily', function (string $metric) {
+    Sanctum::actingAs(User::factory()->create());
+
+    $this->getJson("/api/usage?from=2026-01-01&to=2026-01-31&metric={$metric}")->assertStatus(422);
+})->with([
+    // A typo used to be indistinguishable from "you consumed nothing".
+    'a typo' => 'streamming_bytes',
+    'something invented' => 'made_up',
+    // Real, but booked under account 0 — the operator's origin egress, which no account-scoped read
+    // can ever be. Accepting it would answer empty for a reason the caller could not tell apart.
+    'the origin egress' => 'origin_bytes',
+]);
+
+it('refuses an external user id wider than the column can hold', function () {
+    Sanctum::actingAs(User::factory()->create());
+
+    $this->getJson('/api/usage?from=2026-01-01&to=2026-01-31&external_user_id='.str_repeat('a', 256))
+        ->assertStatus(422);
 });
