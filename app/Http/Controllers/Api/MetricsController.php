@@ -9,8 +9,10 @@ use App\Enums\UsageMetric;
 use App\Http\Controllers\Controller;
 use App\Services\AnalyticsService;
 use App\Services\MetricShaper;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -18,15 +20,17 @@ use Illuminate\Validation\ValidationException;
  * time it needs a different one.
  *
  * This controller is where the authorization lives, and it is the reason a general query endpoint
- * is defensible at all. The dimensions are not equally shareable ({@see MetricDimension} spells out
- * why), so each one states what it requires and this action enforces it before any SQL is built:
- * the operator's fleet dimensions need an operator, the video and viewer-address dimensions need a
- * resolved project and are narrowed to that project's own videos, and the customer-label dimension
- * pins the whole query to the caller's account.
+ * over a shared table is defensible at all. The dimensions are not equally shareable
+ * ({@see MetricDimension} spells out why), so each one states what it requires and this action
+ * enforces it before any SQL is built.
  *
- * What is deliberately NOT enforced is `tracking_id`. `usage` holds no column saying whose an id
- * is, so the only boundary available is that a caller must know an id to name one — the same
- * boundary the dedicated batch endpoint already accepts, stated here rather than left implied.
+ * The rule, in one sentence: a dimension that NAMES something is answered only when the query is
+ * narrowed to a project, or when the caller names the values it is asking about. There is no
+ * operator shortcut — an administrator that names no project is refused exactly like anyone else,
+ * because the fleet-wide view lives on the admin-only per-node report and not here.
+ *
+ * On top of that, the customer-label dimension and the metrics booked per account pin the query to
+ * the caller's own account, which is a different axis from the project and narrows further.
  */
 class MetricsController extends Controller
 {
@@ -37,33 +41,27 @@ class MetricsController extends Controller
 
     public function query(Request $request, MetricsQueryData $data): JsonResponse
     {
-        $isAdmin = $request->isAdmin();
+        // Read off the attribute rather than through the `project()` macro, which aborts: this
+        // endpoint answers with a project and without one, and which dimensions it will break down
+        // by is what changes.
+        $projectId = $request->attributes->get('resolved_project')?->id;
 
-        $this->assertDimensionsAllowed($data, $isAdmin);
-
-        $filters = [
-            'tracking_id' => $data->list('trackingIds'),
-            'external_user_id' => $data->list('externalUserIds'),
-            // Narrowed to what the caller's project actually owns, never taken as given. A ULID
-            // belonging to someone else drops out silently, exactly as it does on
-            // `analytics/videos`: refusing it instead would answer whether that video exists.
-            'video_ulid' => $this->ownedVideos($request, $data, $isAdmin),
-        ];
-
-        // Asking about videos and getting none of them back means every one named belongs to
-        // someone else. Running the query anyway would answer instance-wide, which is the opposite
-        // of what the filter was for.
-        if ($data->list('videos') !== [] && $filters['video_ulid'] === []) {
-            return response()->json(['data' => []]);
-        }
+        $this->assertDimensionsAllowed($data, $projectId !== null);
 
         $rows = $this->analytics->query(
             $data->from,
             $data->to,
             $data->dimensions(),
-            $filters,
+            [
+                'tracking_id' => $data->list('trackingIds'),
+                'external_user_id' => $data->list('externalUserIds'),
+                // Taken as given: `project_id` in the query is what makes a ULID from another
+                // tenant match nothing, so there is no narrowing left to get wrong here.
+                'video_ulid' => $data->list('videos'),
+            ],
             $data->list('metrics'),
-            $this->accountScope($request, $data, $isAdmin),
+            $this->accountScope($request->user(), $data),
+            $projectId,
         );
 
         return response()->json([
@@ -74,96 +72,60 @@ class MetricsController extends Controller
     }
 
     /**
-     * Refuses a dimension the caller is not entitled to, before anything is read.
+     * Refuses a dimension the query is not narrow enough to answer, before anything is read.
      *
-     * A 422 and not a 403: the whole request is being rejected on the content of one field, the
-     * message has to name which, and the caller's remedy is to send a different query rather than
-     * to authenticate differently.
+     * Two ways to be narrow enough: the query is scoped to one project, in which case what comes
+     * back is the caller's own, or the caller names the values it is asking about, which bounds the
+     * question to things it already had. Neither, and grouping by an identifier would enumerate
+     * whoever else is on the installation.
+     *
+     * A 422 and not a 403: the request is being rejected on the content of one field, the message
+     * has to name which, and the remedy is a different query rather than different credentials.
      */
-    private function assertDimensionsAllowed(MetricsQueryData $data, bool $isAdmin): void
+    private function assertDimensionsAllowed(MetricsQueryData $data, bool $scoped): void
     {
-        $allowed = MetricDimension::allowedFor($isAdmin);
+        if ($scoped) {
+            return;
+        }
 
         foreach ($data->dimensions() as $dimension) {
-            if (! in_array($dimension->value, $allowed, true)) {
-                throw ValidationException::withMessages([
-                    'dimensions' => "The [{$dimension->value}] dimension describes the operator's own"
-                        .' fleet and is available to administrators only. Available: '.implode(', ', $allowed).'.',
-                ]);
-            }
-
-            // An operator reads the instance; everyone else has to say what it is asking about,
-            // because these two dimensions are identifiers and an unbounded grouping over them
-            // enumerates other tenants' videos, viewers and viewer addresses.
-            if ($isAdmin) {
+            if (! $dimension->requiresScope()) {
                 continue;
             }
 
-            if ($dimension->requiresVideoList() && $data->list('videos') === []) {
-                throw ValidationException::withMessages([
-                    'videos' => "Breaking down by [{$dimension->value}] requires an explicit list of your"
-                        .' own videos: it is only readable for titles you own.',
-                ]);
+            $named = $dimension->namedBy();
+
+            if ($named !== null && $data->list($named) !== []) {
+                continue;
             }
 
-            if ($dimension->requiresOwnList() && $data->list('trackingIds') === []) {
-                throw ValidationException::withMessages([
-                    'tracking_ids' => 'Breaking down by [tracking_id] requires an explicit list of ids:'
-                        .' nothing in the usage table says whose an id is, so you may only read the ones you name.',
-                ]);
-            }
+            throw ValidationException::withMessages([
+                $named === null ? 'dimensions' : Str::snake($named) => $named === null
+                    ? "Breaking down by [{$dimension->value}] needs project context: send X-Project-Ulid,"
+                        .' or call with a project API key. It describes the edges that served your traffic,'
+                        .' so there is no list of your own you could name instead.'
+                    : "Breaking down by [{$dimension->value}] needs either project context (send"
+                        .' X-Project-Ulid, or use a project API key) or an explicit list of your own '
+                        .Str::snake($named).'.',
+            ]);
         }
-    }
-
-    /**
-     * The ULIDs the query may actually read, among those named.
-     *
-     * For an operator, whatever it named: it reads the instance, so narrowing to one project would
-     * answer a smaller question than it asked, and demanding project context would make the fleet
-     * dimensions unreachable without picking an arbitrary tenant.
-     *
-     * For everyone else, the intersection with its own project — which is where
-     * `$request->project()` aborts 400, and it aborts exactly when the query needs a project and
-     * never when it does not.
-     *
-     * @return list<string>
-     */
-    private function ownedVideos(Request $request, MetricsQueryData $data, bool $isAdmin): array
-    {
-        $named = $data->list('videos');
-
-        if ($isAdmin) {
-            return $named;
-        }
-
-        $needsProject = $named !== [] || array_filter($data->dimensions(), fn (MetricDimension $d) => $d->requiresProject()) !== [];
-
-        if (! $needsProject) {
-            return [];
-        }
-
-        return $request->project()->ownedVideoUlids($named);
     }
 
     /**
      * The account to pin the query to, or null for the instance.
      *
-     * Null only for an operator. Everyone else is pinned as soon as the query touches something
-     * keyed by account — the customer labels, or the upload and encoding metrics — because those
-     * numbers are somebody's in a way delivered bytes are not: `external_user_id` IS the
-     * integrator's own customer identifier, and reporting it across accounts hands one tenant
-     * another's customers.
+     * Pinned as soon as the query touches something keyed by account — the customer labels, or the
+     * upload and encoding metrics — because those numbers are somebody's in a way delivered bytes
+     * are not: `external_user_id` IS the integrator's own customer identifier, and reporting it
+     * across accounts hands one tenant another's customers. Null otherwise, which leaves delivered
+     * bytes as wide as the project scope alongside makes them.
      */
-    private function accountScope(Request $request, MetricsQueryData $data, bool $isAdmin): ?int
+    private function accountScope(Model $caller, MetricsQueryData $data): ?int
     {
-        if ($isAdmin) {
-            return null;
-        }
-
         $touchesAccountData = $data->has(MetricDimension::EXTERNAL_USER_ID)
             || $data->list('externalUserIds') !== []
             || array_diff($data->list('metrics'), UsageMetric::delivery()) !== [];
 
-        return $touchesAccountData ? $request->accountId() : null;
+        return $touchesAccountData ? $caller->accountId() : null;
     }
 }

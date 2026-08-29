@@ -16,18 +16,18 @@ use App\Http\Controllers\Api\MetricsController;
  *
  * The asymmetry, spelled out, because it is not obvious:
  *
- * - `external_user_id` is the integrator's own customer label, and the row carries the `user_id` of
- *   the owning account, so it can be constrained to the caller's account exactly the way
- *   `/api/usage` does.
- * - `video` belongs to a project, so it can be constrained to the caller's project.
- * - `ip` belongs to nobody in `usage` — it is a viewer of some video, and the table is instance-wide.
- *   It can only be constrained THROUGH a dimension that can be, which is why it demands both project
- *   context and an explicit list of the caller's own videos. It is also personal data, which is the
- *   reason it gets the strictest rule rather than the most convenient one.
- * - `tracking_id` cannot be constrained at all: `usage` has no column that says whose it is. The
- *   only boundary is that a caller has to know the id to name it, which is the same boundary the
- *   dedicated batch endpoint already accepts.
- * - `node_id` and `cache` are not a tenant's data in any sense — they describe the operator's fleet.
+ * - `date` and `metric` name nobody. Grouping by them tells a caller nothing about who else is on
+ *   the installation, so they need nothing.
+ * - Everything else names something, and is answered only when the query is narrowed to a project —
+ *   where what comes back is the caller's own — or when the caller names the values it is asking
+ *   about, which bounds the question to things it already had. Both routes for `video`, `ip` and
+ *   `tracking_id`; only the first for `node_id` and `cache`, since a caller cannot name an edge it
+ *   owns because it owns none. Inside a project those two say which edge served THAT project's
+ *   traffic and how well it cached; the fleet-wide view stays on the admin-only per-node report.
+ * - `ip` is also personal data, which is why it takes the same rule as the rest rather than a
+ *   looser one for convenience.
+ * - `external_user_id` narrows on a second axis as well: the row carries the `user_id` of the owning
+ *   account, so a query touching it is pinned to the caller's account the way `/api/usage` is.
  */
 enum MetricDimension: string
 {
@@ -61,56 +61,37 @@ enum MetricDimension: string
         return $this->value;
     }
 
-    /** Needs a resolved project, because it can only be answered within one. */
-    public function requiresProject(): bool
+    /**
+     * Whether this dimension can be answered at all without narrowing the query.
+     *
+     * The ones that NAME something — a video, a viewer, a viewer's address, an edge — enumerate
+     * whoever else is on the installation when the query is unnarrowed. A date does not, and a
+     * metric does not.
+     */
+    public function requiresScope(): bool
     {
-        return in_array($this, [self::VIDEO, self::IP], true);
+        return in_array($this, [self::VIDEO, self::IP, self::TRACKING_ID, self::NODE_ID, self::CACHE], true);
     }
 
     /**
-     * Needs an explicit list of the caller's own videos to hang its scoping off.
+     * The request field whose values can stand in for project context, or null when nothing can.
      *
-     * Both project dimensions, for the same reason from opposite directions: `video` would
-     * otherwise group over every video on the instance and hand back other tenants' ULIDs, and `ip`
-     * has no owner at all, so without a bounded list of titles the caller owns it is a scan of
-     * viewer addresses across the whole instance. A caller asking either question can say which
-     * titles it means.
+     * Naming what you are asking about bounds the question to values you already had, which is as
+     * good a boundary as scoping. `node_id` and `cache` have no such list — a caller cannot name an
+     * edge it owns, because it owns none — so for those two the project is the only way in.
      */
-    public function requiresVideoList(): bool
+    public function namedBy(): ?string
     {
-        return $this->requiresProject();
+        return match ($this) {
+            self::VIDEO, self::IP => 'videos',
+            self::TRACKING_ID => 'trackingIds',
+            default => null,
+        };
     }
 
-    /**
-     * Needs the caller to name the values it is asking about.
-     *
-     * `tracking_id` has no column in `usage` saying whose it is, so "the ones you can name" is the
-     * only boundary that exists. Grouping without a list would enumerate every viewer label on the
-     * instance — one tenant's viewer identifiers handed to another — which is precisely what
-     * cannot be allowed to be the convenient default.
-     */
-    public function requiresOwnList(): bool
+    /** Forces the query to the caller's own account: the row carries the `user_id` to do it with. */
+    public function scopesToAccount(): bool
     {
-        return $this === self::TRACKING_ID;
-    }
-
-    /** Describes the operator's fleet rather than any tenant's traffic. */
-    public function requiresAdmin(): bool
-    {
-        return in_array($this, [self::NODE_ID, self::CACHE], true);
-    }
-
-    /**
-     * The dimensions a caller may name, given what it is. Returned rather than checked so the error
-     * can list them.
-     *
-     * @return list<string>
-     */
-    public static function allowedFor(bool $isAdmin): array
-    {
-        return array_values(array_map(
-            fn (self $d) => $d->value,
-            array_filter(self::cases(), fn (self $d) => $isAdmin || ! $d->requiresAdmin()),
-        ));
+        return $this === self::EXTERNAL_USER_ID;
     }
 }

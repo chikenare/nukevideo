@@ -3,8 +3,6 @@
 namespace App\Providers;
 
 use App\Enums\CdnDriver;
-use App\Models\Project;
-use App\Models\User;
 use App\Services\Cdn\BunnyProvider;
 use App\Services\Cdn\CdnProvider;
 use App\Services\Cdn\SelfHostedProvider;
@@ -44,27 +42,6 @@ class AppServiceProvider extends ServiceProvider
             return $project;
         });
 
-        /**
-         * The account a token reads its own usage as.
-         *
-         * `usage` is keyed by `user_id` in ClickHouse, and a project API key authenticates AS the
-         * project — `$request->user()` is a Project, whose `id` comes from a different sequence
-         * entirely. Reading it as a user id would not fail; it would quietly answer with whichever
-         * account happens to share that number. A macro rather than a helper on each controller
-         * because getting it wrong is silent, and two copies is how one of them drifts.
-         */
-        Request::macro('accountId', function (): int {
-            $caller = $this->user();
-
-            return $caller instanceof Project ? (int) $caller->user_id : (int) $caller->id;
-        });
-
-        /** Whether the caller is an operator. A project key never is: it is not a User at all. */
-        Request::macro('isAdmin', function (): bool {
-            return $this->user() instanceof User && (bool) $this->user()->is_admin;
-        });
-
         RateLimiter::for('login', fn (Request $request) => Limit::perMinute(10)->by($request->ip()));
-
     }
 }

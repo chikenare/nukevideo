@@ -60,10 +60,17 @@ class AnalyticsService
      * @param  array<string, mixed>  $params  filled in place with the bindings this clause adds
      * @return string the WHERE body, without the `WHERE` keyword
      */
-    private function bandwidthFilter(string $from, string $to, ?string $video, ?string $trackingId, array &$params, ?string $metric = null): string
+    private function bandwidthFilter(string $from, string $to, ?string $video, ?string $trackingId, array &$params, ?string $metric = null, ?int $projectId = null): string
     {
         $where = ['date >= {from:Date}', 'date <= {to:Date}', 'metric IN ('.self::bandwidthMetricList().')'];
         $params += ['from' => $from, 'to' => $to];
+
+        // The only clause that can narrow this table to one tenant. Everything else here is a
+        // filter a caller chooses; this one is imposed on it.
+        if ($projectId !== null) {
+            $where[] = 'project_id = {project:UInt32}';
+            $params['project'] = $projectId;
+        }
 
         // Narrowing to a single delivery metric — streaming alone, downloads alone. Bound, and
         // still inside the constant set above, so an unknown metric simply matches nothing rather
@@ -89,10 +96,10 @@ class AnalyticsService
         return implode(' AND ', $where);
     }
 
-    public function summary(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function summary(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = [];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         $result = $this->client->select(
             "SELECT
@@ -115,10 +122,10 @@ class AnalyticsService
         ];
     }
 
-    public function bandwidthOverTime(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function bandwidthOverTime(string $from, string $to, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = [];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         $result = $this->client->select(
             "SELECT
@@ -135,10 +142,10 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function topIps(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function topIps(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         $result = $this->client->select(
             "SELECT
@@ -168,10 +175,10 @@ class AnalyticsService
      * top-N queries use: a caller with more than 255 tracking ids was silently reading a top 10
      * and had no way to see it, let alone widen it.
      */
-    public function bandwidthByTrackingId(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function bandwidthByTrackingId(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         $result = $this->client->select(
             "SELECT
@@ -214,7 +221,7 @@ class AnalyticsService
      * @param  list<string>  $metrics  empty for the delivery set
      * @return array<int, array<string, mixed>>
      */
-    public function query(string $from, string $to, array $dimensions, array $filters = [], array $metrics = [], ?int $accountId = null): array
+    public function query(string $from, string $to, array $dimensions, array $filters = [], array $metrics = [], ?int $accountId = null, ?int $projectId = null): array
     {
         $params = ['from' => $from, 'to' => $to];
         $where = ['date >= {from:Date}', 'date <= {to:Date}'];
@@ -232,6 +239,13 @@ class AnalyticsService
         if ($accountId !== null) {
             $where[] = 'user_id = {account:UInt32}';
             $params['account'] = $accountId;
+        }
+
+        // Narrower than the account, and the reason the identifier dimensions can be offered to a
+        // tenant at all: an account holds many projects, and `project_id` is what tells them apart.
+        if ($projectId !== null) {
+            $where[] = 'project_id = {project:UInt32}';
+            $params['project'] = $projectId;
         }
 
         // One bound array per filter. The column names are keys this class recognises, not caller
@@ -325,35 +339,36 @@ class AnalyticsService
      * download links with ({@see DownloadStreamData}), which is how it meters a per-subscriber
      * bandwidth quota.
      *
-     * Instance-wide, like every other read of `usage`: the table has no project column, and the
-     * scoping that does apply is that a caller can only get numbers for ids it can name. Passing
+     * Instance-wide unless a project is passed, and the endpoint above it deliberately does not
+     * pass one: traffic whose video has been deleted keeps its tracking id but loses its project,
+     * and dropping it would under-report what a subscriber actually consumed. Passing
      * `''` among them asks for the traffic whose id did not survive the round trip through the CDN
      * log, which is how a caller reconciles its own ids against the total.
      *
      * @param  list<string>  $trackingIds
      * @return array<int, array{tracking_id: string, metric: string, bytes: float, date?: string}>
      */
-    public function bytesByTrackingIds(string $from, string $to, array $trackingIds, ?string $metric = null, bool $daily = false): array
+    public function bytesByTrackingIds(string $from, string $to, array $trackingIds, ?string $metric = null, bool $daily = false, ?int $projectId = null): array
     {
-        return $this->batch(MetricDimension::TRACKING_ID, 'tracking_id', $from, $to, $trackingIds, $metric, $daily);
+        return $this->batch(MetricDimension::TRACKING_ID, 'tracking_id', $from, $to, $trackingIds, $metric, $daily, $projectId);
     }
 
     /**
      * Delivered bytes for a batch of videos, by ULID — the per-title reporting read.
      *
-     * The caller is expected to have narrowed the list to videos it owns before calling
-     * ({@see AnalyticsController::videos()}), which is what makes this the one batch read that IS
-     * scoped to a project. `usage` cannot do that scoping itself: it has no project column, only a
-     * `video_ulid` written from a public request path.
+     * Pass `$projectId` and the list needs no vetting: a ULID from another tenant matches no row.
+     * That is what `project_id` bought — this used to require resolving the caller's own ULIDs out
+     * of MariaDB first, because `video_ulid` here is a string parsed from a public request path and
+     * says nothing about who owns it ({@see AnalyticsController::videos()}).
      *
      * @param  list<string>  $videoUlids
      * @return array<int, array{video: string, metric: string, bytes: float, date?: string}>
      */
-    public function bytesByVideos(string $from, string $to, array $videoUlids, ?string $metric = null, bool $daily = false): array
+    public function bytesByVideos(string $from, string $to, array $videoUlids, ?string $metric = null, bool $daily = false, ?int $projectId = null): array
     {
         // The dimension aliases itself to `video`, the name the other video breakdowns already
         // answer with ({@see topVideos()}), so one payload does not spell it two ways.
-        return $this->batch(MetricDimension::VIDEO, 'video_ulid', $from, $to, $videoUlids, $metric, $daily);
+        return $this->batch(MetricDimension::VIDEO, 'video_ulid', $from, $to, $videoUlids, $metric, $daily, $projectId);
     }
 
     /**
@@ -369,7 +384,7 @@ class AnalyticsService
      * @param  list<string>  $values
      * @return array<int, array<string, mixed>>
      */
-    private function batch(MetricDimension $dimension, string $column, string $from, string $to, array $values, ?string $metric, bool $daily): array
+    private function batch(MetricDimension $dimension, string $column, string $from, string $to, array $values, ?string $metric, bool $daily, ?int $projectId = null): array
     {
         if ($values === []) {
             return [];
@@ -385,6 +400,7 @@ class AnalyticsService
             $dimensions,
             [$column => $values],
             $metric === null || $metric === '' ? [] : [$metric],
+            projectId: $projectId,
         );
 
         return array_map(function (array $row) {
@@ -395,10 +411,10 @@ class AnalyticsService
         }, $rows);
     }
 
-    public function topVideos(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function topVideos(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         $result = $this->client->select(
             "SELECT
@@ -418,10 +434,10 @@ class AnalyticsService
         return $result->rows();
     }
 
-    public function bandwidthByVideo(string $from, string $to, int $limit = self::SERIES_TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null): array
+    public function bandwidthByVideo(string $from, string $to, int $limit = self::SERIES_TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
         $params = ['limit' => $limit];
-        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric);
+        $where = $this->bandwidthFilter($from, $to, $video, $trackingId, $params, $metric, $projectId);
 
         // The top-N stays a subquery rather than a round-trip: video_ulid is written from the edge
         // logs unvalidated, so feeding those values back into a second statement would mean
@@ -513,14 +529,14 @@ class AnalyticsService
         return $usage;
     }
 
-    public function usageSummary(string $from, string $to, ?int $userId = null): array
+    public function usageSummary(string $from, string $to, ?int $projectId = null): array
     {
         $where = 'date >= {from:Date} AND date <= {to:Date}';
         $params = ['from' => $from, 'to' => $to];
 
-        if ($userId) {
-            $where .= ' AND user_id = {user_id:UInt32}';
-            $params['user_id'] = $userId;
+        if ($projectId !== null) {
+            $where .= ' AND project_id = {project:UInt32}';
+            $params['project'] = $projectId;
         }
 
         $result = $this->client->select(
@@ -539,14 +555,18 @@ class AnalyticsService
         return $usage;
     }
 
-    public function topExternalUsers(string $from, string $to, ?int $userId = null, int $limit = self::TOP_N_DEFAULT): array
+    /**
+     * The integrator's own customer labels, by upload volume. A list of identifiers, so it is only
+     * offered narrowed: unscoped it returns every tenant's customers mixed together.
+     */
+    public function topExternalUsers(string $from, string $to, ?int $projectId = null, int $limit = self::TOP_N_DEFAULT): array
     {
         $where = "metric = 'upload_bytes' AND date >= {from:Date} AND date <= {to:Date} AND external_user_id != ''";
         $params = ['from' => $from, 'to' => $to, 'limit' => $limit];
 
-        if ($userId) {
-            $where .= ' AND user_id = {user_id:UInt32}';
-            $params['user_id'] = $userId;
+        if ($projectId !== null) {
+            $where .= ' AND project_id = {project:UInt32}';
+            $params['project'] = $projectId;
         }
 
         $result = $this->client->select(

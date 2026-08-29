@@ -101,10 +101,10 @@ class AnalyticsController extends Controller
      * Delivered bytes for a batch of the project's videos — per-title reporting, the same shape as
      * `trackingIds()` on the other dimension.
      *
-     * The one batch read scoped to a tenant, and the only one that CAN be: `usage` has no project
-     * column, but a video does, so the list is narrowed to the caller's own videos before it ever
-     * reaches ClickHouse. That is why this action sits behind `resolve.project` while the rest of
-     * the metrics do not.
+     * Scoped to the caller's project in the query itself, by `project_id`. It used to need a
+     * round trip to MariaDB first, to narrow the ULIDs to the ones the project owns, because
+     * `usage` had no column to say whose a row was; the column removed both the query and the
+     * chance of getting that narrowing wrong.
      *
      * A ULID that belongs to someone else and one that moved no bytes produce the same answer — no
      * row — deliberately: answering differently would turn this into a way to find out which
@@ -112,15 +112,14 @@ class AnalyticsController extends Controller
      */
     public function videos(Request $request, VideoBytesQueryData $data): JsonResponse
     {
-        $owned = $request->project()->ownedVideoUlids($data->videos);
-
         return response()->json([
             'data' => VideoBytesData::collect($this->analyticsService->bytesByVideos(
                 $data->from,
                 $data->to,
-                $owned,
+                $data->videos,
                 $data->metric,
                 $data->granularity === UsageGranularity::DAILY,
+                $request->project()->id,
             )),
         ]);
     }
@@ -130,9 +129,6 @@ class AnalyticsController extends Controller
         $request->validate([
             'from' => 'required|date_format:Y-m-d',
             'to' => 'required|date_format:Y-m-d',
-            // Admin only, and enforced below rather than here: `exists:users,id` says the account
-            // is real, never that the caller may read it.
-            'user_id' => 'nullable|integer|exists:users,id',
             // Narrow the bandwidth series to one video and/or one tracking id. Both are matched
             // against columns written from CDN access logs, so they are bound parameters in the
             // service, never interpolated; the shapes below are what those columns can hold.
@@ -156,19 +152,15 @@ class AnalyticsController extends Controller
 
         $from = $request->input('from');
         $to = $request->input('to');
-        // Upload volume and the customer breakdown are keyed by account, and `external_user_id`
-        // IS the integrator's own customer label. Reporting either across accounts hands one
-        // tenant another's customer identifiers — a different thing entirely from the aggregate
-        // bandwidth this endpoint deliberately shares, which names nobody.
+        // Read straight off the attribute rather than through the `project()` macro, which aborts:
+        // this endpoint answers with a project and without one, and the difference is what it may
+        // show rather than whether it answers.
         //
-        // So a project key or a plain user reads its own account and only its own, whatever it
-        // asks for; `user_id` used to be taken at face value from anyone, which made every
-        // account's upload figures and customer labels readable by guessing an id. An operator
-        // keeps both the instance-wide view (no `user_id`) and the ability to name an account it
-        // can already read through `/api/users` anyway.
-        $userId = $request->isAdmin()
-            ? ($request->input('user_id') ? (int) $request->input('user_id') : null)
-            : $request->accountId();
+        // Whatever project the caller named, and nothing else — no account fallback and no operator
+        // exception. `?user_id=` used to let anyone name an account here and read its upload volume
+        // and customer labels; there is now no account axis on this endpoint at all, which is a
+        // shorter way of saying the same fix.
+        $projectId = $request->attributes->get('resolved_project')?->id;
         $video = $request->input('video');
 
         // `has`, not `filled`: an empty string is the value traffic with no tracking id carries,
@@ -177,13 +169,16 @@ class AnalyticsController extends Controller
         $trackingId = $request->has('tracking_id') ? (string) $request->input('tracking_id', '') : null;
         $metric = $request->input('metric');
         $limit = (int) $request->input('limit', AnalyticsService::TOP_N_DEFAULT);
-        // Whether this caller may read the breakdowns that name things. See the collections below.
-        $identifiers = $request->isAdmin();
+        // Whether the breakdowns that NAME things can be answered — viewer addresses, viewer
+        // labels, customer labels, video ULIDs. Narrowed to a project they are the caller's own;
+        // unnarrowed they would enumerate whoever else is on the installation, so they come back
+        // empty instead. The aggregates beside them name nobody and are always answered.
+        $identifiers = $projectId !== null;
         $seriesLimit = (int) $request->input('video_series_limit', AnalyticsService::SERIES_TOP_N_DEFAULT);
 
         $encoding = $this->analyticsService->encodingUsage($from, $to);
-        $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric);
-        $usage = $this->analyticsService->usageSummary($from, $to, $userId);
+        $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric, $projectId);
+        $usage = $this->analyticsService->usageSummary($from, $to, $projectId);
 
         return response()->json([
             'data' => new AnalyticsData(
@@ -198,18 +193,17 @@ class AnalyticsController extends Controller
                     ['key' => 'cpu_encoding', 'value' => $encoding['cpu'], 'unit' => MetricUnit::SECONDS],
                     ['key' => 'upload_volume', 'value' => $usage['upload_bytes'], 'unit' => MetricUnit::BYTES],
                 ]),
-                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $trackingId, $metric)),
-                // Withheld from anyone but the operator. A total is instance-wide and names nobody,
-                // which is the trade this endpoint has always documented; a LIST OF IDENTIFIERS is
-                // a different thing entirely — these three enumerate other tenants' viewer
-                // addresses, viewer labels and video ULIDs, and the limit that caps them is the
-                // caller's. A tenant reads the same numbers scoped, through `/api/metrics` and
-                // `analytics/videos`, by naming what it owns.
-                topIps: TopIpData::collect($identifiers ? $this->analyticsService->topIps($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric) : []),
-                topVideos: TopVideoData::collect($identifiers ? $this->analyticsService->topVideos($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric) : []),
-                topExternalUsers: TopExternalUserData::collect($this->analyticsService->topExternalUsers($from, $to, $userId, $limit)),
-                topTrackingIds: TopTrackingIdData::collect($identifiers ? $this->analyticsService->bandwidthByTrackingId($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric) : []),
-                bandwidthByVideo: BandwidthByVideoData::collect($identifiers ? $this->analyticsService->bandwidthByVideo($from, $to, limit: $seriesLimit, video: $video, trackingId: $trackingId, metric: $metric) : []),
+                bandwidthOverTime: BandwidthPointData::collect($this->analyticsService->bandwidthOverTime($from, $to, $video, $trackingId, $metric, $projectId)),
+                // Empty without project context. A total is instance-wide and names nobody, which
+                // is the trade this endpoint has always documented; a LIST OF IDENTIFIERS is a
+                // different thing entirely — unnarrowed these enumerate other tenants' viewer
+                // addresses, viewer labels, customer labels and video ULIDs, and the limit that
+                // caps them is the caller's.
+                topIps: TopIpData::collect($identifiers ? $this->analyticsService->topIps($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
+                topVideos: TopVideoData::collect($identifiers ? $this->analyticsService->topVideos($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
+                topExternalUsers: TopExternalUserData::collect($identifiers ? $this->analyticsService->topExternalUsers($from, $to, $projectId, $limit) : []),
+                topTrackingIds: TopTrackingIdData::collect($identifiers ? $this->analyticsService->bandwidthByTrackingId($from, $to, limit: $limit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
+                bandwidthByVideo: BandwidthByVideoData::collect($identifiers ? $this->analyticsService->bandwidthByVideo($from, $to, limit: $seriesLimit, video: $video, trackingId: $trackingId, metric: $metric, projectId: $projectId) : []),
                 encodingOverTime: EncodingPointData::collect($this->analyticsService->encodingUsageOverTime($from, $to)),
             ),
         ]);

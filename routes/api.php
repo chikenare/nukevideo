@@ -36,7 +36,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // Read-only delivery and queue metrics, open to ANY authenticated token — a personal one or a
     // project API key. Deliberately outside both groups below: not `no-project-key`, because
     // reading these back is exactly what an integrating backend needs a project key for, and not
-    // `resolve.project`, because `usage` has no project column to scope to and requiring the
+    // `resolve.project`, because these two answer with or without a project and requiring the
     // header would only 400 a caller that has nothing to name.
     //
     // The trade this accepts is that the figures are instance-wide: a project key reads totals
@@ -45,7 +45,6 @@ Route::middleware(['auth:sanctum'])->group(function () {
     // seeing aggregate bandwidth is not the boundary that matters here. Nothing else moved —
     // nodes, users, CDN settings and the account surfaces stay admin-only, and neither of these
     // endpoints reads `$request->user()`, which for a project key is a Project and not a User.
-    Route::get('analytics', [AnalyticsController::class, 'index']);
     Route::get('analytics/queue', [AnalyticsController::class, 'queueStatus']);
 
     // Delivered bytes for a batch of tracking ids — the same numbers `analytics` reports, for a
@@ -105,6 +104,12 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::delete('streams/{stream}', [StreamController::class, 'destroy']);
         Route::post('streams/{stream}/download', [StreamController::class, 'download']);
 
+        // The delivery dashboard. Inside this group so a project resolves when the caller names
+        // one — `ResolveProject` never aborts, it only makes the project available — which is what
+        // lets the breakdowns that name viewers, addresses and titles be answered at all: narrowed
+        // to a project they are the caller's own, and unnarrowed they are everyone's.
+        Route::get('analytics', [AnalyticsController::class, 'index']);
+
         // The general read over `usage`: any breakdown the allowlist permits, rather than a new
         // endpoint per question. Inside this group so that a project resolves when the caller has
         // one — `ResolveProject` never aborts, it only makes the project available — which lets the
@@ -113,9 +118,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::match(['get', 'post'], 'metrics', [MetricsController::class, 'query']);
 
         // Per-title delivered bytes, for a batch of the project's videos. The one metrics endpoint
-        // inside this group, and deliberately: `usage` has no project column, but a video does, so
-        // the list is narrowed to the caller's own videos before the query runs. Leaving it with
-        // the unscoped metrics would have let any key read any project's per-title bandwidth.
+        // inside this group, and deliberately: per-title bandwidth is only ever a tenant's own, so
+        // the query is pinned to `project_id` and a ULID from elsewhere matches nothing. Leaving it
+        // with the unscoped metrics would have let any key read any project's per-title bandwidth.
         Route::match(['get', 'post'], 'analytics/videos', [AnalyticsController::class, 'videos']);
 
         // Activity log (scoped to the project's videos)
