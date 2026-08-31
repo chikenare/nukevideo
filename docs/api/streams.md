@@ -53,12 +53,12 @@ the per-request work this endpoint repeats is per video rather than per track.
 **Request Body:**
 
 ```json
-{ "tracking_id": "customer-42" }
+{ "trackingId": "customer-42" }
 ```
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `tracking_id` | string \| null | Your own tracking id — a customer, a tenant. The bytes of the transfer land against it in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
+| `trackingId` | string \| null | Your own tracking id — a customer, a tenant. The bytes of the transfer land against it in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
 
 The id never enters the link, nor the response. The mint records the link's token against your id
 server-side, and the CDN's access log — which carries the token on every request the link
@@ -66,7 +66,7 @@ produces — is attributed through it. The same link is minted
 whoever asked for it, so treat the id as a label you chose, never as an authorization input. The
 mapping is best-effort: it lives server-side for the token's lifetime plus a margin. Traffic with
 no id is still recorded, under an empty one — except on a session or personal-token request, where
-an omitted `tracking_id` defaults to the ULID of the authenticated user, so the panel's own
+an omitted `trackingId` defaults to the ULID of the authenticated user, so the panel's own
 downloads stay attributed. A project key that omits it leaves the traffic unattributed: naming the
 viewer is the integrator's job.
 

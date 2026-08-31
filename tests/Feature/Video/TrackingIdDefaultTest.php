@@ -99,7 +99,7 @@ it('lets an explicit tracking id override the session fallback', function () {
 
     $stream = attributableTrack(attributableVideo());
 
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
+    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['trackingId' => 'client-42'])
         ->assertOk()->json('data.url');
 
     expect(attributedTo($url))->toBe('client-42');

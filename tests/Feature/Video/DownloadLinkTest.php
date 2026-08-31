@@ -163,7 +163,7 @@ it('records the tracking id against the token hash instead of putting it in the 
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    $data = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
+    $data = $this->postJson("/api/streams/{$stream->ulid}/download", ['trackingId' => 'client-42'])
         ->assertOk()->json('data');
 
     parse_str((string) parse_url($data['url'], PHP_URL_QUERY), $query);
@@ -185,7 +185,7 @@ it('rejects a tracking id that could reshape the signed parameters', function ()
     // The alphabet is the contract: the id is a cache label and an analytics column, and was once a
     // URL component, so it stays narrow. Both spellings, because Spatie also binds the bare
     // property name — a payload using it must not skip the charset check.
-    foreach (['tracking_id', 'trackingId'] as $key) {
+    foreach (['trackingId'] as $key) {
         foreach (['a&b=c', 'a=b', 'has space', str_repeat('x', 65)] as $bad) {
             $this->postJson("/api/streams/{$stream->ulid}/download", [$key => $bad])->assertStatus(422);
         }

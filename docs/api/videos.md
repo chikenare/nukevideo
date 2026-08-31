@@ -15,10 +15,10 @@ GET /api/videos
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `page` | integer | Page number |
-| `per_page` | integer | Items per page (default 15, maximum 100) |
+| `perPage` | integer | Items per page (default 15, maximum 100) |
 | `search` | string | Matches against the video name |
-| `external_user_id` | string | Exact match on the id supplied at upload |
-| `external_resource_id` | string | Exact match on the id supplied at upload |
+| `externalUserId` | string | Exact match on the id supplied at upload |
+| `externalResourceId` | string | Exact match on the id supplied at upload |
 | `status` | string | One status, or several comma-separated (`completed,failed`): `pending`, `downloading`, `running`, `uploading`, `completed`, `failed`. An unknown value is a `422` |
 | `sort` | string | `created_at` (default), `name`, `size`, `duration` or `status`. `size` is what the listing shows — package plus retained file bytes over every stream |
 | `direction` | string | `desc` (default) or `asc` |
@@ -181,9 +181,6 @@ POST /api/videos/{ulid}/downloads
 |-------|------|-------|
 | `streamUlids` | string[] \| null | Which tracks to mint. **Omit it to get every downloadable track of the video**, which is the usual call. An empty array is taken literally and returns nothing. Up to 200 entries. |
 | `trackingId` | string \| null | Your own tracking id, applied to every link in the batch. Same rules and same behaviour as the per-track mint. |
-
-Both fields are read in **camelCase only**. A snake_case key is not bound rather than rejected, so `stream_ulids` reads as an omitted list — every track — and `tracking_id` leaves the batch unattributed. Note the difference from
-[Download a Track](/api/streams#download-a-track), which predates this and takes `tracking_id`.
 
 The links are the same ones the per-track endpoint returns, signed per object and expiring on the
 same window. Tracks that could not be minted do not fail the request — they come back in `skipped`

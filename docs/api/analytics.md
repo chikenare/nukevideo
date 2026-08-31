@@ -67,12 +67,12 @@ GET /api/analytics?from=2026-04-01&to=2026-04-30
 | `from` | date | Yes | Start date (`YYYY-MM-DD`), inclusive |
 | `to` | date | Yes | End date (`YYYY-MM-DD`), inclusive |
 | `video` | string | No | Narrow every bandwidth series to one video ULID |
-| `tracking_id` | string | No | Narrow every bandwidth series to one tracking id. Pass it **empty** (`?tracking_id=`) to isolate traffic that carried no id |
+| `trackingId` | string | No | Narrow every bandwidth series to one tracking id. Pass it **empty** (`?trackingId=`) to isolate traffic that carried no id |
 | `metric` | string | No | Narrow to one delivery metric. Omit for all of them |
 | `limit` | integer | No | How many rows each flat top-N list returns — `topIps`, `topVideos`, `topTrackingIds`, `topExternalUsers`. 1–1000, defaults to `10` |
-| `video_series_limit` | integer | No | How many videos `bandwidthByVideo` follows. 1–100, defaults to `5`. Smaller because that one is a time series: its row count is this **times** the length of the range |
+| `videoSeriesLimit` | integer | No | How many videos `bandwidthByVideo` follows. 1–100, defaults to `5`. Smaller because that one is a time series: its row count is this **times** the length of the range |
 
-`video` and `tracking_id` are matched against columns written from CDN access logs, so they are
+`video` and `trackingId` are matched against columns written from CDN access logs, so they are
 validated to what those columns can hold — a 26-character ULID and up to 64 characters of
 `A-Z a-z 0-9 _ -` respectively. Anything else responds `422`.
 
@@ -126,13 +126,13 @@ sends no labels, in any language — those belong to whatever is drawing them.
 
 ## Bandwidth by tracking id
 
-`topTrackingIds` is the read side of the `tracking_id` you mint links with
+`topTrackingIds` is the read side of the `trackingId` you mint links with
 ([Download a Track](/api/streams#download-a-track)) — it is how an external project reports the
 transfers it handed to each of its own customers.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `trackingId` | string | The id the link was minted for. **Empty** for traffic that has none — links minted by a project key without a `tracking_id`, and links whose token → id mapping was no longer available at ingest time. Links minted from a session or personal token without a `tracking_id` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
+| `trackingId` | string | The id the link was minted for. **Empty** for traffic that has none — links minted by a project key without a `trackingId`, and links whose token → id mapping was no longer available at ingest time. Links minted from a session or personal token without a `trackingId` carry the authenticated user's ULID, so the panel's own traffic shows up under it. Reported rather than dropped, so the rows add up to `Total Bandwidth` |
 | `bytes` | number | Bytes served |
 | `videos` | integer | Distinct videos this id pulled |
 | `uniqueIps` | integer | Distinct client IPs. Approximate when the CDN anonymizes log IPs |
@@ -146,7 +146,7 @@ whatever happens to the labels on top of them.
 To read one customer's traffic on one video across a month:
 
 ```
-GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&tracking_id=customer-42
+GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&trackingId=customer-42
 ```
 
 Every bandwidth series in the response is narrowed by the same filter, so the whole payload describes
@@ -160,7 +160,7 @@ require a new endpoint. Sum delivered bytes — or upload volume, or encoding se
 dimensions you name.
 
 ```
-GET  /api/metrics?from=2026-04-01&to=2026-04-30&dimensions[]=date&dimensions[]=metric&tracking_ids[]=customer-42
+GET  /api/metrics?from=2026-04-01&to=2026-04-30&dimensions[]=date&dimensions[]=metric&trackingIds[]=customer-42
 POST /api/metrics
 ```
 
@@ -171,7 +171,7 @@ POST /api/metrics
   "from": "2026-04-01",
   "to": "2026-04-30",
   "dimensions": ["date", "metric", "tracking_id"],
-  "tracking_ids": ["customer-42", "reupload-9f1c"],
+  "trackingIds": ["customer-42", "reupload-9f1c"],
   "metrics": ["streaming_bytes", "download_bytes"],
   "shape": "long"
 }
@@ -183,8 +183,8 @@ POST /api/metrics
 | `dimensions` | string[] | What to group by, from the table below. Required, at least one |
 | `metrics` | string[] | Which metrics to include. Defaults to the four delivery metrics |
 | `videos` | string[] | Narrow to these video ULIDs, up to 1000. Silently intersected with the ones your project owns |
-| `tracking_ids` | string[] | Narrow to these tracking ids, up to 1000 |
-| `external_user_ids` | string[] | Narrow to these customer labels, up to 1000 |
+| `trackingIds` | string[] | Narrow to these tracking ids, up to 1000 |
+| `externalUserIds` | string[] | Narrow to these customer labels, up to 1000 |
 | `shape` | string | `long` (default) or `wide` — see [Shapes](#shapes) |
 
 ### Dimensions, and what each one requires
@@ -200,7 +200,7 @@ be scoped.
 | `external_user_id` | anyone | Pins the whole query to your account, automatically |
 | `video` | anyone | Project context **or** a `videos` list of your own titles |
 | `ip` | anyone | Project context **or** a `videos` list |
-| `tracking_id` | anyone | Project context **or** a `tracking_ids` list |
+| `tracking_id` | anyone | Project context **or** a `trackingIds` list |
 | `node_id` | anyone | Project context — no list can stand in |
 | `cache` | anyone | Project context — no list can stand in |
 
@@ -221,7 +221,7 @@ installation. A viewer's address is also personal data, which is why it gets no 
 :::
 
 ::: warning Account pinning is automatic, not optional
-Grouping by `external_user_id`, filtering by `external_user_ids`, or asking for `upload_bytes` or
+Grouping by `external_user_id`, filtering by `externalUserIds`, or asking for `upload_bytes` or
 `encoding_cpu` adds `user_id = <your account>` to the query. Those numbers are booked per account,
 and `external_user_id` is *your* customer label — reporting them across accounts would hand one
 tenant another's customers. Delivered bytes carry no such pin: they stay instance-wide.
@@ -269,7 +269,7 @@ bandwidth quota is the opposite one: the totals for the ids **you** name, all of
 they rank. This endpoint answers that in one call.
 
 ```
-GET  /api/analytics/tracking-ids?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42&tracking_ids[]=reupload-9f1c
+GET  /api/analytics/tracking-ids?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42&trackingIds[]=reupload-9f1c
 POST /api/analytics/tracking-ids
 ```
 
@@ -283,10 +283,10 @@ past what most proxies will put in a request line. Nothing is written either way
 {
   "from": "2026-04-01",
   "to": "2026-04-30",
-  "tracking_ids": ["customer-42", "reupload-9f1c"],
+  "trackingIds": ["customer-42", "reupload-9f1c"],
   "metric": "streaming_bytes",
   "granularity": "total",
-  "include_unattributed": false
+  "includeUnattributed": false
 }
 ```
 
@@ -294,10 +294,10 @@ past what most proxies will put in a request line. Nothing is written either way
 |-------|------|-------|
 | `from` | date | Start date (`YYYY-MM-DD`), inclusive. Required |
 | `to` | date | End date (`YYYY-MM-DD`), inclusive. Required |
-| `tracking_ids` | string[] | The ids to report on, 1 to 1000 of them. Each is up to 64 characters of `A-Z a-z 0-9 _ -` — the same alphabet the links are minted with. Duplicates are folded; an empty or null entry is rejected |
+| `trackingIds` | string[] | The ids to report on, 1 to 1000 of them. Each is up to 64 characters of `A-Z a-z 0-9 _ -` — the same alphabet the links are minted with. Duplicates are folded; an empty or null entry is rejected |
 | `metric` | string | Optional. One delivery metric. Omit to get every one |
 | `granularity` | string | `total` (default) for one row per id and metric over the whole range, or `daily` to add the date |
-| `include_unattributed` | boolean | Adds the traffic whose id did not survive the CDN log, under an empty `trackingId`. This is how you reconcile the sum of your own ids against the instance total |
+| `includeUnattributed` | boolean | Adds the traffic whose id did not survive the CDN log, under an empty `trackingId`. This is how you reconcile the sum of your own ids against the instance total |
 
 **Response:**
 
@@ -438,7 +438,7 @@ account's across all of its projects — not the calling project's alone.
 | `from` | date | Yes | Start date (`YYYY-MM-DD`) |
 | `to` | date | Yes | End date (`YYYY-MM-DD`) |
 | `metric` | string | No | One metric from the catalogue above, except `origin_bytes`. An unrecognised name responds `422` |
-| `external_user_id` | string | No | One of your own customer labels, up to 255 characters |
+| `externalUserId` | string | No | One of your own customer labels, up to 255 characters |
 
 **Response:**
 
@@ -486,7 +486,7 @@ material when the ingest falls behind by more than the grace — a stalled queue
 log API — or when the cache is flushed, restarted without persistence, or evicting under memory
 pressure. The loss is then proportional to the incident, not to your traffic.
 
-Watch it: query with `include_unattributed` and treat the empty-id row as an alarm rather than a
+Watch it: query with `includeUnattributed` and treat the empty-id row as an alarm rather than a
 rounding line. A bucket that is normally near zero and suddenly is not is an ingestion incident, and
 the bytes in it are bytes somebody consumed and nobody was billed for.
 :::

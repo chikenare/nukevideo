@@ -80,7 +80,7 @@ function recordAnalyticsFilters(): ArrayObject
 it('passes the video and tracking id filters into every bandwidth query', function () {
     $seen = recordAnalyticsFilters();
 
-    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&video='.VIDEO_ULID.'&tracking_id=customer-42&metric=download_bytes')
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&video='.VIDEO_ULID.'&trackingId=customer-42&metric=download_bytes')
         ->assertOk()
         ->assertJsonPath('data.topTrackingIds', []);
 
@@ -89,7 +89,7 @@ it('passes the video and tracking id filters into every bandwidth query', functi
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([VIDEO_ULID, 'customer-42', 'download_bytes']);
 });
 
-it('treats an absent tracking_id as no filter at all', function () {
+it('treats an absent trackingId as no filter at all', function () {
     $seen = recordAnalyticsFilters();
 
     $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31')->assertOk();
@@ -97,13 +97,13 @@ it('treats an absent tracking_id as no filter at all', function () {
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, null, null]);
 });
 
-it('treats an empty tracking_id as a filter for unattributed traffic', function () {
-    // `?tracking_id=` is a real question — "what was never attributed to a customer" — and the empty
+it('treats an empty trackingId as a filter for unattributed traffic', function () {
+    // `?trackingId=` is a real question — "what was never attributed to a customer" — and the empty
     // string is exactly what those rows carry. Flattening it into "no filter" would answer a
     // different one, with everyone's bytes in it.
     $seen = recordAnalyticsFilters();
 
-    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&tracking_id=')->assertOk();
+    $this->getJson('/api/analytics?from=2026-01-01&to=2026-01-31&trackingId=')->assertOk();
 
     expect($seen->getArrayCopy())->toHaveCount(count(BANDWIDTH_QUERIES))->each->toBe([null, '', null]);
 });
@@ -113,8 +113,8 @@ it('rejects a filter that could not have come out of the log columns', function 
 })->with([
     'a video that is not a ULID' => 'video=not-a-ulid',
     'a ULID with the letters Crockford excludes' => 'video=01HZXW3V5N8Q9R2T4Y6B8D0FIL',
-    'a tracking id outside the URL-safe alphabet' => 'tracking_id=customer%2042',
-    'a tracking id past the column width' => 'tracking_id=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    'a tracking id outside the URL-safe alphabet' => 'trackingId=customer%2042',
+    'a tracking id past the column width' => 'trackingId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'a metric that is not a delivery metric' => 'metric=encoding_cpu',
     'a metric that does not exist' => 'metric=made_up',
 ]);

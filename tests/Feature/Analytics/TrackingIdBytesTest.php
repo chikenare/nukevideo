@@ -67,7 +67,7 @@ it('reports bytes for a batch of tracking ids, split by metric', function () {
     stubBatchService();
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42&tracking_ids[]=reupload-9f1c')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42&trackingIds[]=reupload-9f1c')
         ->assertOk()
         // Two rows for one id, because streaming and the downloads that reupload to a viewer's own
         // file host are not the same line on an invoice. A caller that wants one number adds them.
@@ -82,7 +82,7 @@ it('passes the range, the whole list and the metric into the query', function ()
     $seen = stubBatchService();
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=a&tracking_ids[]=b&metric=download_bytes')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=a&trackingIds[]=b&metric=download_bytes')
         ->assertOk();
 
     expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], 'download_bytes', false]);
@@ -95,7 +95,7 @@ it('omits ids with no traffic rather than answering with zeros', function () {
     stubBatchService([['tracking_id' => 'customer-42', 'metric' => 'streaming_bytes', 'bytes' => 12.0]]);
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42&tracking_ids[]=quiet-one')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42&trackingIds[]=quiet-one')
         ->assertOk()
         ->assertJsonCount(1, 'data')
         ->assertJsonMissing(['trackingId' => 'quiet-one']);
@@ -110,7 +110,7 @@ it('accepts the same batch in a POST body', function () {
     $this->postJson(BATCH_ENDPOINT, [
         'from' => '2026-04-01',
         'to' => '2026-04-30',
-        'tracking_ids' => ['a', 'b'],
+        'trackingIds' => ['a', 'b'],
     ])->assertOk();
 
     expect($seen['args'])->toBe(['2026-04-01', '2026-04-30', ['a', 'b'], null, false]);
@@ -125,12 +125,12 @@ it('lets a project API key read a batch', function () {
     $key = app(ApiTokenService::class)->regenerateProjectKey($project)->plainTextToken;
 
     $this->withToken($key)
-        ->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42')
+        ->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42')
         ->assertOk();
 });
 
 it('still refuses a batch to an unauthenticated caller', function () {
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42')
         ->assertUnauthorized();
 });
 
@@ -142,32 +142,32 @@ it('rejects a batch it could not answer honestly', function (string|array $query
         : $this->getJson(BATCH_ENDPOINT."?from=2026-04-01&to=2026-04-30&{$query}")->assertStatus(422);
 })->with([
     'no list at all' => 'metric=download_bytes',
-    'an empty list' => 'tracking_ids=',
-    'an id outside the URL-safe alphabet' => 'tracking_ids[]=customer%2042',
-    'an id with a dot, which the ingest never kept' => 'tracking_ids[]=customer.42',
-    'an id past the column width' => 'tracking_ids[]='.str_repeat('a', 65),
+    'an empty list' => 'trackingIds=',
+    'an id outside the URL-safe alphabet' => 'trackingIds[]=customer%2042',
+    'an id with a dot, which the ingest never kept' => 'trackingIds[]=customer.42',
+    'an id past the column width' => 'trackingIds[]='.str_repeat('a', 65),
     // Neither reading of an absent id survives a batch: null would reach the Array(String) binding
     // as `\N`, and '' is the bucket for traffic that carried no id, which nobody named here.
-    'a null element' => [['from' => '2026-04-01', 'to' => '2026-04-30', 'tracking_ids' => ['ok', null]]],
-    'an empty element' => [['from' => '2026-04-01', 'to' => '2026-04-30', 'tracking_ids' => ['ok', '']]],
+    'a null element' => [['from' => '2026-04-01', 'to' => '2026-04-30', 'trackingIds' => ['ok', null]]],
+    'an empty element' => [['from' => '2026-04-01', 'to' => '2026-04-30', 'trackingIds' => ['ok', '']]],
     'more ids than one call may name' => [[
         'from' => '2026-04-01',
         'to' => '2026-04-30',
-        'tracking_ids' => array_fill(0, TrackingIdBytesQueryData::MAX_BATCH + 1, 'a'),
+        'trackingIds' => array_fill(0, TrackingIdBytesQueryData::MAX_BATCH + 1, 'a'),
     ]],
     // The same table stores upload volume and encoding seconds in the same `value` column.
-    'a metric that is not a delivery metric' => 'tracking_ids[]=a&metric=encoding_cpu',
-    'a metric that does not exist' => 'tracking_ids[]=a&metric=made_up',
-    'a granularity that is not one of the two' => 'tracking_ids[]=a&granularity=hourly',
-    'a range with no start' => [['to' => '2026-04-30', 'tracking_ids' => ['a']]],
-    'a start that is not a date' => 'tracking_ids[]=a&from=last-tuesday',
+    'a metric that is not a delivery metric' => 'trackingIds[]=a&metric=encoding_cpu',
+    'a metric that does not exist' => 'trackingIds[]=a&metric=made_up',
+    'a granularity that is not one of the two' => 'trackingIds[]=a&granularity=hourly',
+    'a range with no start' => [['to' => '2026-04-30', 'trackingIds' => ['a']]],
+    'a start that is not a date' => 'trackingIds[]=a&from=last-tuesday',
 ]);
 
 it('adds the day to the breakdown when asked for a daily read', function () {
     $seen = stubBatchService([['tracking_id' => 'customer-42', 'metric' => 'streaming_bytes', 'bytes' => 12.0, 'date' => '2026-04-16']]);
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42&granularity=daily')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42&granularity=daily')
         ->assertOk()
         ->assertJsonPath('data.0.date', '2026-04-16');
 
@@ -180,7 +180,7 @@ it('leaves the date null on a total read', function () {
     stubBatchService([['tracking_id' => 'customer-42', 'metric' => 'streaming_bytes', 'bytes' => 12.0]]);
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=customer-42')
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=customer-42')
         ->assertOk()
         ->assertJsonPath('data.0.date', null);
 });
@@ -192,10 +192,10 @@ it('asks for the unattributed bucket only when the flag says so', function () {
     $seen = stubBatchService();
     Sanctum::actingAs(User::factory()->create(['is_admin' => false]));
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=a&include_unattributed=1')->assertOk();
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=a&includeUnattributed=1')->assertOk();
     expect($seen['args'][2])->toBe(['a', '']);
 
-    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&tracking_ids[]=a')->assertOk();
+    $this->getJson(BATCH_ENDPOINT.'?from=2026-04-01&to=2026-04-30&trackingIds[]=a')->assertOk();
     expect($seen['args'][2])->toBe(['a']);
 });
 
