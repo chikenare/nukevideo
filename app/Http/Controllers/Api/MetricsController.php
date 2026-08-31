@@ -12,7 +12,6 @@ use App\Services\MetricShaper;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -100,13 +99,15 @@ class MetricsController extends Controller
             }
 
             throw ValidationException::withMessages([
-                $named === null ? 'dimensions' : Str::snake($named) => $named === null
+                // Keyed and named by the field as the caller spells it, which is the property's
+                // own name now that requests are camelCase throughout.
+                $named === null ? 'dimensions' : $named => $named === null
                     ? "Breaking down by [{$dimension->value}] needs project context: send X-Project-Ulid,"
                         .' or call with a project API key. It describes the edges that served your traffic,'
                         .' so there is no list of your own you could name instead.'
                     : "Breaking down by [{$dimension->value}] needs either project context (send"
                         .' X-Project-Ulid, or use a project API key) or an explicit list of your own '
-                        .Str::snake($named).'.',
+                        .$named.'.',
             ]);
         }
     }

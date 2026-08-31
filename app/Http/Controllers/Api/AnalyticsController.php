@@ -133,7 +133,7 @@ class AnalyticsController extends Controller
             // against columns written from CDN access logs, so they are bound parameters in the
             // service, never interpolated; the shapes below are what those columns can hold.
             'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
-            'tracking_id' => TrackingId::rules(),
+            'trackingId' => TrackingId::rules(),
             // Which kind of delivery to report. Anything outside this list is refused rather than
             // passed through: `usage` also holds upload volume and encoding seconds in the same
             // `value` column, and letting one of those names reach the bandwidth queries would
@@ -164,9 +164,9 @@ class AnalyticsController extends Controller
         $video = $request->input('video');
 
         // `has`, not `filled`: an empty string is the value traffic with no tracking id carries,
-        // so `?tracking_id=` is a meaningful request — "show me only what was never attributed" —
+        // so `?trackingId=` is a meaningful request — "show me only what was never attributed" —
         // and must not be flattened into "no filter at all".
-        $trackingId = $request->has('tracking_id') ? (string) $request->input('tracking_id', '') : null;
+        $trackingId = $request->has('trackingId') ? (string) $request->input('trackingId', '') : null;
         $metric = $request->input('metric');
         $limit = (int) $request->input('limit', AnalyticsService::TOP_N_DEFAULT);
         // Whether the breakdowns that NAME things can be answered — viewer addresses, viewer
@@ -174,7 +174,7 @@ class AnalyticsController extends Controller
         // unnarrowed they would enumerate whoever else is on the installation, so they come back
         // empty instead. The aggregates beside them name nobody and are always answered.
         $identifiers = $projectId !== null;
-        $seriesLimit = (int) $request->input('video_series_limit', AnalyticsService::SERIES_TOP_N_DEFAULT);
+        $seriesLimit = (int) $request->input('videoSeriesLimit', AnalyticsService::SERIES_TOP_N_DEFAULT);
 
         $encoding = $this->analyticsService->encodingUsage($from, $to);
         $summary = $this->analyticsService->summary($from, $to, $video, $trackingId, $metric, $projectId);

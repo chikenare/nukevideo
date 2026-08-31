@@ -25,7 +25,7 @@ class UsageController extends Controller
             'metric' => ['nullable', 'string', Rule::in(UsageMetric::account())],
             // The same width the column and the video's own `external_user_id` are validated to,
             // so a value this endpoint accepts is one an upload could actually have stored.
-            'external_user_id' => 'nullable|string|max:255',
+            'externalUserId' => 'nullable|string|max:255',
         ]);
 
         $where = ['user_id = {user_id:UInt32}', 'date >= {from:Date}', 'date <= {to:Date}'];
@@ -40,9 +40,11 @@ class UsageController extends Controller
             $params['metric'] = $request->input('metric');
         }
 
-        if ($request->filled('external_user_id')) {
+        if ($request->filled('externalUserId')) {
+            // Left side names the ClickHouse column and the bound parameter; only the key the
+            // caller sends is camelCase.
             $where[] = 'external_user_id = {external_user_id:String}';
-            $params['external_user_id'] = $request->input('external_user_id');
+            $params['external_user_id'] = $request->input('externalUserId');
         }
 
         $whereClause = implode(' AND ', $where);

@@ -50,6 +50,9 @@ function attributableTrack(Video $video): Stream
         'path' => "{$video->ulid}/audio/".strtoupper((string) Str::ulid()).'.mp4',
         'type' => 'audio',
         'meta' => [],
+        // A retained track carries the size `recordStoredSizes` wrote; null is what the mint
+        // reads as "never retained".
+        'file_size' => 5,
     ]);
 
     Storage::disk('s3')->put($stream->storedPath($video), 'bytes');
@@ -96,7 +99,7 @@ it('lets an explicit tracking id override the session fallback', function () {
 
     $stream = attributableTrack(attributableVideo());
 
-    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
+    $url = $this->postJson("/api/streams/{$stream->ulid}/download", ['trackingId' => 'client-42'])
         ->assertOk()->json('data.url');
 
     expect(attributedTo($url))->toBe('client-42');

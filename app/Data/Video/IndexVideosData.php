@@ -2,16 +2,21 @@
 
 namespace App\Data\Video;
 
+use App\Data\RequestData;
 use App\Enums\VideoStatus;
 use Illuminate\Validation\Rule;
-use Spatie\LaravelData\Data;
+use Spatie\LaravelData\Attributes\MapInputName;
+use Spatie\LaravelData\Mappers\CamelCaseMapper;
 
 /**
- * The listing's query string. Snake-cased on the wire like the rest of the read endpoints
- * (`per_page`, `external_user_id`), which is the global input mapping, so no per-property
- * attribute is needed here.
+ * The listing's query string, camelCased on the wire like every other request in this API.
+ *
+ * It used to take the global snake_case input mapping, which quietly split every guard from the
+ * value it guarded: Spatie binds the bare property name too, so `?perPage=` reached `$perPage`
+ * without passing the clamp below — which was looking for `per_page` — and a cap of 100 answered
+ * 100000. Mapping the properties explicitly gives the mapper, the rules and the clamp one name.
  */
-class IndexVideosData extends Data
+class IndexVideosData extends RequestData
 {
     /** What the list can be ordered by. `size` is summed over the streams, the rest are columns. */
     public const SORTS = ['created_at', 'name', 'size', 'duration', 'status'];
@@ -23,19 +28,22 @@ class IndexVideosData extends Data
 
     public function __construct(
         public ?string $search = null,
+        #[MapInputName(CamelCaseMapper::class)]
         public ?string $externalUserId = null,
+        #[MapInputName(CamelCaseMapper::class)]
         public ?string $externalResourceId = null,
         /** One status, or several comma-separated (`completed,failed`). */
         public ?string $status = null,
         public string $sort = 'created_at',
         public string $direction = 'desc',
+        #[MapInputName(CamelCaseMapper::class)]
         public int $perPage = self::PER_PAGE_DEFAULT,
     ) {}
 
     /**
      * Runs before validation and mapping, on the raw query string.
      *
-     * `?sort=&direction=&per_page=` is how an integrator's query builder spells "the default"
+     * `?sort=&direction=&perPage=` is how an integrator's query builder spells "the default"
      * — an empty value, not an absent key — and it must read as such: an empty string would
      * otherwise land in the typed property (or in `orderBy`) as is. The page size is clamped to
      * the cap rather than refused, which is what the listing has always done and what a client
@@ -43,14 +51,14 @@ class IndexVideosData extends Data
      */
     public static function prepareForPipeline(array $properties): array
     {
-        foreach (['sort', 'direction', 'per_page'] as $key) {
+        foreach (['sort', 'direction', 'perPage'] as $key) {
             if (array_key_exists($key, $properties) && ($properties[$key] === null || $properties[$key] === '')) {
                 unset($properties[$key]);
             }
         }
 
-        if (isset($properties['per_page']) && is_numeric($properties['per_page'])) {
-            $properties['per_page'] = min(max((int) $properties['per_page'], 1), self::PER_PAGE_MAX);
+        if (isset($properties['perPage']) && is_numeric($properties['perPage'])) {
+            $properties['perPage'] = min(max((int) $properties['perPage'], 1), self::PER_PAGE_MAX);
         }
 
         return $properties;
@@ -68,8 +76,8 @@ class IndexVideosData extends Data
     {
         return [
             'search' => 'nullable|string|max:255',
-            'external_user_id' => 'nullable|string|max:255',
-            'external_resource_id' => 'nullable|string|max:255',
+            'externalUserId' => 'nullable|string|max:255',
+            'externalResourceId' => 'nullable|string|max:255',
             'status' => [
                 'nullable', 'string',
                 function ($attribute, $value, $fail) {
@@ -87,7 +95,7 @@ class IndexVideosData extends Data
             'sort' => [Rule::in(self::SORTS)],
             'direction' => [Rule::in(['asc', 'desc'])],
             // Already clamped to [1, PER_PAGE_MAX] upstream; this only refuses non-integers.
-            'per_page' => 'integer',
+            'perPage' => 'integer',
         ];
     }
 }

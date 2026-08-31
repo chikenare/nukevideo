@@ -61,7 +61,7 @@ it('breaks delivery down by the dimensions asked for', function () {
         'from' => '2026-04-01',
         'to' => '2026-04-30',
         'dimensions' => ['date', 'metric'],
-        'tracking_ids' => ['customer-42'],
+        'trackingIds' => ['customer-42'],
     ])->assertOk()
         ->assertJsonPath('data.0.date', '2026-04-16')
         ->assertJsonPath('data.0.value', 1024);
@@ -161,7 +161,7 @@ it('refuses the identifier dimensions when neither scoped nor named', function (
     // Each of these, unbounded, enumerates something belonging to other tenants.
     'videos, which would list every title on the installation' => [['dimensions' => ['video']], 'videos'],
     'viewer addresses, which are personal data' => [['dimensions' => ['ip']], 'videos'],
-    'viewer labels, which nothing can attach an owner to' => [['dimensions' => ['tracking_id']], 'tracking_ids'],
+    'viewer labels, which nothing can attach an owner to' => [['dimensions' => ['tracking_id']], 'trackingIds'],
     'the edges, which no list can stand in for' => [['dimensions' => ['node_id']], 'dimensions'],
 ]);
 
@@ -187,7 +187,7 @@ it('refuses the fleet dimensions with no project, and offers no list instead', f
         'to' => '2026-04-30',
         'dimensions' => [$dimension],
         'videos' => ['01HZXW3V5N8Q9R2T4Y6B8D0F1G'],
-        'tracking_ids' => ['customer-42'],
+        'trackingIds' => ['customer-42'],
     ])->assertStatus(422)->assertJsonValidationErrors('dimensions');
 })->with(['node_id', 'cache']);
 
@@ -228,7 +228,7 @@ it('needs no project context for a query that names no project data', function (
         'from' => '2026-04-01',
         'to' => '2026-04-30',
         'dimensions' => ['date', 'metric'],
-        'tracking_ids' => ['customer-42'],
+        'trackingIds' => ['customer-42'],
     ])->assertOk();
 });
 
@@ -239,7 +239,7 @@ it('rejects a query it could not answer honestly', function (array $payload) {
     'a dimension that is not a column' => [['dimensions' => ['user_agent']]],
     'a metric that does not exist' => [['dimensions' => ['date'], 'metrics' => ['made_up']]],
     'a video that is not a ULID' => [['dimensions' => ['date'], 'videos' => ['not-a-ulid']]],
-    'a tracking id outside the alphabet' => [['dimensions' => ['date'], 'tracking_ids' => ['bad id']]],
+    'a tracking id outside the alphabet' => [['dimensions' => ['date'], 'trackingIds' => ['bad id']]],
     'a shape that is not one of the two' => [['dimensions' => ['date'], 'shape' => 'pivoted']],
 ]);
 

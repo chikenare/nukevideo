@@ -93,6 +93,6 @@ it('refuses a metric it could only answer emptily', function (string $metric) {
 it('refuses an external user id wider than the column can hold', function () {
     Sanctum::actingAs(User::factory()->create());
 
-    $this->getJson('/api/usage?from=2026-01-01&to=2026-01-31&external_user_id='.str_repeat('a', 256))
+    $this->getJson('/api/usage?from=2026-01-01&to=2026-01-31&externalUserId='.str_repeat('a', 256))
         ->assertStatus(422);
 });

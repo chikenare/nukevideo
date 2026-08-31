@@ -7,6 +7,8 @@ use App\Enums\UsageMetric;
 use App\Http\Controllers\Api\AnalyticsController;
 use App\Support\TrackingId;
 use Illuminate\Validation\Rule;
+use Spatie\LaravelData\Attributes\MapInputName;
+use Spatie\LaravelData\Mappers\CamelCaseMapper;
 
 /**
  * The batch bandwidth read ({@see AnalyticsController::trackingIds()}): a date range and the
@@ -21,6 +23,7 @@ class TrackingIdBytesQueryData extends BatchQueryData
         public string $from,
         public string $to,
         /** @var list<string> */
+        #[MapInputName(CamelCaseMapper::class)]
         public array $trackingIds,
         public ?string $metric = null,
         public UsageGranularity $granularity = UsageGranularity::TOTAL,
@@ -30,6 +33,7 @@ class TrackingIdBytesQueryData extends BatchQueryData
          * string cannot be validated as an id ({@see rules()}), and because a caller reconciling
          * its own ids against the total wants to ask for it explicitly.
          */
+        #[MapInputName(CamelCaseMapper::class)]
         public bool $includeUnattributed = false,
     ) {}
 
@@ -48,7 +52,7 @@ class TrackingIdBytesQueryData extends BatchQueryData
     public static function rules(): array
     {
         return static::rangeRules() + [
-            'tracking_ids' => 'required|array|min:1|max:'.self::MAX_BATCH,
+            'trackingIds' => 'required|array|min:1|max:'.self::MAX_BATCH,
 
             // `required` in front of the shared rules, which are written for a single optional
             // filter: there, null means "no filter" and '' means "the traffic that carried no id".
@@ -57,7 +61,7 @@ class TrackingIdBytesQueryData extends BatchQueryData
             // exists to ask for — so an element has to be a real id. The alphabet itself still
             // comes from the one place that owns it, so the ids this accepts stay exactly the ids
             // a mint accepts and the ingest keeps.
-            'tracking_ids.*' => array_merge(['required'], TrackingId::rules()),
+            'trackingIds.*' => array_merge(['required'], TrackingId::rules()),
 
             // Which kind of delivery to report, if the caller wants only one. Validated against the
             // same set the query is constrained to, so a metric that would report upload volume or
@@ -65,7 +69,7 @@ class TrackingIdBytesQueryData extends BatchQueryData
             'metric' => ['nullable', 'string', Rule::in(UsageMetric::delivery())],
 
             'granularity' => ['nullable', Rule::enum(UsageGranularity::class)],
-            'include_unattributed' => 'nullable|boolean',
+            'includeUnattributed' => 'nullable|boolean',
         ];
     }
 }

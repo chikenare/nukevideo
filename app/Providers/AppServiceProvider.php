@@ -22,7 +22,11 @@ class AppServiceProvider extends ServiceProvider
             $this->app->register(TelescopeServiceProvider::class);
         }
 
-        $this->app->singleton(CdnProvider::class, fn ($app) => match (CdnDriver::from($app->make(CdnSettings::class)->provider)) {
+        // Scoped, not a singleton: the self-hosted provider holds a ProxyRing, which memoizes
+        // rows `nodes:probe` rewrites every minute. A singleton would pin that memo past the
+        // request — php-fpm would not notice, Octane and the queue worker would serve routing
+        // from a fleet that has since changed.
+        $this->app->scoped(CdnProvider::class, fn ($app) => match (CdnDriver::from($app->make(CdnSettings::class)->provider)) {
             CdnDriver::SelfHosted => $app->make(SelfHostedProvider::class),
             CdnDriver::Bunny => $app->make(BunnyProvider::class),
         });

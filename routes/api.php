@@ -98,6 +98,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         Route::get('videos/{video}', [VideoController::class, 'show']);
         Route::match(['put', 'patch'], 'videos/{video}', [VideoController::class, 'update']);
         Route::delete('videos/{video}', [VideoController::class, 'destroy']);
+        // Batch mint. Additive: the per-stream route below stays, it is public API. Here rather
+        // than under `streams/` because the video is what the hoisted work belongs to.
+        Route::post('videos/{video}/downloads', [VideoController::class, 'downloads']);
 
         // Streams
         Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);

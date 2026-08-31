@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Enums\CdnDriver;
 use App\Models\Node;
+use App\Services\Cdn\ProxyRing;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
 use Illuminate\Http\Client\Pool;
@@ -24,7 +25,7 @@ use Illuminate\Support\Facades\Http;
  * challenge page, a wrong DNS record answers somebody else's site — all of which have status
  * codes and none of which is the edge. An edge from before the header existed fails the probe
  * too — redeploy it. Should the API host lose the fleet altogether, the resolver's fallback
- * keeps linking to every active node regardless ({@see Node::findProxyForVideo()}).
+ * keeps linking to every active node regardless ({@see ProxyRing}).
  */
 class ProbeProxyNodes extends Command
 {

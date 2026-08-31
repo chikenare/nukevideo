@@ -93,13 +93,13 @@ it('reads an empty sort, direction or page size as the default', function () {
     $this->travel(1)->minute();
     listedVideo('second');
 
-    expect(listedNames('sort=&direction=&per_page='))->toBe(['second', 'first']);
+    expect(listedNames('sort=&direction=&perPage='))->toBe(['second', 'first']);
 });
 
 it('clamps the page size to the cap instead of refusing it', function () {
     listedVideo('only');
 
-    $this->getJson('/api/videos?per_page=1000')->assertOk()->assertJsonPath('perPage', 100);
-    $this->getJson('/api/videos?per_page=0')->assertOk()->assertJsonPath('perPage', 1);
-    $this->getJson('/api/videos?per_page=abc')->assertStatus(422)->assertJsonValidationErrors(['per_page']);
+    $this->getJson('/api/videos?perPage=1000')->assertOk()->assertJsonPath('perPage', 100);
+    $this->getJson('/api/videos?perPage=0')->assertOk()->assertJsonPath('perPage', 1);
+    $this->getJson('/api/videos?perPage=abc')->assertStatus(422)->assertJsonValidationErrors(['perPage']);
 });

@@ -4,22 +4,23 @@ namespace App\Data;
 
 use App\Data\Stream\DownloadStreamData;
 use App\Support\TrackingId;
-use Spatie\LaravelData\Attributes\MapName;
+use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\Validation\In;
 use Spatie\LaravelData\Attributes\Validation\IP;
 use Spatie\LaravelData\Attributes\Validation\Max;
 use Spatie\LaravelData\Attributes\Validation\Min;
-use Spatie\LaravelData\Mappers\SnakeCaseMapper;
+use Spatie\LaravelData\Mappers\CamelCaseMapper;
 
-#[MapName(SnakeCaseMapper::class)]
 class VodData extends RequestData
 {
     public function __construct(
         #[Min(144), Max(4320)]
         public ?int $resolution,
         #[Max(255)]
+        #[MapInputName(CamelCaseMapper::class)]
         public ?string $externalResourceId,
         #[Max(255)]
+        #[MapInputName(CamelCaseMapper::class)]
         public ?string $externalUserId,
         #[IP]
         public ?string $ip,
@@ -28,22 +29,20 @@ class VodData extends RequestData
         // The caller's own label for this viewer — a customer, a campaign — so the playback
         // traffic can be attributed to it. Never part of the URL: the mint records it against the
         // link's token ({@see \App\Services\Cdn\TrackingRegistry}). Same alphabet as the download
-        // links'. `tracking_id` on the wire, like `external_user_id`. Validated in rules(), not here.
+        // links'. Validated in rules(), not here.
+        #[MapInputName(CamelCaseMapper::class)]
         public ?string $trackingId,
     ) {}
 
     /**
-     * Both spellings, deliberately ({@see DownloadStreamData::rules()}): Spatie
-     * also binds the bare property name as a fallback, and this value's whole validation story is
-     * the charset.
+     * Keyed on the properties' own names, not the mapped snake_case ones. That is what the package
+     * documents, and what makes a rule cover a payload in either spelling: Spatie normalises the
+     * keys to property names before validating ({@see DownloadStreamData::rules()}).
      */
     public static function rules(): array
     {
-        $trackingId = TrackingId::rules();
-
         return [
-            'tracking_id' => $trackingId,
-            'trackingId' => $trackingId,
+            'trackingId' => TrackingId::rules(),
         ];
     }
 }

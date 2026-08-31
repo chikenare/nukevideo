@@ -38,6 +38,9 @@ function track(Video $video, string $type, array $attributes = []): Stream
         'path' => "{$video->ulid}/{$type}/".strtoupper((string) Str::ulid()).'.mp4',
         'type' => $type,
         'meta' => [],
+        // What `recordStoredSizes` writes for a track the template kept. Null is the absence the
+        // mint checks for, so a fixture without it would read as "never retained".
+        'file_size' => 5,
         ...$attributes,
     ]);
 
@@ -117,12 +120,24 @@ it('refuses while the video is still processing', function () {
 
 it('404s when the track was never retained', function () {
     $video = downloadableVideo();
-    $stream = track($video, 'video', ['height' => 720]);
 
-    // A template with keep_processed_files off leaves the row without an object.
-    Storage::disk('s3')->delete($stream->storedPath($video));
+    // A template with `keep_processed_files` off has the rendition dropped before the sync, so
+    // `recordStoredSizes` leaves the row's size null and no object ever reaches S3.
+    $stream = track($video, 'video', ['height' => 720, 'file_size' => null]);
 
     $this->postJson("/api/streams/{$stream->ulid}/download")->assertStatus(404);
+});
+
+it('reads retention off the row instead of asking S3 for it', function () {
+    $video = downloadableVideo();
+    $stream = track($video, 'audio');
+
+    // The object is gone from the bucket while the row still records a size. The mint has to
+    // answer from the row: that HEAD was one S3 round trip per track, on a path a caller walks
+    // once per track, asking what the record in hand already knew.
+    Storage::disk('s3')->delete($stream->storedPath($video));
+
+    $this->postJson("/api/streams/{$stream->ulid}/download")->assertOk();
 });
 
 it('does not hand a track to another project', function () {
@@ -148,7 +163,7 @@ it('records the tracking id against the token hash instead of putting it in the 
     $video = downloadableVideo();
     $stream = track($video, 'audio');
 
-    $data = $this->postJson("/api/streams/{$stream->ulid}/download", ['tracking_id' => 'client-42'])
+    $data = $this->postJson("/api/streams/{$stream->ulid}/download", ['trackingId' => 'client-42'])
         ->assertOk()->json('data');
 
     parse_str((string) parse_url($data['url'], PHP_URL_QUERY), $query);
@@ -170,7 +185,7 @@ it('rejects a tracking id that could reshape the signed parameters', function ()
     // The alphabet is the contract: the id is a cache label and an analytics column, and was once a
     // URL component, so it stays narrow. Both spellings, because Spatie also binds the bare
     // property name — a payload using it must not skip the charset check.
-    foreach (['tracking_id', 'trackingId'] as $key) {
+    foreach (['trackingId'] as $key) {
         foreach (['a&b=c', 'a=b', 'has space', str_repeat('x', 65)] as $bad) {
             $this->postJson("/api/streams/{$stream->ulid}/download", [$key => $bad])->assertStatus(422);
         }

@@ -8,6 +8,8 @@ use App\Enums\UsageMetric;
 use App\Http\Controllers\Api\MetricsController;
 use App\Support\TrackingId;
 use Illuminate\Validation\Rule;
+use Spatie\LaravelData\Attributes\MapInputName;
+use Spatie\LaravelData\Mappers\CamelCaseMapper;
 use Spatie\LaravelData\Optional;
 
 /**
@@ -41,8 +43,10 @@ class MetricsQueryData extends BatchQueryData
         /** @var list<string> */
         public array|Optional $videos,
         /** @var list<string> */
+        #[MapInputName(CamelCaseMapper::class)]
         public array|Optional $trackingIds,
         /** @var list<string> */
+        #[MapInputName(CamelCaseMapper::class)]
         public array|Optional $externalUserIds,
         public MetricShape $shape = MetricShape::LONG,
     ) {}
@@ -92,11 +96,11 @@ class MetricsQueryData extends BatchQueryData
             'videos' => 'sometimes|array|min:1|max:'.self::MAX_BATCH,
             'videos.*' => 'required|ulid',
 
-            'tracking_ids' => 'sometimes|array|min:1|max:'.self::MAX_BATCH,
-            'tracking_ids.*' => array_merge(['required'], TrackingId::rules()),
+            'trackingIds' => 'sometimes|array|min:1|max:'.self::MAX_BATCH,
+            'trackingIds.*' => array_merge(['required'], TrackingId::rules()),
 
-            'external_user_ids' => 'sometimes|array|min:1|max:'.self::MAX_BATCH,
-            'external_user_ids.*' => 'required|string|max:255',
+            'externalUserIds' => 'sometimes|array|min:1|max:'.self::MAX_BATCH,
+            'externalUserIds.*' => 'required|string|max:255',
 
             'shape' => ['nullable', Rule::enum(MetricShape::class)],
         ];
