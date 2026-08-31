@@ -156,6 +156,75 @@ GET /api/videos/{ulid}/sources
 }
 ```
 
+## Download Tracks
+
+Mint signed URLs for a video's tracks in **one** request. Prefer this over calling
+[Download a Track](/api/streams#download-a-track) per stream: everything a mint needs besides the
+signature itself — your authentication, the project lookup, the video's status, the delivery node —
+belongs to the video, not to the track, so asking per track pays for all of it again each time. A
+video with several renditions, audio languages and subtitles is one request here and a dozen there.
+
+```
+POST /api/videos/{ulid}/downloads
+```
+
+**Request Body:**
+
+```json
+{
+  "streamUlids": ["01KZW4GN1K3B7Y4RFQBGM0KQF6"],
+  "trackingId": "customer-42"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `streamUlids` | string[] \| null | Which tracks to mint. **Omit it to get every downloadable track of the video**, which is the usual call. An empty array is taken literally and returns nothing. Up to 200 entries. |
+| `trackingId` | string \| null | Your own tracking id, applied to every link in the batch. Same rules and same behaviour as the per-track mint. |
+
+Both fields are read in **camelCase only**. A snake_case key is not bound rather than rejected, so `stream_ulids` reads as an omitted list — every track — and `tracking_id` leaves the batch unattributed. Note the difference from
+[Download a Track](/api/streams#download-a-track), which predates this and takes `tracking_id`.
+
+The links are the same ones the per-track endpoint returns, signed per object and expiring on the
+same window. Tracks that could not be minted do not fail the request — they come back in `skipped`
+with a reason, so one stale id in a list does not cost the rest their links.
+
+**Response:**
+
+```json
+{
+  "data": {
+    "links": [
+      {
+        "url": "https://cdn.example.com/01J.../download/audio/01J....mp4?token=HS256-...&expires=1787709204",
+        "expiresAt": "2026-08-13T02:41:24+00:00",
+        "filename": "01KZW4GN1K3B7Y4RFQBGM0KQF6.mp4",
+        "type": "audio",
+        "size": 4779203
+      }
+    ],
+    "skipped": [
+      { "ulid": "01KZW4GN1K3B7Y4RFQBGM0KQF7", "reason": "not_retained" }
+    ]
+  }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `links` | object[] | One entry per minted track, in the order you asked for them, or in the video's own track order when `streamUlids` was omitted. Same fields as the per-track response. |
+| `skipped` | object[] | One entry per track that produced no link, with the `ulid` you sent and a `reason`. |
+
+| `reason` | Meaning |
+|----------|---------|
+| `not_retained` | The template has `keepProcessedFiles` off, so the track was discarded before it reached storage. |
+| `not_downloadable` | The untouched original. It lives in its own zone and is never handed out. Only ever returned for a ULID you named explicitly. |
+| `not_found` | This video has no such track — a stale id, or one belonging to another video. |
+
+Responds `409` while the video is still processing, `503` when no delivery node is available, `404`
+when the video belongs to another project, and `422` when validation fails. The first two are
+conditions of the whole video, so they fail the request rather than appearing in `skipped`.
+
 ## Video Statuses
 
 `video.status` reflects the ingestion pipeline phase. Check individual `outputs[].status` to see which encodings succeeded or failed.

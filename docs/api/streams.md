@@ -46,6 +46,10 @@ POST /api/streams/{ulid}/download
 
 List a video's tracks first with `GET /api/videos/{ulid}`, then request a link per track you want.
 
+For more than one track of the same video, use
+[Download Tracks](/api/videos#download-tracks) instead — it mints them all in one request, and
+the per-request work this endpoint repeats is per video rather than per track.
+
 **Request Body:**
 
 ```json

@@ -44,11 +44,33 @@ class TrackingRegistry
      */
     public function record(SignedLink $link, ?string $trackingId): void
     {
-        if ($link->tokenHash === null || $trackingId === null || $trackingId === '') {
+        $this->recordMany([$link], $trackingId);
+    }
+
+    /**
+     * The same for a batch mint, in one round trip rather than one per track — the write side of
+     * {@see resolveMany}. A batch is one viewer fetching one video's pieces, so the whole batch
+     * shares an id.
+     *
+     * @param  list<SignedLink>  $links
+     */
+    public function recordMany(array $links, ?string $trackingId): void
+    {
+        if ($trackingId === null || $trackingId === '') {
             return;
         }
 
-        Cache::put(self::cacheKey($link->tokenHash), $trackingId, $this->tokenWindow() + self::GRACE);
+        $mapping = [];
+
+        foreach ($links as $link) {
+            if ($link->tokenHash !== null) {
+                $mapping[self::cacheKey($link->tokenHash)] = $trackingId;
+            }
+        }
+
+        if ($mapping !== []) {
+            Cache::putMany($mapping, $this->tokenWindow() + self::GRACE);
+        }
     }
 
     /** The tracking id a logged token was minted for, or null when no mapping (still) exists. */

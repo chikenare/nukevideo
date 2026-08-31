@@ -2,18 +2,24 @@
 
 namespace App\Http\Controllers;
 
+use App\Data\Video\DownloadVideoTracksData;
 use App\Data\Video\IndexVideosData;
 use App\Data\Video\UpdateVideoData;
 use App\Data\VideoData;
 use App\Models\Stream;
 use App\Models\Video;
+use App\Services\DownloadLinkService;
 use App\Services\VideoService;
+use App\Support\TrackingId;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 
 class VideoController extends Controller
 {
-    public function __construct(protected VideoService $videoService) {}
+    public function __construct(
+        protected VideoService $videoService,
+        protected DownloadLinkService $downloads,
+    ) {}
 
     public function index(Request $request, IndexVideosData $data)
     {
@@ -54,6 +60,26 @@ class VideoController extends Controller
             'perPage' => $videos->perPage(),
             'total' => $videos->total(),
         ];
+    }
+
+    /**
+     * Signed links for a video's tracks in one pass.
+     *
+     * Keyed by video rather than by an arbitrary list of streams: what the batch hoists — the
+     * status check, the proxy node, the caller's auth — is per video, and the route is what makes
+     * that invariant true instead of a rule someone has to remember.
+     */
+    public function downloads(Request $request, DownloadVideoTracksData $data, string $ulid)
+    {
+        $video = $request->project()->videos()->where('ulid', $ulid)->firstOrFail();
+
+        return response()->json([
+            'data' => $this->downloads->forVideo(
+                $video,
+                $data->streamUlids,
+                TrackingId::resolve($data->trackingId, $request->user()),
+            ),
+        ]);
     }
 
     public function show(Request $request, string $ulid)

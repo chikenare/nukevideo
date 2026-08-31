@@ -107,6 +107,10 @@ running: number,
 desired: number | null,
 state: string,
 };
+export type SkippedTrackData = {
+ulid: string,
+reason: App.Enums.DownloadSkipReason,
+};
 export type StreamData = {
 ulid: string,
 name: string | null,
@@ -170,6 +174,10 @@ outputs: App.Data.OutputData[],
 streams: App.Data.StreamData[],
 size: number,
 servedSize: number,
+};
+export type VideoDownloadLinksData = {
+links: App.Data.DownloadLinkData[],
+skipped: App.Data.SkippedTrackData[],
 };
 export type VodData = {
 resolution: number | null,
@@ -404,6 +412,10 @@ isAdmin?: boolean,
 };
 }
 namespace Video {
+export type DownloadVideoTracksData = {
+streamUlids: string[] | null,
+trackingId: string | null,
+};
 export type IndexVideosData = {
 search: string | null,
 externalUserId: string | null,
@@ -422,6 +434,7 @@ externalResourceId?: string | null,
 }
 namespace Enums {
 export type CdnDriver = 'self_hosted' | 'bunny';
+export type DownloadSkipReason = 'not_retained' | 'not_downloadable' | 'not_found';
 export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'node_id' | 'cache';
 export type MetricShape = 'long' | 'wide';
 export type MetricUnit = 'bytes' | 'seconds' | 'count';
