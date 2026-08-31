@@ -9,7 +9,6 @@ use App\Models\Project;
 use App\Models\Stream;
 use App\Services\Cdn\CdnProvider;
 use App\Services\Cdn\TrackingRegistry;
-use Illuminate\Support\Facades\Storage;
 
 /**
  * Mints a download link for ONE track.
@@ -65,7 +64,14 @@ class DownloadLinkService
         // A template with `keep_processed_files` off drops the renditions before they ever reach
         // S3, so the row exists and the object does not. Fail here rather than hand out a link
         // that 404s at the CDN, where the caller cannot tell our fault from theirs.
-        if (! Storage::disk('s3')->exists($key)) {
+        //
+        // The row already answers that. `file_size` is written from the file on disk after the
+        // relocation and stays null for exactly the tracks that were dropped
+        // ({@see \App\Jobs\PackageVideoJob::recordStoredSizes}), so the HEAD this used to send
+        // asked S3 what the record in hand already knew — once per mint, on a path a caller walks
+        // once per track. It is also the signal the panel already gates its own download button
+        // on (`StreamItem.vue`), so the two sides now agree on one definition of "retained".
+        if ($stream->file_size === null) {
             abort(404, 'This track was not retained for download.');
         }
 

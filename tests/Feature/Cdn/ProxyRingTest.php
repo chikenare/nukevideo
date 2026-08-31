@@ -2,8 +2,10 @@
 
 use App\Console\Commands\ProbeProxyNodes;
 use App\Models\Node;
+use App\Services\Cdn\ProxyRing;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 
 uses(RefreshDatabase::class);
@@ -24,6 +26,12 @@ function ringProxy(array $attributes = []): Node
     ]);
 }
 
+/** A ring with nothing memoized yet — what a fresh request or job is handed. */
+function ring(): ProxyRing
+{
+    return app(ProxyRing::class);
+}
+
 beforeEach(function () {
     app()->detectEnvironment(fn () => 'production');
     CdnSettings::fake([
@@ -38,9 +46,45 @@ describe('the proxy ring', function () {
         ringProxy();
         ringProxy();
 
-        $first = Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ');
+        $first = ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ');
 
-        expect(Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($first->id);
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($first->id);
+    });
+
+    it('resolves the fleet once however many links one request mints', function () {
+        ringProxy();
+        ringProxy();
+        ringProxy();
+
+        // One ring for the whole page, which is what the scoped provider hands every caller.
+        $ring = ring();
+        $ring->for('01HZZZZZZZZZZZZZZZZZZZZZZZ');
+
+        DB::enableQueryLog();
+
+        foreach (range(1, 25) as $i) {
+            $ring->for(str_pad((string) $i, 26, '0', STR_PAD_LEFT));
+        }
+
+        // A listing resolves a thumbnail AND a storyboard URL per row, so this used to be a query
+        // and a 450-point sort per asset — fifty of each for one page, for an answer that cannot
+        // change inside a request.
+        expect(DB::getQueryLog())->toBeEmpty();
+    });
+
+    it('holds its answer for its own lifetime and no longer', function () {
+        $ring = ring();
+        expect($ring->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->toBeNull();
+
+        ringProxy();
+
+        // This one keeps the answer it resolved: a fleet change mid-request must not move a video
+        // between two links on the same page.
+        expect($ring->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->toBeNull();
+
+        // The next request gets its own, and sees the node. Under php-fpm that boundary is the
+        // process; under Octane and Horizon it is the scoped CdnProvider being forgotten.
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->not->toBeNull();
     });
 
     it('skips a draining node without stopping it', function () {
@@ -49,8 +93,9 @@ describe('the proxy ring', function () {
         $kept = ringProxy();
         $draining = ringProxy(['is_draining' => true]);
 
+        $ring = ring();
         foreach (range(1, 20) as $i) {
-            expect(Node::findProxyForVideo(str_pad((string) $i, 26, '0', STR_PAD_LEFT))->id)->toBe($kept->id);
+            expect($ring->for(str_pad((string) $i, 26, '0', STR_PAD_LEFT))->id)->toBe($kept->id);
         }
         expect($draining->fresh()->is_active)->toBeTrue();
     });
@@ -59,8 +104,9 @@ describe('the proxy ring', function () {
         $kept = ringProxy();
         ringProxy(['health_failures' => Node::HEALTH_FAILURE_THRESHOLD]);
 
+        $ring = ring();
         foreach (range(1, 20) as $i) {
-            expect(Node::findProxyForVideo(str_pad((string) $i, 26, '0', STR_PAD_LEFT))->id)->toBe($kept->id);
+            expect($ring->for(str_pad((string) $i, 26, '0', STR_PAD_LEFT))->id)->toBe($kept->id);
         }
     });
 
@@ -68,7 +114,7 @@ describe('the proxy ring', function () {
         // One slow answer must not move a node's whole catalogue, cold, onto its neighbours.
         $flaky = ringProxy(['health_failures' => Node::HEALTH_FAILURE_THRESHOLD - 1]);
 
-        expect(Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($flaky->id);
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($flaky->id);
     });
 
     it('never picks a proxy without a hostname', function () {
@@ -76,7 +122,7 @@ describe('the proxy ring', function () {
         ringProxy(['hostname' => null]);
         $named = ringProxy();
 
-        expect(Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($named->id);
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ')->id)->toBe($named->id);
     });
 
     it('falls back to every active node when the probe has condemned the whole fleet', function () {
@@ -85,13 +131,13 @@ describe('the proxy ring', function () {
         ringProxy(['health_failures' => 10]);
         ringProxy(['health_failures' => 10]);
 
-        expect(Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->not->toBeNull();
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->not->toBeNull();
     });
 
     it('still honours draining inside the fallback', function () {
         ringProxy(['health_failures' => 10, 'is_draining' => true]);
 
-        expect(Node::findProxyForVideo('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->toBeNull();
+        expect(ring()->for('01HZZZZZZZZZZZZZZZZZZZZZZZ'))->toBeNull();
     });
 });
 

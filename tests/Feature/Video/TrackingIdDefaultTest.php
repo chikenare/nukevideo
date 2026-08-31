@@ -50,6 +50,9 @@ function attributableTrack(Video $video): Stream
         'path' => "{$video->ulid}/audio/".strtoupper((string) Str::ulid()).'.mp4',
         'type' => 'audio',
         'meta' => [],
+        // A retained track carries the size `recordStoredSizes` wrote; null is what the mint
+        // reads as "never retained".
+        'file_size' => 5,
     ]);
 
     Storage::disk('s3')->put($stream->storedPath($video), 'bytes');

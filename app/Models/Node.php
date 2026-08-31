@@ -8,7 +8,6 @@ use App\Observers\NodeObserver;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Support\Facades\Log;
 
 #[ObservedBy(NodeObserver::class)]
 class Node extends Model
@@ -155,7 +154,7 @@ class Node extends Model
      * chosen and rendered as `https:///...`.
      *
      * `$requireHealthy = false` drops only the probe's verdict, for the resolver's fallback
-     * ({@see findProxyForVideo()}): draining is the operator's word and always holds.
+     * (`ProxyRing`): draining is the operator's word and always holds.
      */
     public function scopeRoutable($query, bool $requireHealthy = true)
     {
@@ -190,55 +189,5 @@ class Node extends Model
         $failures = min($this->health_failures + 1, 255);
         static::whereKey($this->id)->toBase()->update(['health_failures' => $failures]);
         $this->health_failures = $failures;
-    }
-
-    private const HASH_RING_REPLICAS = 150;
-
-    /**
-     * The proxy that serves this video, by consistent hashing over the routable proxies. Every
-     * node shares the token secret, so any of them can serve any video; what the ring buys is
-     * that a video's segments are cached on one node rather than on all of them.
-     *
-     * Falls back to every active proxy when none is routable: that is the probe being wrong
-     * for the whole fleet (the API host losing its own network, say), and a link to a node
-     * that may be down beats no link at all.
-     */
-    public static function findProxyForVideo(string $videoUlid): ?self
-    {
-        $nodes = static::routable()->orderBy('id')->get();
-
-        if ($nodes->isEmpty()) {
-            // Draining stays honoured: it is the operator's word, the probe's is only a guess.
-            $nodes = static::routable(requireHealthy: false)->orderBy('id')->get();
-
-            if ($nodes->isEmpty()) {
-                return null;
-            }
-
-            Log::warning('No routable proxy node; falling back to every active one', ['count' => $nodes->count()]);
-        }
-
-        if ($nodes->count() === 1) {
-            return $nodes->first();
-        }
-
-        $ring = [];
-        foreach ($nodes as $node) {
-            for ($i = 0; $i < self::HASH_RING_REPLICAS; $i++) {
-                $point = hexdec(substr(md5("{$node->id}:{$i}"), 0, 8));
-                $ring[$point] = $node;
-            }
-        }
-        ksort($ring);
-
-        $hash = hexdec(substr(md5($videoUlid), 0, 8));
-
-        foreach ($ring as $point => $node) {
-            if ($hash <= $point) {
-                return $node;
-            }
-        }
-
-        return reset($ring);
     }
 }

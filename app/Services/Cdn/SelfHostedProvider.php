@@ -21,11 +21,14 @@ use App\Settings\CdnSettings;
  */
 class SelfHostedProvider implements CdnProvider
 {
-    public function __construct(private CdnSettings $settings) {}
+    public function __construct(
+        private CdnSettings $settings,
+        private ProxyRing $ring,
+    ) {}
 
     public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
     {
-        $node = Node::findProxyForVideo($video->ulid);
+        $node = $this->ring->for($video->ulid);
 
         if (! $node) {
             throw new NoCdnNodeAvailableException;
@@ -38,7 +41,7 @@ class SelfHostedProvider implements CdnProvider
 
     public function assetUrl(string $videoUlid, string $key, bool $local): string
     {
-        $node = Node::findProxyForVideo($videoUlid);
+        $node = $this->ring->for($videoUlid);
 
         if (! $node) {
             throw new NoCdnNodeAvailableException;
@@ -55,7 +58,7 @@ class SelfHostedProvider implements CdnProvider
      */
     public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
     {
-        $node = Node::findProxyForVideo($videoUlid);
+        $node = $this->ring->for($videoUlid);
 
         if (! $node) {
             throw new NoCdnNodeAvailableException;
