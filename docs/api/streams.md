@@ -1,6 +1,6 @@
 # Streams
 
-Streams represent individual encoded tracks of a video (video, audio, muxed, or the original file).
+Streams represent individual encoded tracks of a video (video, audio, subtitle, or the original file).
 
 Streams are created by the pipeline when a video is ingested, not through the API.
 
@@ -11,7 +11,7 @@ and HLS manifests in place, so it takes effect on the next player request withou
 re-packaging.
 
 ```
-PUT /api/streams/{ulid}
+PUT|PATCH /api/streams/{ulid}
 ```
 
 **Request Body:**
@@ -20,18 +20,24 @@ PUT /api/streams/{ulid}
 {
   "name": "Latin American Spanish",
   "language": "es-MX",
-  "forced": false
+  "forced": false,
+  "hearingImpaired": false
 }
 ```
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `name` | string | Shown in the player's track selector. Must be unique among the video's tracks of the same type, and cannot contain `,`, `"` or a line break. |
-| `language` | string \| null | BCP-47 (`es`, `en-US`, `es-MX`). The packager normalizes it, so a manifest may show `en` for a source tagged `eng`. |
-| `forced` | boolean | Subtitles only — marks a track that carries foreign-language dialogue. |
+| `name` | string | **Required.** Shown in the player's track selector. Must be unique among the video's tracks of the same type, and cannot contain `,`, `"` or a line break. |
+| `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. |
+| `forced` | boolean | **Required.** Subtitles only — marks a track that carries foreign-language dialogue. |
+| `hearingImpaired` | boolean \| null | Optional, **subtitles only** — a `true` on an audio track is a `422`, because audio SDH is baked into the packaged manifests. Omit it (or send `null`) to keep whatever the probe or a previous edit set. Stored in the stream's `meta`, and returned lifted out of it as `hearingImpaired`. |
 
-Returns the updated stream. Responds `400` for a video rendition, the original file, or a video
-that is still being processed, and `422` when validation fails.
+`name`, `language` and `forced` are required on every call, `PATCH` included — omitting one is a
+`422`, not a field left untouched. Read the track first and send all three back. `hearingImpaired`
+is the only field that is genuinely optional.
+
+Returns `message` and the updated stream under `data`. Responds `400` for a video rendition, the
+original file, or a video that is still being processed, and `422` when validation fails.
 
 ## Download a Track
 
@@ -103,9 +109,17 @@ reach storage) or belongs to another project, and `503` when no delivery node is
 
 ## Delete Stream
 
+Removes one track from an already-packaged video: the CMAF segments are deleted and the track is
+edited out of the published manifests, so playback stops offering it without a re-encode.
+
 ```
-DELETE /api/streams/{id}
+DELETE /api/streams/{ulid}
 ```
+
+Responds `400` while the video is still processing, and `400` when the track is the last video
+rendition of any output — that would leave the output's published manifests with no video at all.
+Deleting a track does **not** notify your webhook, so a mirrored copy of the video has to be
+refreshed from the response or from [Get Video](/api/videos#get-video).
 
 ## Stream Types
 
@@ -120,17 +134,22 @@ DELETE /api/streams/{id}
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `ulid` | string | Unique identifier |
-| `name` | string | Display name |
-| `type` | string | Stream type |
-| `width` | integer | Video width in pixels |
-| `height` | integer | Video height in pixels |
-| `packageSize` | integer | Bytes of packaged CMAF segments |
-| `fileSize` | integer | Bytes of the retained source or rendition file |
-| `language` | string | Language code (e.g., `en`, `es-MX`) |
+| `ulid` | string | Unique identifier. Not stable across a re-probe: `videos:retry --reprobe` drops the derived streams and mints new ULIDs. |
+| `name` | string \| null | Display name. `null` on video renditions — they carry no label anywhere, the panel shows their height instead. |
+| `type` | string | `original`, `video`, `audio` or `subtitle` |
+| `width` | integer \| null | Video width in pixels |
+| `height` | integer \| null | Video height in pixels |
+| `packageSize` | integer \| null | Bytes of the packaged CMAF segments — what serves playback. `null` on the `original`, which is never packaged. |
+| `fileSize` | integer \| null | Bytes of the retained rendition file, i.e. "there is a file to fetch". `null` when the template has `keepProcessedFiles` off, because the renditions are discarded before the sync and never reach storage — so it is `null` from the start rather than becoming `null` later. This is the field that decides whether a track is downloadable. |
+| `language` | string \| null | Language code (e.g., `en`, `es-MX`) |
 | `forced` | boolean | Forced subtitle track |
-| `channels` | integer | Audio channels |
-| `meta` | object | FFprobe metadata |
-| `inputParams` | object | Encoding parameters |
-| `errorLog` | string | Error details if the stream's concat job failed |
+| `hearingImpaired` | boolean | SDH track. Stored inside `meta`, lifted out here for you. |
+| `channels` | integer \| null | Audio channels |
+| `meta` | object \| null | FFprobe metadata. Raw JSON: **snake_case keys**. |
+| `inputParams` | object \| null | Encoding parameters (`video_codec`, `audio_codec`, `target_vmaf`, …). Raw JSON: **snake_case keys**. |
+| `errorLog` | string \| null | Error details if the stream's encode failed |
 | `createdAt` | string | ISO 8601 timestamp |
+
+`packageSize` and `fileSize` answer two different questions and are never summed per stream: the
+video's totals are `servedSize` (packaged bytes) and `size` (both), on
+[the video itself](/api/videos#get-video).

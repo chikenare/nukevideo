@@ -40,12 +40,16 @@ The response contains the signed URL for the requested format (HLS or DASH). The
 
 **Request body** (all optional):
 
+The body is camelCase, like every write in this API. A snake_case key is not bound to anything
+and is silently ignored — `tracking_id` does not fail the request, it just leaves the playback
+unattributed.
+
 | Field | Type | Notes |
 |-------|------|-------|
 | `format` | `dash` \| `hls` | Defaults to the output's first available format. |
 | `resolution` | integer | Caps the ladder at this height. |
 | `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
-| `tracking_id` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
+| `trackingId` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 
 ## Token-Based Access Control
 

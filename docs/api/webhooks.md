@@ -1,8 +1,96 @@
 # Webhooks
 
-NukeVideo uses webhooks to receive notifications when video files are uploaded to S3 storage.
+Webhooks run in both directions, and they are unrelated to each other:
 
-## Video Uploaded
+- **Inbound** — your object store tells NukeVideo an upload finished. One endpoint, authenticated
+  with `WEBHOOK_SECRET`. This is infrastructure wiring, done once per installation.
+- **Outbound** — NukeVideo tells *your* application that a video changed. Configured per project,
+  authenticated with a secret you choose. This is what an integrator consumes.
+
+[[toc]]
+
+## Outbound: Video Events
+
+Set a **Webhook URL** on the project (and optionally a **Webhook secret**) in the admin panel, and
+NukeVideo will `POST` to it as videos move through the pipeline. A project with no webhook URL sends
+nothing.
+
+### Authentication
+
+The secret, when set, is sent as a bearer token:
+
+```
+Authorization: Bearer <your webhook secret>
+```
+
+There is no signature over the body. Anyone who can reach your URL can post to it, so treat the
+bearer token as the whole check, and ignore requests without it.
+
+### Event Payload
+
+Every event has the same envelope, and every event carries the **complete video** in `data` — the
+same object [`GET /api/videos/{ulid}`](/api/videos#get-video) returns. No event sends a reduced
+payload, so a receiver can store `data` without branching on the event name and let `event` decide
+only the side effects.
+
+```json
+{
+  "event": "video.completed",
+  "timestamp": 1757000000,
+  "data": { "ulid": "01HX...", "status": "completed", "outputs": ["..."], "streams": ["..."] }
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `event` | string | See the table below. Treat an unknown value as "store `data` and carry on" — new events are additive. |
+| `timestamp` | integer | Unix seconds, taken when the delivery was queued. Second precision, so it is a rough ordering hint, not a sequence number. |
+| `data` | object | The full video, [as documented for `GET /api/videos/{ulid}`](/api/videos#get-video). |
+
+### Events
+
+| Event | When |
+|-------|------|
+| `video.created` | The upload was ingested and the video row exists. Fires **before the source is probed**: `duration` is `0`, `aspectRatio` is empty, `outputs` is empty and `streams` holds only the `original`. |
+| `video.completed` | Every output reached a terminal state and at least one succeeded. |
+| `video.error` | The video failed — either every output failed, or a pipeline failure (a stalled worker, an unreachable source) ended the run. |
+| `video.deleted` | The video was deleted. Only sent for videos that carry an `externalResourceId`. The payload is the video as it was just before deletion. |
+
+### Delivery
+
+Deliveries are queued, not sent inline. Each one is attempted **at most 3 times**, waiting 60s after
+the first failure and 300s after the second — so a delivery is abandoned about 6 minutes after it
+was first queued, then logged and dropped. There is no replay endpoint.
+
+Your endpoint has **5 seconds** to respond. Anything at or above `400`, and any timeout, counts as a
+failure. Acknowledge first and do your own work asynchronously.
+
+Two consequences worth designing around:
+
+- **A retry can arrive out of order, carrying stale data.** The payload is built when the delivery
+  is queued, not when it is sent, so a delivery that only succeeds on its last attempt can land ~6
+  minutes late and overwrite a newer one that already got through. If you mirror the video, ignore a
+  payload whose `status` is behind the one you already stored.
+- **Deliveries are at-least-once.** Make your receiver idempotent on `data.ulid`.
+
+### What is *not* covered
+
+These change a video without emitting any event. If you keep a local copy, refresh it from
+[`GET /api/videos/{ulid}`](/api/videos#get-video) after them, or from the response of the call you
+made:
+
+| Change | How to stay in sync |
+|--------|---------------------|
+| `PUT\|PATCH /api/videos/{ulid}` and `PUT\|PATCH /api/streams/{ulid}` | Both return the updated resource — use the response. |
+| `DELETE /api/streams/{ulid}` | Refetch the video. |
+| Intermediate pipeline states (`downloading`, `running`, `uploading`) and the probe that fills in `duration`, `aspectRatio`, `outputs` and `streams` | Poll while the status is not terminal. |
+| The `original` stream being reclaimed after a successful run, when the template has `keepOriginal` off | The `video.completed` payload still lists it; it is deleted moments later. Do not link to the original from a stored copy without rechecking. |
+| A re-probe (`videos:retry --reprobe`), which mints **new stream ULIDs** | Refetch the video; any stored stream ULID is stale. |
+
+`outputs[].progress` is live encoding progress read from a short-lived store. It is never worth
+mirroring — poll it only while a video is in a non-terminal status.
+
+## Inbound: Video Uploaded
 
 Triggered when a video file upload to S3 is complete.
 
@@ -77,7 +165,7 @@ On final failure, the system:
 - Cleans up any temporary files.
 - Logs the error for investigation.
 
-## Configuring Webhooks
+## Configuring the Inbound Webhook
 
 Set the webhook secret in your `.env` file:
 

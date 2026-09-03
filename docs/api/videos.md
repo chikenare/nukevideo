@@ -26,7 +26,9 @@ GET /api/videos
 **Response:**
 
 The pagination fields sit alongside `data`, not inside a `meta` object, and — as everywhere in
-this API — the payload is camelCase.
+this API — the payload is camelCase. Each row is a full video, `outputs` and `streams` included
+(they are elided below for brevity, not empty in the response), so a listing page carries every
+field [Get Video](#get-video) returns. That is why `perPage` is capped at 100.
 
 ```json
 {
@@ -42,8 +44,8 @@ this API — the payload is camelCase.
       "externalResourceId": "movie-7",
       "thumbnailUrl": "https://api.example.com/api/videos/01HX.../thumbnail.jpg",
       "storyboardUrl": "https://api.example.com/api/videos/01HX.../storyboard.vtt",
-      "outputs": [],
-      "streams": [],
+      "outputs": ["..."],
+      "streams": ["..."],
       "size": 812739584,
       "servedSize": 734003200
     }
@@ -60,47 +62,79 @@ this API — the payload is camelCase.
 GET /api/videos/{ulid}
 ```
 
-Returns a single video with its streams and outputs.
+Returns a single video with its streams and outputs. The object is exactly the one the listing
+returns for each row, and the one a [webhook](/api/webhooks#event-payload) carries in its `data`.
 
 **Response:**
 
 ```json
 {
   "data": {
-    "id": 1,
     "ulid": "01HX...",
     "name": "my-video.mp4",
     "status": "completed",
     "duration": 120.5,
-    "aspect_ratio": "16:9",
-    "thumbnail_path": "videos/01HX.../thumbnail.jpg",
-    "template": { ... },
-    "streams": [
-      {
-        "ulid": "01HY...",
-        "type": "video",
-        "width": 1920,
-        "height": 1080,
-        "size": 52428800
-      }
-    ],
+    "aspectRatio": "16:9",
+    "createdAt": "2025-01-15T10:30:00+00:00",
+    "externalUserId": "user-42",
+    "externalResourceId": "movie-7",
+    "thumbnailUrl": "https://cdn.example.com/01HX.../assets/thumbnail.jpg",
+    "storyboardUrl": "https://cdn.example.com/01HX.../assets/storyboard.vtt",
+    "size": 812739584,
+    "servedSize": 734003200,
     "outputs": [
       {
         "ulid": "01HZ...",
-        "format": "hls",
+        "formats": ["hls", "dash"],
         "status": "completed",
         "progress": 100,
-        "streams": [...]
+        "createdAt": "2025-01-15T10:31:02+00:00",
+        "streams": [ "...the subset of `streams` this output packages..." ]
+      }
+    ],
+    "streams": [
+      {
+        "ulid": "01HY...",
+        "name": null,
+        "type": "video",
+        "packageSize": 52428800,
+        "fileSize": 51380224,
+        "inputParams": { "video_codec": "h264", "target_vmaf": 93 },
+        "meta": {},
+        "width": 1920,
+        "height": 1080,
+        "language": null,
+        "forced": false,
+        "hearingImpaired": false,
+        "channels": null,
+        "errorLog": null,
+        "createdAt": "2025-01-15T10:31:02+00:00"
       }
     ]
   }
 }
 ```
 
+| Field | Type | Notes |
+|-------|------|-------|
+| `duration` | number | Seconds. `0` until the source has been probed. |
+| `aspectRatio` | string | Empty until the source has been probed. |
+| `thumbnailUrl` / `storyboardUrl` | string | Served unsigned from the CDN when a delivery node is available, and from `GET /api/videos/{ulid}/{filename}` otherwise. The URL is stable, but the object only exists once the video has been processed. |
+| `size` | integer | Every stream's `packageSize` plus `fileSize` — the whole S3 footprint. |
+| `servedSize` | integer | Only `packageSize`, i.e. the bytes that serve playback. `size` minus this is retained source and processed-file overhead. |
+| `outputs[].formats` | string[] | Plural: one package serves both `hls` and `dash`. |
+| `outputs[].progress` | integer | 0-100, averaged over the encoded chunks. Live only while the output is encoding: it reads `100` as soon as the output is `completed`, and `0` once the progress data has expired. Treat it as a value to poll, never as one to store. |
+| `outputs[].streams` | object[] | The subset of the video's streams this output packages. Streams are **shared** between outputs when their parameters resolve identically, so the same stream can appear under several outputs. |
+
+Streams follow the [Stream Properties](/api/streams#stream-properties) table. Note that
+`inputParams` and `meta` are raw JSON columns passed through as stored, so **their keys are
+snake_case** (`video_codec`, `audio_codec`, `target_vmaf`) while every other field is camelCase.
+`hearingImpaired` is the exception that is lifted out of `meta` for you.
+
 ## Update Video
 
 ```
-PUT /api/videos/{ulid}
+PUT|PATCH /api/videos/{ulid}
 ```
 
 **Request Body:**
@@ -119,6 +153,9 @@ PUT /api/videos/{ulid}
 | `externalUserId` | string\|null | Optional. Send `null` to clear it. |
 | `externalResourceId` | string\|null | Optional. Send `null` to clear it. |
 
+Responds with `message` and the full updated video under `data`, in the same shape as
+[Get Video](#get-video).
+
 ## Delete Video
 
 Deletes the video, its streams, outputs, and associated S3 files.
@@ -127,34 +164,18 @@ Deletes the video, its streams, outputs, and associated S3 files.
 DELETE /api/videos/{ulid}
 ```
 
-## Get Video Sources
+## Playback URLs
 
-Returns signed streaming URLs for the video. Requires an active proxy node.
+Playback links are minted **per output**, not per video — a video with several outputs has one
+manifest family per output, and the ladder cap and format are chosen at mint time:
 
 ```
-GET /api/videos/{ulid}/sources
+POST /api/outputs/{ulid}
 ```
 
-**Response:**
-
-```json
-{
-  "sources": [
-    {
-      "format": "hls",
-      "url": "https://proxy.example.com/hls/..."
-    },
-    {
-      "format": "dash",
-      "url": "https://proxy.example.com/dash/..."
-    },
-    {
-      "format": "mp4",
-      "url": "https://proxy.example.com/proxy/..."
-    }
-  ]
-}
-```
+Take the output ULID from this video's `outputs[]`. See
+[Streaming & VOD](/guide/streaming#requesting-a-playback-url) for the request body and the token
+model.
 
 ## Download Tracks
 
