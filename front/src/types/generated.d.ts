@@ -179,18 +179,18 @@ export type VideoDownloadLinksData = {
 links: App.Data.DownloadLinkData[],
 skipped: App.Data.SkippedTrackData[],
 };
-export type VodData = {
-resolution: number | null,
-external_resource_id: string | null,
-external_user_id: string | null,
-ip: string | null,
-format: string | null,
-tracking_id: string | null,
-};
-export type VodOutputData = {
-url: string,
+export type VideoVodLinksData = {
 thumbnailUrl: string,
 storyboardUrl: string,
+expiresAt: string,
+sources: App.Data.VodSourceData[],
+};
+export type VodSourceData = {
+url: string,
+format: string,
+outputUlid: string,
+videoCodec: string | null,
+audioCodec: string | null,
 };
 namespace Analytics {
 export type AnalyticsCardData = {
@@ -424,6 +424,11 @@ status: string | null,
 sort: string,
 direction: string,
 perPage: number,
+};
+export type PlayVideoData = {
+resolution: number | null,
+ip: string | null,
+trackingId: string | null,
 };
 export type UpdateVideoData = {
 name: string,

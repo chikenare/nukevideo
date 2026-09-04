@@ -101,13 +101,14 @@ it('reaches the videos of its own project', function () {
     $this->withToken($key)->getJson("/api/videos/{$video->ulid}")->assertOk();
 });
 
-it('cannot mint a playback link for an output of another project', function () {
+it('cannot mint playback links for a video of another project', function () {
     $key = projectKey($this->project);
     $foreign = videoIn(Project::factory()->for($this->user)->create());
-    $output = $foreign->outputs()->create(['status' => 'completed']);
+    $foreign->outputs()->create(['status' => 'completed']);
 
-    // 404 = confined; a 422 (found, no formats) would mean the foreign output was reachable.
-    $this->withToken($key)->postJson("/api/outputs/{$output->ulid}")->assertNotFound();
+    // 404 = confined; an empty 200 would mean the foreign video was reachable and merely had
+    // nothing to serve.
+    $this->withToken($key)->postJson("/api/videos/{$foreign->ulid}/play")->assertNotFound();
 });
 
 it('authenticates as the project, never as the owning user', function () {

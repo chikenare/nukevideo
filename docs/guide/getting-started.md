@@ -42,15 +42,15 @@ Traefik publishes each service under a `*.nukevideo.localhost` hostname (these r
 
 | Service | URL |
 |---------|-----|
-| API (Laravel) | http://api.nukevideo.localhost |
-| Admin SPA | http://app.nukevideo.localhost |
-| Docs | http://docs.nukevideo.localhost |
-| Adminer (DB UI) | http://adminer.nukevideo.localhost |
-| ClickHouse UI | http://ch.nukevideo.localhost |
-| RustFS S3 API | http://s3-data.nukevideo.localhost |
-| RustFS console | http://s3-ui.nukevideo.localhost |
-| RedisInsight | http://redis.nukevideo.localhost |
-| Traefik dashboard | http://localhost:8080 |
+| API (Laravel) | `http://api.nukevideo.localhost` |
+| Admin SPA | `http://app.nukevideo.localhost` |
+| Docs | `http://docs.nukevideo.localhost` |
+| Adminer (DB UI) | `http://adminer.nukevideo.localhost` |
+| ClickHouse UI | `http://ch.nukevideo.localhost` |
+| RustFS S3 API | `http://s3-data.nukevideo.localhost` |
+| RustFS console | `http://s3-ui.nukevideo.localhost` |
+| RedisInsight | `http://redis.nukevideo.localhost` |
+| Traefik dashboard | `http://localhost:8080` |
 
 ## Next Steps
 

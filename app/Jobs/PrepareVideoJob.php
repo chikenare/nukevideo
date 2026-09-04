@@ -120,7 +120,7 @@ class PrepareVideoJob implements ShouldQueue
         // chunk job skips an uploaded chunk), but its then() would transition the video into
         // UPLOADING a second time and dispatch a second PackageVideoJob alongside the one already
         // running — they share a gather directory and a sync target. So a retry does not get here
-        // with the old rows in place: {@see \App\Console\Commands\RetryVideos} clears them, which
+        // with the old rows in place: {@see \App\Services\VideoService::retry()} clears them, which
         // is also what stops a hand-rolled status flip from hanging silently.
         if (DB::table('job_batches')->where('name', 'like', "encode video {$video->id} %")->exists()) {
             Log::info('Segments already planned; skipping redelivery', ['video' => $this->videoId]);
