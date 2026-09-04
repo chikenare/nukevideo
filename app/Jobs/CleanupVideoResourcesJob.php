@@ -42,7 +42,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
         // (the store reuses the default bucket), never the whole `{ulid}/` prefix.
         //
         // A FAILED video keeps them: its mirrored source and staged work are what make a retry
-        // minutes rather than a full re-download and re-encode ({@see \App\Console\Commands\RetryVideos}).
+        // minutes rather than a full re-download and re-encode ({@see \App\Services\VideoService::retry()}).
         // PruneScratchJob reclaims them once it is 30 minutes cold, so the reprieve is bounded.
         // An orphan (no video row at all) is still swept — nothing can retry it.
         if ($video?->status !== VideoStatus::FAILED->value) {

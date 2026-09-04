@@ -21,7 +21,7 @@ import { toast } from 'vue-sonner'
 
 const router = useRouter()
 
-const { id } = defineProps<{ id: string }>()
+const { id, disabled = false } = defineProps<{ id: string; disabled?: boolean }>()
 
 const loading = ref(false)
 
@@ -42,7 +42,12 @@ const handleDeleteVideo = async () => {
 <template>
   <AlertDialog>
     <AlertDialogTrigger as-child>
-      <Button variant="destructive" size="icon" :disabled="loading" title="Delete video">
+      <Button
+        variant="destructive"
+        size="icon"
+        :disabled="loading || disabled"
+        :title="disabled ? 'A video being processed cannot be deleted' : 'Delete video'"
+      >
         <Spinner v-if="loading" />
         <Trash2 v-else :size="16" />
       </Button>

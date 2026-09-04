@@ -103,6 +103,10 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // Playback. Every output of the video at once: what a mint needs besides the signature is
         // per video, and a player should not have to pick an output before it knows what they are.
         Route::post('videos/{video}/play', [VideoController::class, 'play']);
+        // Requeue a failed video. POST and not a status PATCH: `update` writes columns, and this
+        // clears the failed run's batches, progress and errors before it moves the status — the
+        // caller must not be able to reach the second half by writing `status` on the first.
+        Route::post('videos/{video}/retry', [VideoController::class, 'retry']);
 
         // Streams
         Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);

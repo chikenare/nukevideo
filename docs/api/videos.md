@@ -160,9 +160,40 @@ Responds with `message` and the full updated video under `data`, in the same sha
 
 Deletes the video, its streams, outputs, and associated S3 files.
 
+Allowed while the video is `completed`, `failed` or `pending` — a pending video is one nothing has
+started on yet, so there is no run to strand. Any status in between (`downloading`, `running`,
+`uploading`) is refused with a `400`: deleting there would leave the fleet encoding chunks for a
+video that no longer exists.
+
 ```
 DELETE /api/videos/{ulid}
 ```
+
+## Retry Video
+
+Puts a `failed` video back in the queue. This is the only way back into the pipeline: dispatch only
+ever picks up a video that is `pending`, and getting one there takes more than a status change —
+the failed run's batches, per-chunk progress and stream errors are cleared first, or the retry
+would hang behind them or report the old attempt's state.
+
+Everything the failed run had already encoded is reused, so a video that died on its last chunk
+comes back in minutes. The uploaded original is never touched.
+
+```
+POST /api/videos/{ulid}/retry
+```
+
+Takes no body. Re-probing the source — rebuilding the streams and outputs from the template
+instead of reusing them — is a `videos:retry --reprobe` decision and is not exposed here: a run
+that failed while probing left no derived streams, so a plain retry re-probes anyway, and the
+difference the flag does make is re-encoding a whole video that only needed its last chunk.
+
+Returns the requeued video, in the same shape as [Get Video](#get-video), with `status` back to
+`pending`.
+
+Responds `409` when the video cannot be retried, with the reason in `message`: it is not `failed`,
+its source is gone from both the internal mirror and S3, or its previous run still has encode
+batches in flight — those jobs are still on their way and must be allowed to land.
 
 ## Playback URLs
 

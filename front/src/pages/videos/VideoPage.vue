@@ -29,6 +29,7 @@ import StreamService from '@/services/StreamService'
 import { EditIcon, FileVideo, Radio, Box, Subtitles, PlayIcon, Clock, HardDrive, CalendarDays, Trash2 } from '@lucide/vue'
 import { formatSecondsToTime } from '@/utils/timeFormatter'
 import DeleteVideoButton from './components/DeleteVideoButton.vue'
+import RetryVideoButton from './components/RetryVideoButton.vue'
 import StreamItem from './components/StreamItem.vue'
 import EditStreamDialog from './components/EditStreamDialog.vue'
 import { toast } from 'vue-sonner'
@@ -185,6 +186,12 @@ const canManageStreams = computed(() =>
   !!video.value && terminalStatuses.includes(video.value.status)
 )
 
+/** What `VideoService::DELETABLE_STATUSES` allows: the terminal two, plus a pending video —
+ *  nothing has started on that one, so there is no run to strand. */
+const canDelete = computed(() =>
+  !!video.value && (video.value.status === 'pending' || terminalStatuses.includes(video.value.status))
+)
+
 const deleteSource = async () => {
   const stream = originalStream.value
   if (!stream) return
@@ -273,6 +280,13 @@ const startPolling = () => {
   }
 }
 
+/** A requeued video comes back PENDING and starts moving again, so the poll has to be re-armed:
+ *  it stops itself the moment a video reaches a terminal status, which is where this one was. */
+const onRetried = (updated: Video) => {
+  video.value = updated
+  startPolling()
+}
+
 /** Retry from the error screen: load again and re-arm the poll if the video is still working. */
 const reload = async () => {
   await load()
@@ -313,7 +327,14 @@ onUnmounted(stopPolling)
             </div>
             <CardDescription class="text-xs break-all">{{ video.ulid }}</CardDescription>
           </div>
-          <DeleteVideoButton :id="video.ulid" />
+          <div class="flex items-center gap-2">
+            <!-- The only way back into the pipeline: dispatch only ever picks up a PENDING video,
+                 and nothing puts a failed one back there on its own. -->
+            <RetryVideoButton v-if="video.status === 'failed'" :id="video.ulid" @retried="onRetried" />
+            <!-- Disabled rather than hidden: the API refuses the same set, and a button that
+                 vanishes mid-encode reads as a missing feature. -->
+            <DeleteVideoButton :id="video.ulid" :disabled="!canDelete" />
+          </div>
         </div>
       </CardHeader>
       <CardContent class="space-y-3">

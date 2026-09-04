@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Console\Commands\RetryVideos;
 use App\Data\Video\DownloadVideoTracksData;
 use App\Data\Video\IndexVideosData;
 use App\Data\Video\PlayVideoData;
@@ -137,6 +138,29 @@ class VideoController extends Controller
 
         return response()->json([
             'message' => 'Video deleted successfully',
+        ]);
+    }
+
+    /**
+     * Requeues a failed video, which is the only way back into the pipeline: dispatch only ever
+     * picks up a video that is PENDING, and getting there takes more than a status change
+     * ({@see VideoService::retry()}).
+     *
+     * Takes no body. `retry --reprobe` — rebuilding the streams and outputs from the template
+     * instead of reusing them — stays on the CLI ({@see RetryVideos}),
+     * because from here the two are indistinguishable: a run that failed while probing left no
+     * derived streams, so the plain retry re-probes anyway, and the difference the flag does make
+     * is re-encoding a whole video that only needed its last chunk.
+     */
+    public function retry(Request $request, string $ulid)
+    {
+        $video = $request->project()->videos()->where('ulid', $ulid)->firstOrFail();
+
+        $this->videoService->retry($video);
+
+        return response()->json([
+            'message' => 'Video queued for another run successfully',
+            'data' => VideoData::fromModel($video->fresh()->load(['outputs.streams', 'streams'])),
         ]);
     }
 
