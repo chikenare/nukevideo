@@ -164,7 +164,7 @@ class DownloadLinkService
         try {
             return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal());
         } catch (NoCdnNodeAvailableException) {
-            // Same answer playback gives ({@see \App\Http\Controllers\VodController}): the track
+            // Same answer playback gives ({@see VodLinkService}): the track
             // exists and the caller is entitled to it, there is just nothing to serve it right now.
             abort(503, 'No node available');
         }

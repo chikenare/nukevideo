@@ -4,12 +4,14 @@ namespace App\Http\Controllers;
 
 use App\Data\Video\DownloadVideoTracksData;
 use App\Data\Video\IndexVideosData;
+use App\Data\Video\PlayVideoData;
 use App\Data\Video\UpdateVideoData;
 use App\Data\VideoData;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\DownloadLinkService;
 use App\Services\VideoService;
+use App\Services\VodLinkService;
 use App\Support\TrackingId;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -19,6 +21,7 @@ class VideoController extends Controller
     public function __construct(
         protected VideoService $videoService,
         protected DownloadLinkService $downloads,
+        protected VodLinkService $vod,
     ) {}
 
     public function index(Request $request, IndexVideosData $data)
@@ -77,6 +80,33 @@ class VideoController extends Controller
             'data' => $this->downloads->forVideo(
                 $video,
                 $data->streamUlids,
+                TrackingId::resolve($data->trackingId, $request->user()),
+            ),
+        ]);
+    }
+
+    /**
+     * Signed playback links for every output of a video, in one pass.
+     *
+     * Keyed by video for the same reason the batch download is ({@see downloads}), and with the
+     * same effect on the caller: a player no longer has to know which output to ask for before it
+     * can ask for anything. This replaced the per-output mint outright — there was no question a
+     * caller could answer better one output at a time.
+     */
+    public function play(Request $request, PlayVideoData $data, string $ulid)
+    {
+        $video = $request->project()->videos()
+            ->with('outputs.streams')
+            ->where('ulid', $ulid)->firstOrFail();
+
+        return response()->json([
+            'data' => $this->vod->forVideo(
+                $video,
+                $data->resolution,
+                // The address that will actually fetch the manifests, so an integrator minting
+                // from its own backend must name the end viewer; falls back to the caller's own,
+                // which is right when the player itself is asking.
+                $data->ip ?? $request->ip(),
                 TrackingId::resolve($data->trackingId, $request->user()),
             ),
         ]);

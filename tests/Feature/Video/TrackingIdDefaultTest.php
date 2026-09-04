@@ -128,7 +128,8 @@ it('attributes a session-minted playback link to the user when no tracking id is
     $output = Output::create(['video_id' => $video->id, 'status' => 'completed']);
     $output->recordFormats(['dash', 'hls']);
 
-    $url = $this->postJson("/api/outputs/{$output->ulid}")->assertOk()->json('data.url');
+    $url = $this->postJson("/api/videos/{$video->ulid}/play")
+        ->assertOk()->json('data.sources.0.url');
 
     // The URL names nobody — the attribution is the mapping the mint recorded under the token.
     expect(parse_url($url, PHP_URL_PATH))->toStartWith("/{$video->ulid}/")

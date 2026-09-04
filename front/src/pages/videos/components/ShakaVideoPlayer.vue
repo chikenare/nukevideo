@@ -40,7 +40,19 @@ const handlePlayVideo = async () => {
 
   try {
     isLoadingVideo.value = true
-    const output = await VideoService.getOutputLink(outputUlid)
+
+    // The mint answers for the whole video and the answer is flat — one entry per output and
+    // format — so this player, which renders the output you picked, filters its own out of it.
+    // A manifest that cannot be served is simply not there.
+    const { sources } = await VideoService.play(video.ulid)
+    const mine = sources.filter((s) => s.outputUlid === outputUlid)
+    // Shaka handles both; DASH first because it is the one every packaged output serves.
+    const source = mine.find((s) => s.format === 'dash') ?? mine[0]
+
+    if (!source) {
+      toast.error('This output is not available for playback')
+      return
+    }
 
     shaka.polyfill.installAll()
     if (!shaka.Player.isBrowserSupported()) {
@@ -79,7 +91,7 @@ const handlePlayVideo = async () => {
 
     // The signed manifest URL (DASH .mpd or HLS .m3u8); shaka auto-detects the type. Segments are
     // already tokenised inside the manifest, so no request filter is needed.
-    await player.load(output.url)
+    await player.load(source.url)
 
     if (video.storyboardUrl) {
       // Best-effort thumbnails; ignore if the storyboard track can't be added.

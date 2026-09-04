@@ -3,15 +3,17 @@
 namespace App\Models;
 
 use App\Enums\VideoStatus;
-use App\Http\Controllers\VodController;
 use App\Jobs\PackageVideoJob;
 use App\Observers\OutputObserver;
+use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
+use App\Services\VodLinkService;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
 
@@ -112,7 +114,7 @@ class Output extends Model
      * recomputation from the currently-attached streams' codecs could silently drift from what's
      * really packaged on S3 — e.g. deleting the only Opus (DASH-only) audio stream from an output
      * would make a live computation claim HLS too, even though no `.m3u8` was ever packaged, breaking
-     * {@see VodController::buildLink}. Falls back to the live computation only
+     * {@see VodLinkService::forVideo}. Falls back to the live computation only
      * before packaging has run (`packaged_formats` is still null).
      *
      * @return list<string>
@@ -153,6 +155,62 @@ class Output extends Model
     public function recordFormats(array $formats): void
     {
         $this->forceFill(['packaged_formats' => $formats])->save();
+    }
+
+    /**
+     * The decodable video format this output serves (`h264`, `hevc`, `av1`), or null when no
+     * rendition records one.
+     *
+     * Read live from the attached streams rather than frozen like {@see formats()}. The freeze
+     * exists because deleting a stream edits the manifests but never deletes the manifest FILE, so
+     * the packaged formats can outlive their streams. Codecs have no such gap: removing a stream
+     * takes its codec out of the manifest too ({@see ManifestEditor::removeStream}), so what is
+     * attached is what is served.
+     */
+    public function videoCodec(): ?string
+    {
+        return $this->codecFamily('video');
+    }
+
+    /** The decodable audio format this output serves (`aac`, `opus`), or null when it carries no
+     *  audio at all — a source with no audio track produces exactly that. */
+    public function audioCodec(): ?string
+    {
+        return $this->codecFamily('audio');
+    }
+
+    /**
+     * The codec family of this output's streams of one type, in the catalogue's terms: the ENCODER
+     * the row records (`libx264`, `h264_nvenc`) mapped to the bitstream it writes, which is the
+     * only half a player can act on.
+     *
+     * One value per type, not a list, because that is what the template can express. An output's
+     * `variants` are one video codec's ABR ladder, and its `audio` block is a single `audio_codec`
+     * applied to every source track — what varies per audio stream is the language and the channel
+     * layout ({@see CreateVideoStreamsService::getOrCreateAudioStreams}). A second codec of either
+     * kind is a second output. The streams are still scanned rather than the first one read, so a
+     * row that somehow disagrees surfaces here instead of being silently represented by whichever
+     * stream happened to sort first.
+     */
+    private function codecFamily(string $type): ?string
+    {
+        $catalogue = collect(config('ffmpeg.codecs'));
+
+        $families = $this->streams
+            ->where('type', $type)
+            ->map(fn (Stream $stream) => $catalogue->firstWhere('codec', $this->streamCodec($stream))['family'] ?? null)
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($families->count() > 1) {
+            // Nothing can produce this today, and if something ever does, the output's formats are
+            // already the intersection of the codecs' protocols ({@see computedFormats()}) — so a
+            // single reported family would name a codec the manifests do not all use.
+            Log::warning("Output {$this->ulid} carries several {$type} codecs: ".$families->implode(', '));
+        }
+
+        return $families->first();
     }
 
     private function streamCodec(Stream $stream): ?string

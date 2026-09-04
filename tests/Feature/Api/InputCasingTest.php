@@ -17,7 +17,6 @@
 
 use App\Data\Analytics\BatchQueryData;
 use App\Data\Video\IndexVideosData;
-use App\Models\Output;
 use App\Models\Project;
 use App\Models\User;
 use App\Models\Video;
@@ -55,18 +54,18 @@ it('applies the metrics batch cap and the tracking id charset', function () {
     ])->assertStatus(422);
 });
 
-it('applies the playback link attribute rules', function () {
+it('applies an attribute rule to a camelCase-mapped field', function () {
     $video = Video::create([
         'user_id' => $this->user->id, 'project_id' => $this->project->id,
         'name' => 'Clip', 'duration' => 10, 'aspect_ratio' => '16:9', 'status' => 'completed',
     ]);
-    $output = Output::create(['video_id' => $video->id, 'status' => 'completed']);
-    $output->recordFormats(['dash', 'hls']);
 
-    // `#[Max(255)]` lives in an attribute here — the case that writing every rule twice, the old
-    // workaround, could never have covered: there is no second key to write.
-    $this->postJson("/api/outputs/{$output->ulid}", ['externalUserId' => str_repeat('x', 300)])
-        ->assertStatus(422);
+    // `#[Max(255)]` lives in an attribute on a property that maps camelCase — the case that
+    // writing every rule twice, the old workaround, could never have covered: there is no second
+    // key to write. `name` is valid, so a 422 can only come from the field under test.
+    $this->putJson("/api/videos/{$video->ulid}", [
+        'name' => 'Clip', 'externalUserId' => str_repeat('x', 300),
+    ])->assertStatus(422);
 });
 
 it('leaves a snake_case key unbound rather than refusing it', function () {

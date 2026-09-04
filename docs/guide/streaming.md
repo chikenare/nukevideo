@@ -30,13 +30,18 @@ There are two delivery paths — self-hosted **proxy nodes** or **Bunny CDN**. B
 
 ## Requesting a Playback URL
 
-The API mints a signed manifest URL for a video's output:
+The API mints signed manifest URLs for a video in one call — every output, and every format each
+one serves:
 
 ```
-POST /api/outputs/{ulid}
+POST /api/videos/{ulid}/play
 ```
 
-The response contains the signed URL for the requested format (HLS or DASH). The URL points at whichever delivery layer is configured (a proxy node host or the Bunny pull-zone host) and carries the access token.
+The URLs point at whichever delivery layer is configured (a proxy node host or the Bunny pull-zone
+host) and carry the access token. The answer is a flat list of `sources`: one entry per output and
+format, each carrying its `format`, its `videoCodec` and its `audioCodec`, so you can rule one out
+before loading it. A manifest that cannot be served is absent. Full shape in
+[Playback URLs](/api/videos#playback-urls).
 
 **Request body** (all optional):
 
@@ -46,8 +51,7 @@ unattributed.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `format` | `dash` \| `hls` | Defaults to the output's first available format. |
-| `resolution` | integer | Caps the ladder at this height. |
+| `resolution` | integer | Caps every output's ladder at this height. Nothing else in the body selects what comes back — every format each output serves is in the answer. |
 | `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
 | `trackingId` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 

@@ -22,7 +22,6 @@ use App\Http\Controllers\StreamController;
 use App\Http\Controllers\TemplateController;
 use App\Http\Controllers\VideoController;
 use App\Http\Controllers\VideoWebhookController;
-use App\Http\Controllers\VodController;
 use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\VerifyInternalSecret;
 use App\Http\Middleware\VerifyWebhookSignature;
@@ -101,6 +100,9 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // Batch mint. Additive: the per-stream route below stays, it is public API. Here rather
         // than under `streams/` because the video is what the hoisted work belongs to.
         Route::post('videos/{video}/downloads', [VideoController::class, 'downloads']);
+        // Playback. Every output of the video at once: what a mint needs besides the signature is
+        // per video, and a player should not have to pick an output before it knows what they are.
+        Route::post('videos/{video}/play', [VideoController::class, 'play']);
 
         // Streams
         Route::match(['put', 'patch'], 'streams/{stream}', [StreamController::class, 'update']);
@@ -175,10 +177,6 @@ Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle']
 // Bandwidth ingest (Vector -> queue -> ClickHouse)
 Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
     ->middleware(VerifyInternalSecret::class);
-
-// VOD — playback link, scoped to the caller's project like every other resource route.
-Route::post('outputs/{ulid}', [VodController::class, 'getOutputLink'])
-    ->middleware(['auth:sanctum', 'resolve.project']);
 
 Route::get('/videos/{ulid}/{filename}', [VideoController::class, 'getAsset'])
     ->where('filename', 'storyboard(_\d+)?\.(vtt|jpg)|thumbnail\.jpg')

@@ -36,8 +36,12 @@ class VideoService {
     return this.api.delete(`${this.BASE_PATH}/${ulid}`)
   }
 
-  async getOutputLink(ulid: string): Promise<App.Data.VodOutputData> {
-    const res = await this.api.post(`/outputs/${ulid}`)
+  // Every output of the video at once. The panel plays one of them, but the mint is keyed by
+  // video, so picking happens here rather than in a second round trip.
+  // Partial: the generated type spells every field as nullable-but-present, and each one is
+  // optional on the wire.
+  async play(ulid: string, params: Partial<App.Data.Video.PlayVideoData> = {}): Promise<App.Data.VideoVodLinksData> {
+    const res = await this.api.post(`${this.BASE_PATH}/${ulid}/play`, params)
     return res.data.data
   }
 }

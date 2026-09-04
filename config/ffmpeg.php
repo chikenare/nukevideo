@@ -33,11 +33,19 @@ return [
     // 1.0 rather than carrying a number that does nothing. Calibrate against x264 `medium` at
     // 1080p if you add a codec; being 2x out is harmless, being 10x out is what this exists for.
     'codecs' => [
+        // `family` is the decodable format an entry produces, as opposed to `codec`, which names
+        // the ENCODER ffmpeg runs: `libx264`, `h264_qsv` and `h264_nvenc` are three ways to write
+        // the same H.264 bitstream, and a player cares about the bitstream. It is what the
+        // playback mint reports so a client can rule an output out before loading its manifest
+        // ({@see \App\Models\Output::videoCodec}). Coarse on purpose — the exact RFC 6381 string
+        // (`av01.0.08M.08`) exists only in the manifest shaka-packager writes.
+        //
         // ========== VIDEO CODECS ==========
         [
             'codec' => 'libx264',
             'type' => 'video',
             'label' => 'H.264 (AVC)',
+            'family' => 'h264',
 
             // Output muxer (`-f`) used when encoding this codec; see EncodeCommandBuilder.
             'format' => 'mp4',
@@ -50,6 +58,7 @@ return [
             'codec' => 'libx265',
             'type' => 'video',
             'label' => 'H.265 (HEVC)',
+            'family' => 'hevc',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -62,6 +71,7 @@ return [
             'codec' => 'libsvtav1',
             'type' => 'video',
             'label' => 'AV1 (SVT-AV1)',
+            'family' => 'av1',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -109,6 +119,7 @@ return [
             'codec' => 'h264_qsv',
             'type' => 'video',
             'label' => 'H.264 (Intel QSV)',
+            'family' => 'h264',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -119,6 +130,7 @@ return [
             'codec' => 'hevc_qsv',
             'type' => 'video',
             'label' => 'H.265 (Intel QSV)',
+            'family' => 'hevc',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -129,6 +141,7 @@ return [
             'codec' => 'av1_qsv',
             'type' => 'video',
             'label' => 'AV1 (Intel QSV)',
+            'family' => 'av1',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -139,6 +152,7 @@ return [
             'codec' => 'h264_nvenc',
             'type' => 'video',
             'label' => 'H.264 (NVIDIA NVENC)',
+            'family' => 'h264',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -149,6 +163,7 @@ return [
             'codec' => 'hevc_nvenc',
             'type' => 'video',
             'label' => 'H.265 (NVIDIA NVENC)',
+            'family' => 'hevc',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -159,6 +174,7 @@ return [
             'codec' => 'av1_nvenc',
             'type' => 'video',
             'label' => 'AV1 (NVIDIA NVENC)',
+            'family' => 'av1',
 
             'format' => 'mp4',
             'protocols' => ['hls', 'dash'],
@@ -171,6 +187,7 @@ return [
             'codec' => 'aac',
             'type' => 'audio',
             'label' => 'AAC',
+            'family' => 'aac',
 
             'format' => 'mp4',
             // AAC decodes everywhere, so it's packaged for both HLS and DASH.
@@ -181,6 +198,7 @@ return [
             'codec' => 'libfdk_aac',
             'type' => 'audio',
             'label' => 'FDK-AAC',
+            'family' => 'aac',
 
             'format' => 'mp4',
             // AAC decodes everywhere, so it's packaged for both HLS and DASH.
@@ -191,6 +209,7 @@ return [
             'codec' => 'libopus',
             'type' => 'audio',
             'label' => 'Opus',
+            'family' => 'opus',
 
             // Opus muxes into MP4 (ISO-BMFF `dOps`), not WebM: the whole pipeline — chunk concat,
             // shaka's CMAF input — runs on ISO-BMFF. ffmpeg's mp4 muxer writes the sample entry natively.

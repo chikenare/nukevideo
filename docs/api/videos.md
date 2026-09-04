@@ -166,16 +166,93 @@ DELETE /api/videos/{ulid}
 
 ## Playback URLs
 
-Playback links are minted **per output**, not per video — a video with several outputs has one
-manifest family per output, and the ladder cap and format are chosen at mint time:
+Mint signed manifest URLs for **every** output of a video in one request. This is the only playback
+mint: everything one needs besides the signature — your authentication, the project lookup, the
+video's status, the delivery node — belongs to the video rather than to the output, and a player no
+longer has to decide which output to ask for before it can ask for anything.
 
 ```
-POST /api/outputs/{ulid}
+POST /api/videos/{ulid}/play
 ```
 
-Take the output ULID from this video's `outputs[]`. See
-[Streaming & VOD](/guide/streaming#requesting-a-playback-url) for the request body and the token
-model.
+**Request Body** (all optional):
+
+```json
+{
+  "resolution": 720,
+  "ip": "203.0.113.7",
+  "trackingId": "customer-42"
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `resolution` | integer | Caps every output's ladder at this height. Each output resolves it against its own renditions: you get the tallest packaged rendition at or below your ceiling, or the full ladder when the ceiling is already at or above the tallest one. |
+| `ip` | string | The viewer's address, when the link is minted from your backend. |
+| `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
+
+Nothing in the body selects *what* comes back. The answer carries every manifest the video can
+serve, and you pick from it.
+
+**Response:**
+
+```json
+{
+  "data": {
+    "thumbnailUrl": "https://cdn.example.com/01HX.../assets/thumbnail.jpg",
+    "storyboardUrl": "https://cdn.example.com/01HX.../assets/storyboard.vtt",
+    "expiresAt": "2025-01-15T11:30:00+00:00",
+    "sources": [
+      {
+        "url": "https://cdn.example.com/01HX.../play/01HZ....m3u8",
+        "format": "hls",
+        "outputUlid": "01HZ...",
+        "videoCodec": "h264",
+        "audioCodec": "aac"
+      },
+      {
+        "url": "https://cdn.example.com/01HX.../play/01HZ....mpd",
+        "format": "dash",
+        "outputUlid": "01HZ...",
+        "videoCodec": "h264",
+        "audioCodec": "aac"
+      },
+      {
+        "url": "https://cdn.example.com/01HX.../play/01J0....mpd",
+        "format": "dash",
+        "outputUlid": "01J0...",
+        "videoCodec": "av1",
+        "audioCodec": "opus"
+      }
+    ]
+  }
+}
+```
+
+`sources` is **flat**: one entry per output *and* format, so each one is self-sufficient — pick one
+and hand its `url` to your player. An output that serves both protocols produces two entries, which
+is why the first two above repeat their codecs and their `outputUlid`.
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `url` | string | The signed manifest. It points at whichever delivery layer is configured and carries the access token. |
+| `format` | `hls` \| `dash` | Given explicitly rather than left to be sniffed from the extension. |
+| `outputUlid` | string | The output this manifest belongs to, matching an entry of `outputs[]` on [Get Video](#get-video). Several sources can share it. |
+| `videoCodec` | string \| null | The decodable format — `h264`, `hevc`, `av1` — not the encoder that wrote it, so an output encoded on NVENC or QSV still reports `h264`. This is what lets you rule a source out before loading it: the manifest declares the exact codec string, but only once fetched. `null` if no rendition records one. |
+| `audioCodec` | string \| null | The decodable audio format, `aac` or `opus`. One value, like `videoCodec`: a template names a single audio codec per output and applies it to every language that output carries. `null` when the output has no audio at all. |
+
+**A manifest that cannot be served is simply absent** — an output that never finished packaging, or
+one whose streams were all deleted. A video is `completed` once at least one output succeeded, so a
+failed sibling is an ordinary state and does not cost the others their links. `sources` can come
+back empty, still as a `200`: the video exists and you are entitled to it, there is just nothing to
+play.
+
+Every URL in one answer expires at the same `expiresAt`: they are signed in the same request
+against the same provider window. Responds `409` while the video is still processing and `503`
+when no delivery node is available — both conditions of the video, under which nothing could have
+been served.
+
+See [Streaming & VOD](/guide/streaming#requesting-a-playback-url) for the token model.
 
 ## Download Tracks
 
