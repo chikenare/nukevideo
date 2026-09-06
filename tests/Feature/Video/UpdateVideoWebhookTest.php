@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\Video;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -17,6 +18,11 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Queue::fake();
     Storage::fake('s3');
+
+    // Building the payload reads each output's chunk progress, and deleting a video clears it.
+    // Only a COMPLETED output short-circuits that ({@see Output::progress}), and these are not.
+    Redis::shouldReceive('hvals')->andReturn([]);
+    Redis::shouldReceive('del')->andReturn(1);
 
     $this->user = User::factory()->create();
     $this->project = Project::factory()->for($this->user)->create([
