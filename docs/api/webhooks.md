@@ -52,6 +52,7 @@ only the side effects.
 | Event | When |
 |-------|------|
 | `video.created` | The upload was ingested and the video row exists. Fires **before the source is probed**: `duration` is `0`, `aspectRatio` is empty, `outputs` is empty and `streams` holds only the `original`. |
+| `video.updated` | The video's own fields (`PUT\|PATCH /api/videos/{ulid}`) or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished, including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
 | `video.completed` | Every output reached a terminal state and at least one succeeded. |
 | `video.error` | The video failed — either every output failed, or a pipeline failure (a stalled worker, an unreachable source) ended the run. |
 | `video.deleted` | The video was deleted. Only sent for videos that carry an `externalResourceId`. The payload is the video as it was just before deletion. |
@@ -71,20 +72,18 @@ Two consequences worth designing around:
   is queued, not when it is sent, so a delivery that only succeeds on its last attempt can land ~6
   minutes late and overwrite a newer one that already got through. If you mirror the video, ignore a
   payload whose `status` is behind the one you already stored.
-- **Deliveries are at-least-once.** Make your receiver idempotent on `data.ulid`.
+- **Deliveries are at-least-once.** Make your receiver idempotent on `data.ulid`. One edit can also
+  legitimately produce more than one `video.updated`: the `original` reclaimed right after
+  `video.completed` is the common case, and the last payload is the current one.
 
 ### What is *not* covered
 
 These change a video without emitting any event. If you keep a local copy, refresh it from
-[`GET /api/videos/{ulid}`](/api/videos#get-video) after them, or from the response of the call you
-made:
+[`GET /api/videos/{ulid}`](/api/videos#get-video) after them:
 
 | Change | How to stay in sync |
 |--------|---------------------|
-| `PUT\|PATCH /api/videos/{ulid}` and `PUT\|PATCH /api/streams/{ulid}` | Both return the updated resource — use the response. |
-| `DELETE /api/streams/{ulid}` | Refetch the video. |
 | Intermediate pipeline states (`downloading`, `running`, `uploading`) and the probe that fills in `duration`, `aspectRatio`, `outputs` and `streams` | Poll while the status is not terminal. |
-| The `original` stream being reclaimed after a successful run, when the template has `keepOriginal` off | The `video.completed` payload still lists it; it is deleted moments later. Do not link to the original from a stored copy without rechecking. |
 | A re-probe (`videos:retry --reprobe`), which mints **new stream ULIDs** | Refetch the video; any stored stream ULID is stale. |
 
 `outputs[].progress` is live encoding progress read from a short-lived store. It is never worth
