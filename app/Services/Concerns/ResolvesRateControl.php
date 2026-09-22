@@ -5,10 +5,12 @@ namespace App\Services\Concerns;
 use App\Services\QualityBitrateProbe;
 
 /**
- * Every decision about how many bits a rendition may spend. One question throughout — never spend
- * more than the source did ({@see sourceBitrateCap}) — and one entry point ({@see resolveRateControl});
- * the branches differ only in the lever each encoder honours. Reads `$this->stream` and
- * `parseBitrateValue()` from {@see DetectsStreamCopy}.
+ * Every decision about how many bits a rendition may spend, in one entry point
+ * ({@see resolveRateControl}); the branches differ only in the lever each encoder honours. The
+ * source's own rate ({@see sourceBitrateCap}) is an average over the whole file, so it only ever
+ * pins an average — a pinned -b:v — while a peak ceiling gets {@see PEAK_HEADROOM} on top. In
+ * quality mode nothing pins the average: the CRF decides it, the VBV only trims the peaks.
+ * Reads `$this->stream` and `parseBitrateValue()` from {@see DetectsStreamCopy}.
  */
 trait ResolvesRateControl
 {
@@ -24,14 +26,28 @@ trait ResolvesRateControl
     /** A pinned average as a fraction of the peak cap, shared by QVBR steering and the VBR fallback. */
     private const AVERAGE_TARGET_RATIO = 0.75;
 
+    /**
+     * How far above the source's average a peak ceiling may sit. `source_bit_rate` is the mean of
+     * the whole file, and the heavy scenes of a film (water, foliage, grain) run well above it: a
+     * source averaging 1.8 Mbps spent 3.2-3.6 Mbps through its busiest minutes. Used as `-maxrate`,
+     * the mean starved exactly those scenes — the output sat pinned at ~2 Mbps with visible blocking
+     * while the rest of the film scored 20 dB higher. Three times the mean clears the observed
+     * peaks with room to spare, and quality mode still spends far less than that everywhere else.
+     */
+    private const PEAK_HEADROOM = 3.0;
+
     /** Encoders that abort when a quality target is pinned next to an average bitrate. */
     private const ABR_WITHOUT_QUALITY_KNOB = ['libsvtav1', 'av1_qsv'];
 
     /** Encoders that abort when a VBV is attached to an average bitrate. */
     private const ABR_WITHOUT_VBV = ['libsvtav1'];
 
-    /** The mode this rendition encodes in and the ceiling it may not cross. */
-    private function resolveRateControl(array $params): array
+    /**
+     * The mode this rendition encodes in and the ceiling it may not cross. `$clampToSource: false`
+     * keeps the template's own VBV untouched — for per-title anchors, whose VMAF has to answer to
+     * the CRF alone; a source-tightened VBV flattens the curve and reads as saturation.
+     */
+    private function resolveRateControl(array $params, bool $clampToSource = true): array
     {
         // ABR: the template pinned an average, so it carries its own ceiling.
         if (! empty($params['constant_bitrate'])) {
@@ -44,12 +60,16 @@ trait ResolvesRateControl
             return $this->capBlindQualityMode($params, $cap);
         }
 
+        if (! $clampToSource) {
+            $cap = null;
+        }
+
         if ($cap !== null) {
             $params = $this->clampMaxrateToSource($params, $cap);
         }
 
         return self::accelForCodec($params['video_codec'] ?? null) === 'intel'
-            ? $this->steerQsvRateControl($params)
+            ? $this->steerQsvRateControl($params, $cap)
             : $params;
     }
 
@@ -106,8 +126,9 @@ trait ResolvesRateControl
     }
 
     /**
-     * AV1 on QSV honours no VBV: `-maxrate` silently selects CQP at the driver's default QP and
-     * `-global_quality` stops being read with it, and there is no QVBR either (Arc B580 / iHD 1.22).
+     * AV1 on QSV honours no VBV in quality mode: `-maxrate` silently selects CQP at the driver's
+     * default QP and `-global_quality` stops being read with it, and there is no QVBR either
+     * (Arc B580 / iHD 1.22).
      * Its ceiling can only be chosen up front, from what the quality mode was measured to cost
      * ({@see QualityBitrateProbe}) — an overshoot is re-issued as capped VBR.
      */
@@ -121,11 +142,15 @@ trait ResolvesRateControl
             return $params;
         }
 
+        // The average answers to the source's average; the peak gets the same headroom as every
+        // other encoder's VBV, or the VBR fallback starves the heavy scenes all over again.
+        $peak = $cap * self::PEAK_HEADROOM;
+
         return [
             ...self::withoutQualityKnob($params),
             'constant_bitrate' => self::kbps($cap * self::AVERAGE_TARGET_RATIO),
-            'maxrate' => self::kbps($cap),
-            'bufsize' => self::kbps($cap * 2),
+            'maxrate' => self::kbps($peak),
+            'bufsize' => self::kbps($peak * 2),
         ];
     }
 
@@ -157,14 +182,19 @@ trait ResolvesRateControl
         return $params;
     }
 
-    /** Tighten the template's own VBV to the cap. Only ever tightens: a leaner template is already fine. */
-    private function clampMaxrateToSource(array $params, int $cap): array
+    /**
+     * Tighten the template's own VBV to the source's peak ceiling — its average plus
+     * {@see PEAK_HEADROOM}, never the bare average, since `-maxrate` bounds peaks. Only ever
+     * tightens: a leaner template is already fine.
+     */
+    private function clampMaxrateToSource(array $params, int $averageCap): array
     {
         if (empty($params['maxrate'])) {
             return $params;
         }
 
         $maxrate = $this->parseBitrateValue($params['maxrate']);
+        $cap = (int) round($averageCap * self::PEAK_HEADROOM);
 
         if ($cap >= $maxrate) {
             return $params;
@@ -183,15 +213,18 @@ trait ResolvesRateControl
     /**
      * Steer a capped QSV quality mode into QVBR (Arc B580 / iHD): global_quality+maxrate alone
      * selects CQP and silently drops both, and QVBR only engages with a -b:v below the cap.
-     * AV1 never reaches this — it has no QVBR ({@see capBlindQualityMode}).
+     * AV1 never reaches this — it has no QVBR ({@see capBlindQualityMode}). The QVBR target is an
+     * average, so it answers to the source's average cap, not to the peak ceiling `-maxrate` got.
      */
-    private function steerQsvRateControl(array $params): array
+    private function steerQsvRateControl(array $params, ?int $averageCap): array
     {
         if (empty($params['qsv_global_quality']) || empty($params['maxrate'])) {
             return $params;
         }
 
-        $params['constant_bitrate'] = self::kbps($this->parseBitrateValue($params['maxrate']) * self::AVERAGE_TARGET_RATIO);
+        $average = min($this->parseBitrateValue($params['maxrate']), $averageCap ?? PHP_INT_MAX);
+
+        $params['constant_bitrate'] = self::kbps($average * self::AVERAGE_TARGET_RATIO);
 
         return $params;
     }
