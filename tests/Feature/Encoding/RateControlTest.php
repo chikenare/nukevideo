@@ -50,9 +50,11 @@ describe('av1_qsv, blind to a VBV', function () {
     it('falls back to capped VBR once the quality mode really outgrows the source', function () {
         $args = rateArgs(qualityTemplate('av1_qsv'), [...LIGHT_SOURCE, 'quality_bitrate' => 3_176_497]);
 
+        // The average stays at 0.75 × the source's 1264k; the peak gets the same 3x headroom as
+        // every other VBV — capped at the bare average, the heavy scenes starved here too.
         expect($args)->toContain('-b:v 948k')
-            ->toContain('-maxrate 1264k')
-            ->toContain('-bufsize 2527k')
+            ->toContain('-maxrate 3791k')
+            ->toContain('-bufsize 7582k')
             // A quality knob next to a pinned -b:v fails the encode outright on QSV, and the AV1
             // runtime rejects the BRC extensions under VBR (it writes a 0-byte file).
             ->not->toContain('-global_quality')
@@ -65,9 +67,9 @@ describe('av1_qsv, blind to a VBV', function () {
 
         expect($args)->toContain($expected);
     })->with([
-        '1080p' => [1920, 1080, '-b:v 948k -maxrate 1264k'],
-        '720p' => [1280, 720, '-b:v 516k -maxrate 688k'],
-        '480p' => [854, 480, '-b:v 281k -maxrate 375k'],
+        '1080p' => [1920, 1080, '-b:v 948k -maxrate 3791k'],
+        '720p' => [1280, 720, '-b:v 516k -maxrate 2063k'],
+        '480p' => [854, 480, '-b:v 281k -maxrate 1124k'],
     ]);
 
     it('strips a template VBV instead of capping with it, since -maxrate would select CQP', function () {
@@ -136,21 +138,41 @@ describe('encodesUncapped', function () {
 });
 
 describe('encoders that cap themselves', function () {
-    it('tightens a template VBV to the source ceiling', function (string $codec) {
-        $args = rateArgs(qualityTemplate($codec, ['maxrate' => '4000k', 'bufsize' => '8000k']));
+    // LIGHT_SOURCE averages 1264k, so its peak ceiling is three times that: 3791k.
+    it('tightens a template VBV to the source peak ceiling', function (string $codec) {
+        $args = rateArgs(qualityTemplate($codec, ['maxrate' => '8000k', 'bufsize' => '16000k']));
 
-        expect($args)->toContain('-maxrate 1264k')->toContain('-bufsize 2527k');
+        expect($args)->toContain('-maxrate 3791k')->toContain('-bufsize 7582k');
     })->with(['libx264', 'libx265', 'libsvtav1', 'h264_nvenc', 'av1_nvenc']);
 
+    it('never caps a peak at the source average, which starves every scene above it', function () {
+        // Video 6275: a 1.8 Mbps H.264 source that spends 3.2-3.6 Mbps through its heavy scenes.
+        // Clamped to the bare average (1807k/3615k), the AV1 rendition sat at ~2 Mbps there and
+        // blocked visibly; the peak ceiling leaves those scenes their bits.
+        $args = rateArgs(
+            qualityTemplate('libsvtav1', ['maxrate' => '7000k', 'bufsize' => '14000k']),
+            [...LIGHT_SOURCE, 'source_bit_rate' => 1_807_276],
+        );
+
+        expect($args)->toContain('-maxrate 5422k')
+            ->toContain('-bufsize 10844k')
+            ->not->toContain('-maxrate 1807k');
+    });
+
+    it('never raises a template VBV to the peak ceiling', function () {
+        expect(rateArgs(qualityTemplate('libsvtav1', ['maxrate' => '3000k', 'bufsize' => '6000k'])))
+            ->toContain('-maxrate 3000k')->toContain('-bufsize 6000k');
+    });
+
     it('scales that ceiling sublinearly for a downscaled rendition', function () {
-        // (1280*720 / 1920*1080)^0.75 ≈ 0.544
-        expect(rateArgs(qualityTemplate('libsvtav1', ['maxrate' => '4000k', 'bufsize' => '8000k']), width: 1280, height: 720))
-            ->toContain('-maxrate 688k')->toContain('-bufsize 1376k');
+        // (1280*720 / 1920*1080)^0.75 ≈ 0.544 → a 688k average, a 2063k peak
+        expect(rateArgs(qualityTemplate('libsvtav1', ['maxrate' => '8000k', 'bufsize' => '16000k']), width: 1280, height: 720))
+            ->toContain('-maxrate 2063k')->toContain('-bufsize 4127k');
     });
 
     it('keeps a strict VBV strict while tightening it', function () {
-        expect(rateArgs(qualityTemplate('libx264', ['maxrate' => '4000k', 'bufsize' => '4000k'])))
-            ->toContain('-maxrate 1264k')->toContain('-bufsize 1264k');
+        expect(rateArgs(qualityTemplate('libx264', ['maxrate' => '8000k', 'bufsize' => '8000k'])))
+            ->toContain('-maxrate 3791k')->toContain('-bufsize 3791k');
     });
 
     it('leaves a template already under the source ceiling alone', function () {
@@ -159,8 +181,8 @@ describe('encoders that cap themselves', function () {
     });
 
     it('parses an M-suffixed template VBV when tightening it', function () {
-        expect(rateArgs(qualityTemplate('libsvtav1', ['maxrate' => '4M', 'bufsize' => '8M'])))
-            ->toContain('-maxrate 1264k')->toContain('-bufsize 2527k');
+        expect(rateArgs(qualityTemplate('libsvtav1', ['maxrate' => '8M', 'bufsize' => '16M'])))
+            ->toContain('-maxrate 3791k')->toContain('-bufsize 7582k');
     });
 
     it('ignores a bogus sub-100k source bitrate instead of emitting a 0k ceiling', function () {
@@ -181,10 +203,21 @@ describe('encoders that cap themselves', function () {
         expect($args)->toContain('-maxrate 4000k')->toContain('-bufsize 8000k');
     });
 
-    it('steers a capped QSV quality mode into QVBR with an average below the cap', function (string $codec, string $expected) {
-        $args = rateArgs(qualityTemplate($codec, ['maxrate' => '4000k', 'bufsize' => '8000k']));
+    it('keeps the template VBV whole when asked not to clamp to the source', function () {
+        // Per-title anchors: their VMAF has to answer to the CRF, not to a source-tightened VBV.
+        $args = (new ChunkTranscodeService(matrixStream(
+            qualityTemplate('libsvtav1', ['maxrate' => '7000k', 'bufsize' => '14000k']),
+            meta: [...LIGHT_SOURCE, 'source_bit_rate' => 1_807_276],
+        )))->buildVideoArguments(windowed: true, clampToSource: false);
 
-        expect($args)->toContain('-maxrate 1264k')
+        expect($args)->toContain('-maxrate 7000k')->toContain('-bufsize 14000k');
+    });
+
+    it('steers a capped QSV quality mode into QVBR with an average below the source average', function (string $codec, string $expected) {
+        $args = rateArgs(qualityTemplate($codec, ['maxrate' => '8000k', 'bufsize' => '16000k']));
+
+        // The peak goes to -maxrate; the QVBR target is an average, so it stays at 0.75 × 1264k.
+        expect($args)->toContain('-maxrate 3791k')
             ->toContain($expected)
             ->toContain(QUALITY_KNOBS[$codec]['flag'])
             // QVBR is a bitrate mode: the AV1-only BRC extensions have no place in it.
@@ -193,6 +226,11 @@ describe('encoders that cap themselves', function () {
         ['h264_qsv', '-b:v 948k'],
         ['hevc_qsv', '-b:v 948k'],
     ]);
+
+    it('steers QVBR off the template VBV when it is leaner than the source', function () {
+        expect(rateArgs(qualityTemplate('h264_qsv', ['maxrate' => '1000k', 'bufsize' => '2000k'])))
+            ->toContain('-maxrate 1000k')->toContain('-b:v 750k');
+    });
 
     it('does not invent a QVBR average for an uncapped QSV template', function () {
         expect(rateArgs(qualityTemplate('h264_qsv')))->toContain('-global_quality 23')->not->toContain('-b:v');

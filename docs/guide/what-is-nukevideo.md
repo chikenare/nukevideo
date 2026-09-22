@@ -25,7 +25,7 @@ Most video solutions are either expensive SaaS products or full-blown platforms 
 Upload a video and NukeVideo handles the rest — mirroring the original, splitting it into chunks, and encoding those chunks in parallel across worker nodes with FFmpeg (SVT-AV1, x264/x265). Audio is transcoded to AAC, and thumbnails and storyboards are generated.
 
 ### Per-Title VMAF-Based CRF
-Rather than using a fixed quality target for every video, the pipeline probes sample windows of the source, measures VMAF, and interpolates the CRF needed to hit a target VMAF per rendition — with a maxrate clamp to the scaled source bitrate. Simpler sources use fewer bits; complex ones get what they need.
+Rather than using a fixed quality target for every video, the pipeline probes sample windows of the source, measures VMAF, and interpolates the CRF needed to hit a target VMAF per rendition. A template's `maxrate` is tightened against the source's own bitrate, scaled to the rendition, with headroom for peaks: the source's figure is an average over the whole file, and its heavy scenes run well above it. Simpler sources use fewer bits; complex ones get what they need.
 
 ### Static CMAF Packaging
 Encoded output is packaged **once** by shaka-packager into static CMAF: each output produces shared segments that serve **both HLS and DASH** from the same files. Subtitles are packaged as CMAF too. There is no on-the-fly repackaging — the manifests and segments are prepared ahead of time and stored on S3.

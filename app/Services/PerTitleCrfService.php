@@ -31,6 +31,14 @@ class PerTitleCrfService
 
     private const MAX_INCREASE = 12;
 
+    /**
+     * How far above the target a flat curve must sit to read as saturation. VMAF only stops
+     * answering to CRF near its ceiling; a curve flat right at the target means the measurement
+     * is not tracking CRF at all — a VBV starving both anchors did exactly that (26 → 94.24,
+     * 34 → 94.19) and sent the rendition eight CRF steps up.
+     */
+    private const SATURATION_MARGIN = 3.0;
+
     // The probe runs inside ONE worker slot, so it may not spend the whole node. Keep it to a
     // couple of samples at a time; the chunk encoders own the rest of the CPU.
     private const MAX_CONCURRENCY = 2;
@@ -93,8 +101,9 @@ class PerTitleCrfService
 
     /**
      * Interpolate the CRF hitting `$target` from two measured anchors (crf => vmaf). VMAF is
-     * near-linear in CRF over a one-step span; a flat curve means the probe saturated (or the
-     * source is trivial), so fall back to whichever anchor still meets the target.
+     * near-linear in CRF over a one-step span. A flat curve gives no slope to interpolate with:
+     * take the top anchor only when both sit clearly above the target (a saturated probe or a
+     * trivial source); anywhere else the measurement can't be trusted, so keep the template CRF.
      *
      * @param  array<int, float>  $anchors
      */
@@ -107,10 +116,13 @@ class PerTitleCrfService
         $slope = ($highScore - $lowScore) / max(1, $highCrf - $lowCrf);
 
         $chosen = $slope > -0.05
-            ? ($highScore >= $target ? $highCrf : $lowCrf)
+            ? ($highScore >= $target + self::SATURATION_MARGIN ? $highCrf : $lowCrf)
             : $lowCrf + ($target - $lowScore) / $slope;
 
-        $chosen = max($lowCrf - self::MAX_DECREASE, min($lowCrf + self::MAX_INCREASE, $chosen));
+        // Upward, never past the top anchor: beyond it the line is a guess, and a guess that
+        // overshoots costs visible quality (a -0.07 slope extrapolated 26 → 38). Downward, the
+        // guess only spends bits, so it may reach MAX_DECREASE below the base.
+        $chosen = max($lowCrf - self::MAX_DECREASE, min($highCrf, $lowCrf + self::MAX_INCREASE, $chosen));
 
         return (int) max(1, min($maxCrf, round($chosen)));
     }
@@ -184,9 +196,11 @@ class PerTitleCrfService
     private function encodeSampleCommand(int $crf, string $crfKey, float $start, string $sourcePath, string $samplePath): string
     {
         // Replicated stream so the anchor CRF renders through the exact same argument builder
-        // (scale, GOP, *-params, maxrate clamp) the real chunk encode will use. Except the GPU
-        // scale filter: vpp_qsv needs a hw device this command never sets up, so blinding the
-        // replica's pix_fmt meta drops it to the software decode+scale fallback path.
+        // (scale, GOP, *-params, the template's VBV) the real chunk encode will use. Except two
+        // things. The GPU scale filter: vpp_qsv needs a hw device this command never sets up, so
+        // blinding the replica's pix_fmt meta drops it to the software decode+scale fallback path.
+        // And the source clamp: a VBV tightened to the source makes both anchors score alike, the
+        // flat curve reads as saturation, and the probe walks the CRF up into starved scenes.
         $probe = $this->stream->replicate();
         $probe->input_params = [$crfKey => $crf] + ($probe->input_params ?? []);
         $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);
@@ -197,7 +211,7 @@ class PerTitleCrfService
             $start,
             SampleEncode::SECONDS,
             escapeshellarg($sourcePath),
-            $service->buildVideoArguments(windowed: true),
+            $service->buildVideoArguments(windowed: true, clampToSource: false),
             $service->outputFormat(),
             escapeshellarg($samplePath),
         );
