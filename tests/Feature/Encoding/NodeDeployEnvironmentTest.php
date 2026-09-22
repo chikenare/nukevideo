@@ -174,6 +174,20 @@ describe('development and production deploys on one host', function () {
     });
 });
 
+describe('chunk store bootstrap', function () {
+    it('creates the bucket with the s5cmd the worker image already carries', function () {
+        // minio/mc used to do this, and its image vanished from Docker Hub mid-deploy: the probe
+        // may not depend on any image the node would not pull anyway.
+        $script = app(NodeService::class)->buildDeployScript(deployableNode());
+
+        expect($script)->not->toContain('minio/mc')
+            ->toContain('--entrypoint sh "$IMAGE" -c "$STORAGE_BUCKET_CMD"')
+            ->toMatch("/^STORAGE_BUCKET_CMD='s5cmd --endpoint-url http:\/\/127\.0\.0\.1:9000 ls \| grep /m")
+            // `mb` errors on a bucket it already made, so a redeploy must only list it.
+            ->toContain('|| s5cmd --endpoint-url http://127.0.0.1:9000 mb');
+    });
+});
+
 describe('vector placement', function () {
     it('ships edge logs from a self-hosted proxy', function () {
         fakeCdnProvider('self_hosted');

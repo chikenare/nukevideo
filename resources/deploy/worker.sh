@@ -49,7 +49,7 @@ if [ -n "$STORAGE_RUN_ARGS" ]; then
     run_container "$STORAGE_RUN_ARGS"
     echo "Waiting for chunk store..."
     n=0
-    until docker run --rm --network host -e "$STORAGE_MC_HOST" --entrypoint sh minio/mc -c "$STORAGE_MC_CMD"; do
+    until docker run --rm --network host -e "$STORAGE_ACCESS_KEY" -e "$STORAGE_SECRET_KEY" --entrypoint sh "$IMAGE" -c "$STORAGE_BUCKET_CMD"; do
         n=$((n+1)); [ $n -ge 30 ] && echo "Chunk store failed to start" && exit 1; sleep 2
     done
     echo "Chunk store ready"

@@ -407,11 +407,19 @@ class NodeService
             'command' => '/data',
         ]);
 
+        // Readiness and the bucket in one probe, run with the s5cmd the worker image already carries
+        // — minio/mc used to do it, and its image is gone from Docker Hub. `mb` alone is not
+        // idempotent (a redeploy finds the bucket and errors), so it only runs when the bucket
+        // list lacks it; while the store is still booting both fail and the deploy retries.
+        $s5cmd = sprintf('s5cmd --endpoint-url http://127.0.0.1:%d', $port);
+        $bucket = escapeshellarg('s3://'.$disk['bucket']);
+
         return [
             'STORAGE_CONTAINER' => $storeName,
             'STORAGE_RUN_ARGS' => $runArgs,
-            'STORAGE_MC_HOST' => sprintf('MC_HOST_rfs=http://%s:%s@127.0.0.1:%d', $disk['key'], $disk['secret'], $port),
-            'STORAGE_MC_CMD' => "mc mb --ignore-existing rfs/{$disk['bucket']}",
+            'STORAGE_ACCESS_KEY' => 'AWS_ACCESS_KEY_ID='.$disk['key'],
+            'STORAGE_SECRET_KEY' => 'AWS_SECRET_ACCESS_KEY='.$disk['secret'],
+            'STORAGE_BUCKET_CMD' => "{$s5cmd} ls | grep -qxE '.*[[:space:]]'{$bucket} || {$s5cmd} mb {$bucket}",
         ];
     }
 
