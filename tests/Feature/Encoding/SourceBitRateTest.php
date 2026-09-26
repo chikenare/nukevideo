@@ -107,6 +107,8 @@ describe('source_bit_rate, per container', function () {
     it('discounts a track whose rate only its BPS tag states', function () {
         // An mkvmerge remux re-encoded with its audio copied: the new video track states nothing,
         // the copied audio keeps only its BPS tag. That rate used to stay in the video's share.
+        // The video's tag is stripped explicitly: ffmpeg 6 (CI's) carries mkvmerge's statistics
+        // over to a re-encoded track, stale, where the image's newer build drops them.
         $source = sourceFixture('stated.mp4', '-c:v libx264 -c:a aac -b:a 128k');
         $tagged = FIXTURE_DIR.'/tagged.mkv';
         $path = FIXTURE_DIR.'/retagged.mkv';
@@ -114,7 +116,8 @@ describe('source_bit_rate, per container', function () {
         if (! file_exists($tagged)) {
             Process::timeout(60)->run(sprintf('mkvmerge -q -o %s %s', escapeshellarg($tagged), escapeshellarg($source)))->throw();
         }
-        Process::timeout(60)->run(sprintf('ffmpeg -hide_banner -v error -y -i %s -map 0 -c:v libx264 -c:a copy %s',
+        Process::timeout(60)->run(sprintf('ffmpeg -hide_banner -v error -y -i %s -map 0 -c:v libx264 -c:a copy '
+            .'-metadata:s:v:0 BPS= -metadata:s:v:0 BPS-eng= %s',
             escapeshellarg($tagged), escapeshellarg($path)))->throw();
 
         $audio = (int) ffprobeValue($path, 'stream_tags=BPS', 'a:0');
