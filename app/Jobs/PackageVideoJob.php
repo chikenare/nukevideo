@@ -10,6 +10,7 @@ use App\Models\Output;
 use App\Models\Stream;
 use App\Models\Video;
 use App\Services\Cdn\SelfHostedProvider;
+use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
@@ -487,6 +488,40 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
             $stream->update([
                 'package_size' => $package,
                 'file_size' => $raw && is_file($raw) ? (int) filesize($raw) : null,
+            ]);
+
+            if ($stream->type === 'video') {
+                $this->warnIfOutweighsSource($video, $stream, $package);
+            }
+        }
+    }
+
+    /**
+     * The last look at whether a rendition kept to its source's rate. Nothing here can fix one
+     * that didn't — it's already encoded — but every earlier ceiling is an estimate from samples,
+     * and a miss used to surface only when someone compared file sizes by hand (video 9059 shipped
+     * at 1.36x its source). Packaged size includes the CMAF boxes, a few percent at most.
+     */
+    private function warnIfOutweighsSource(Video $video, Stream $stream, int $packageBytes): void
+    {
+        $duration = (float) $video->duration;
+        $ceiling = (new ChunkTranscodeService($stream))->sourceAverageCeiling();
+
+        if ($duration <= 0 || $ceiling === null || $packageBytes <= 0) {
+            return;
+        }
+
+        $bitrate = (int) round($packageBytes * 8 / $duration);
+
+        if ($bitrate > $ceiling) {
+            Log::warning('Rendition outweighs its source', [
+                'video' => $video->id,
+                'stream' => $stream->id,
+                'height' => $stream->height,
+                'bitrate' => $bitrate,
+                'ceiling' => $ceiling,
+                'source_bit_rate' => $stream->meta['source_bit_rate'] ?? null,
+                'input_params' => $stream->input_params,
             ]);
         }
     }
