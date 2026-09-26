@@ -504,6 +504,16 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
      */
     private function warnIfOutweighsSource(Video $video, Stream $stream, int $packageBytes): void
     {
+        // A report, never a gate: whatever goes wrong in here must not fail a finished package.
+        try {
+            $this->checkOutweighsSource($video, $stream, $packageBytes);
+        } catch (Throwable $e) {
+            Log::warning('Source bitrate check skipped', ['stream' => $stream->id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    private function checkOutweighsSource(Video $video, Stream $stream, int $packageBytes): void
+    {
         $duration = (float) $video->duration;
         $ceiling = (new ChunkTranscodeService($stream))->sourceAverageCeiling();
 
