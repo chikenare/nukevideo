@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Jobs\ProcessChunkJob;
 use App\Models\Stream;
 use Closure;
 use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
 
@@ -40,6 +42,9 @@ class PerTitleCrfService
      */
     private const SOURCE_TARGET = 0.85;
 
+    /** d ln(bps) / d crf of a curve worth extrapolating: half the rate within ~35 CRF steps. */
+    private const MIN_BITRATE_SLOPE = -0.02;
+
     /**
      * How far above the target a flat curve must sit to read as saturation. VMAF only stops
      * answering to CRF near its ceiling; a curve flat right at the target means the measurement
@@ -71,6 +76,28 @@ class PerTitleCrfService
                 'stream' => $this->stream->id,
                 'error' => $e->getMessage(),
             ]);
+
+            $this->settleOnTemplateCrf($crfKey, $e);
+        }
+    }
+
+    /**
+     * Record that this stream keeps its template CRF, so a retry doesn't resolve another one. The
+     * chunks it encodes are cached by stream and index alone ({@see ProcessChunkJob}),
+     * not by parameters: a probe that failed once and succeeded on the retry reused the chunks
+     * already encoded at the template CRF and encoded the rest at the new one — one rendition, two
+     * qualities, and an average nothing had estimated. A retry with `--reprobe` mints new streams
+     * and probes them from scratch. Best effort: failing to write this only brings the old
+     * behaviour back.
+     */
+    private function settleOnTemplateCrf(string $crfKey, Throwable $e): void
+    {
+        try {
+            $this->stream->update(['meta' => [...$this->stream->meta ?? [], 'per_title' => [
+                'failed' => Str::limit($e->getMessage(), 300),
+                'chosen_crf' => (int) $this->stream->input_params[$crfKey],
+            ]]]);
+        } catch (Throwable) {
         }
     }
 
@@ -225,7 +252,13 @@ class PerTitleCrfService
             return null;
         }
 
-        return [$lowCrf, $lowRate, (log($highRate) - log($lowRate)) / ($highCrf - $lowCrf)];
+        $slope = (log($highRate) - log($lowRate)) / ($highCrf - $lowCrf);
+
+        // Too flat to be CRF talking. Every encoder here halves its rate within 6-15 CRF steps
+        // (SVT-AV1 measured at 12-15), so a pair that barely moves is a pinned or noisy reading —
+        // and extrapolated, 30 → 2.0 Mbps / 38 → 1.9 Mbps against a 1.0 Mbps ceiling asks for
+        // CRF 138, which the codec ceiling would turn into an unwatchable 63.
+        return $slope <= self::MIN_BITRATE_SLOPE ? [$lowCrf, $lowRate, $slope] : null;
     }
 
     /**

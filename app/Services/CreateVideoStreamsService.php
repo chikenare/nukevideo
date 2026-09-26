@@ -130,9 +130,12 @@ class CreateVideoStreamsService
 
     /**
      * What the container spends on video, for sources whose video track states no rate of its own.
-     * The container's rate covers every track, so the tracks that do state one are discounted; what
-     * remains still bounds the video from above rather than measuring it, which is all its readers
-     * ask of it — a ceiling. Zero when the container states no rate either.
+     * The container's rate covers every track, so every other track that states one is discounted —
+     * in its `bit_rate` or, in a Matroska that went through mkvmerge, only in its BPS tag, which this
+     * used to miss: a remux carrying 384k of 5.1 audio read as 1.71 Mbps of video for 1.2 real, and
+     * every ceiling scaled from it let renditions outweigh the source unnoticed. What remains still
+     * bounds the video from above rather than measuring it, which is all its readers ask of it — a
+     * ceiling. Zero when the container states no rate either.
      */
     private function containerVideoBitRate(Format $format, StreamCollection $streams): int
     {
@@ -142,15 +145,37 @@ class CreateVideoStreamsService
             return 0;
         }
 
+        $video = $streams->videos()->first();
         $stated = 0;
 
         foreach ($streams as $stream) {
-            if ($stream->get('codec_type') !== 'video' && is_numeric($rate = $stream->get('bit_rate'))) {
-                $stated += (int) $rate;
+            if ($stream->get('index') !== $video?->get('index')) {
+                $stated += self::statedBitRate($stream) ?? 0;
             }
         }
 
         return max(0, (int) $containerRate - $stated);
+    }
+
+    /**
+     * A track's own rate: its `bit_rate`, else an mkvmerge BPS tag. A stated 0 is no statement, so
+     * it falls through like a missing one instead of reading as a track that costs nothing.
+     */
+    private static function statedBitRate(FFStream $stream): ?int
+    {
+        $bitRate = $stream->get('bit_rate');
+
+        if (is_numeric($bitRate) && (int) $bitRate > 0) {
+            return (int) $bitRate;
+        }
+
+        foreach (($stream->get('tags') ?? []) as $tag => $value) {
+            if (stripos((string) $tag, 'BPS') === 0 && is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -481,19 +506,7 @@ class CreateVideoStreamsService
      */
     private function sourceBitRate(FFStream $stream): int
     {
-        $bitRate = $stream->get('bit_rate');
-
-        if (is_numeric($bitRate)) {
-            return (int) $bitRate;
-        }
-
-        foreach (($stream->get('tags') ?? []) as $tag => $value) {
-            if (stripos((string) $tag, 'BPS') === 0 && is_numeric($value)) {
-                return (int) $value;
-            }
-        }
-
-        return $this->containerVideoBitRate;
+        return self::statedBitRate($stream) ?? $this->containerVideoBitRate;
     }
 
     /**

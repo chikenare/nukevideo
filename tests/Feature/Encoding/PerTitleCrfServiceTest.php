@@ -211,6 +211,12 @@ describe('capCrfToBitrate', function () {
         expect(PerTitleCrfService::capCrfToBitrate([45 => 3_000_000, 51 => 2_500_000], 51, 500_000, 51))->toBe(51);
     });
 
+    it('never extrapolates a curve too flat to be CRF talking', function () {
+        // 30 → 2.0, 38 → 1.9 Mbps against a 1.0 Mbps ceiling would ask for CRF 138.
+        expect(PerTitleCrfService::capCrfToBitrate([30 => 2_000_000, 38 => 1_900_000], 30, 1_000_000, 63))->toBe(30)
+            ->and(PerTitleCrfService::estimateBitrate([30 => 2_000_000, 38 => 1_900_000], 30))->toBeNull();
+    });
+
     it('keeps the vmaf choice when the curve is broken or missing', function (array $bitrates) {
         expect(PerTitleCrfService::capCrfToBitrate($bitrates, 30, 1_000_000, 63))->toBe(30);
     })->with([
@@ -395,6 +401,24 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
-            ->and($stream->meta)->not->toHaveKey('per_title');
+            ->and($stream->meta['per_title']['chosen_crf'])->toBe(22)
+            ->and($stream->meta['per_title']['failed'])->toContain('No sample window scored');
+    });
+
+    it('never re-resolves a stream whose probe failed, so a retry cannot mix two CRFs', function () use ($template, $source) {
+        // Chunks are cached by stream and index, not by parameters: a retry that resolved a new
+        // CRF reused the chunks already encoded at the template's and encoded the rest at its own.
+        Process::fake(['*' => Process::result(exitCode: 1)]);
+        $stream = persistedPerTitleStream($template, $source, 1280, 960);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000]);
+        (new PerTitleCrfService($stream->refresh()))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        // A second resolve would have landed on CRF 38 and replaced the marker with its curve.
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
+            ->and($stream->meta['per_title'])->toHaveKey('failed')
+            ->and($stream->meta['per_title'])->not->toHaveKey('vmaf_crf');
     });
 });

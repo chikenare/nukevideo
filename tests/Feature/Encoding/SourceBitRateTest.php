@@ -100,6 +100,27 @@ describe('source_bit_rate, per container', function () {
             ->and(probedBitRate($path))->toBe((int) ffprobeValue($path, 'format=bit_rate'));
     });
 
+    it('discounts a track whose rate only its BPS tag states', function () {
+        // An mkvmerge remux re-encoded with its audio copied: the new video track states nothing,
+        // the copied audio keeps only its BPS tag. That rate used to stay in the video's share.
+        $source = sourceFixture('stated.mp4', '-c:v libx264 -c:a aac -b:a 128k');
+        $tagged = FIXTURE_DIR.'/tagged.mkv';
+        $path = FIXTURE_DIR.'/retagged.mkv';
+
+        if (! file_exists($tagged)) {
+            Process::timeout(60)->run(sprintf('mkvmerge -q -o %s %s', escapeshellarg($tagged), escapeshellarg($source)))->throw();
+        }
+        Process::timeout(60)->run(sprintf('ffmpeg -hide_banner -v error -y -i %s -map 0 -c:v libx264 -c:a copy %s',
+            escapeshellarg($tagged), escapeshellarg($path)))->throw();
+
+        $audio = (int) ffprobeValue($path, 'stream_tags=BPS', 'a:0');
+
+        expect(ffprobeValue($path, 'stream=bit_rate', 'v:0'))->toBeNull()
+            ->and(ffprobeValue($path, 'stream_tags=BPS', 'v:0'))->toBeNull()
+            ->and($audio)->toBeGreaterThan(0)
+            ->and(probedBitRate($path))->toBe((int) ffprobeValue($path, 'format=bit_rate') - $audio);
+    });
+
     it('discounts the tracks that do state a rate from the container total', function () {
         // MPEG-TS states the audio rate but not the video's; charging the video for its audio
         // would inflate the very number the ceiling is scaled from.
