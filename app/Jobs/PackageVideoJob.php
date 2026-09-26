@@ -515,7 +515,9 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     private function checkOutweighsSource(Video $video, Stream $stream, int $packageBytes): void
     {
         $duration = (float) $video->duration;
-        $ceiling = (new ChunkTranscodeService($stream))->sourceAverageCeiling();
+        // The bare source share: the rule is that a rendition never outweighs its source, and
+        // per-title aims below it precisely so this stays quiet.
+        $ceiling = (new ChunkTranscodeService($stream))->sourceBitrateCap();
 
         if ($duration <= 0 || $ceiling === null || $packageBytes <= 0) {
             return;

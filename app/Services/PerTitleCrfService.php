@@ -32,6 +32,15 @@ class PerTitleCrfService
     private const MAX_INCREASE = 12;
 
     /**
+     * Where the bitrate cap aims, as a share of the source's rate: a re-encode must never outweigh
+     * its source, and the aim has to absorb the estimate's error, since the cap lands right on it.
+     * Over the first 34 capped renditions in production the real rate ran 0.71-1.13x the estimate
+     * (median 0.97); the low end was the VBV-pinned curve anchors are now measured without. At
+     * 0.85 an estimate may run 17% short and the rendition still stays under its source.
+     */
+    private const SOURCE_TARGET = 0.85;
+
+    /**
      * How far above the target a flat curve must sit to read as saturation. VMAF only stops
      * answering to CRF near its ceiling; a curve flat right at the target means the measurement
      * is not tracking CRF at all — a VBV starving both anchors did exactly that (26 → 94.24,
@@ -93,7 +102,8 @@ class PerTitleCrfService
         // bound keeps VMAF's guess near the template, while this is a measured limit. A grainy
         // cel-animation episode (1080p, 1.94 Mbps H.264): VMAF took SVT-AV1 to CRF 30, which
         // encoded at 1.59x the source; this took it to CRF 40, which encoded at 1.01x.
-        $ceiling = (new ChunkTranscodeService($this->stream))->sourceAverageCeiling($windowSourceRate);
+        $cap = (new ChunkTranscodeService($this->stream))->sourceBitrateCap($windowSourceRate);
+        $ceiling = $cap === null ? null : (int) round($cap * self::SOURCE_TARGET);
         $chosen = $ceiling === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $ceiling, $maxCrf);
         $estimated = self::estimateBitrate($bitrates, $chosen);
 
@@ -367,16 +377,17 @@ class PerTitleCrfService
     private function encodeSampleCommand(int $crf, string $crfKey, float $start, string $sourcePath, string $samplePath): string
     {
         // Replicated stream so the anchor CRF renders through the exact same argument builder
-        // (scale, GOP, *-params, the template's VBV) the real chunk encode will use. Except two
-        // things. The GPU scale filter: vpp_qsv needs a hw device this command never sets up, so
-        // blinding the replica's pix_fmt meta drops it to the software decode+scale fallback path.
-        // And the source clamp: a VBV tightened to the source makes both anchors score alike, the
-        // flat curve reads as saturation, and the probe walks the CRF up into starved scenes. That
-        // held at PEAK_HEADROOM too: on a grainy episode the 3x ceiling pinned CRF 22, both anchors
-        // scored 96.7/96.5 and the flattened bitrate slope extrapolated to CRF 45. Left off, the
-        // samples run a little heavier than the chunks will, so the bitrate cap errs on the lean side.
+        // (scale, GOP, *-params) the real chunk encode will use — without any VBV, so both the VMAF
+        // and the size answer to the CRF alone. A VBV pinning the low anchor flattens both curves:
+        // tightened to the source it made both anchors score alike and the flat curve read as
+        // saturation (video 6275); at PEAK_HEADROOM a grainy episode's anchors scored 96.7/96.5 and
+        // the bitrate slope extrapolated to CRF 45; and even the template's own 6000k pinned CRF 22
+        // at 5.9 Mbps, sending renditions to CRF 43-46 at 0.84x their source. The real encode's VBV
+        // only ever trims what these samples spend, so the cap errs on the lean side. One more
+        // thing differs: the GPU scale filter. vpp_qsv needs a hw device this command never sets
+        // up, so blinding the replica's pix_fmt meta drops it to the software decode+scale path.
         $probe = $this->stream->replicate();
-        $probe->input_params = [$crfKey => $crf] + ($probe->input_params ?? []);
+        $probe->input_params = [$crfKey => $crf] + array_diff_key($probe->input_params ?? [], ['maxrate' => true, 'bufsize' => true]);
         $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);
         $service = new ChunkTranscodeService($probe);
 

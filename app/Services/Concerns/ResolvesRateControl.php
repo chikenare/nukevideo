@@ -2,7 +2,6 @@
 
 namespace App\Services\Concerns;
 
-use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
 use App\Services\SampleEncode;
 
@@ -102,19 +101,6 @@ trait ResolvesRateControl
         $cap = (int) round($sourceRate * min(1.0, ($targetPixels / $sourcePixels) ** 0.75));
 
         return $cap >= self::MIN_CLAMP_BPS ? $cap : null;
-    }
-
-    /**
-     * The average a quality-mode rendition may land on before it outweighs its source. Since the
-     * peak ceiling moved to {@see PEAK_HEADROOM} the VBV no longer pins the mean anywhere near the
-     * source, so the CRF is all that does — and it has to be chosen against this number
-     * ({@see PerTitleCrfService}), since no encoder flag enforces it.
-     */
-    public function sourceAverageCeiling(?int $sourceRate = null): ?int
-    {
-        $cap = $this->sourceBitrateCap($sourceRate);
-
-        return $cap === null ? null : (int) round($cap * self::OVERSHOOT_TOLERANCE);
     }
 
     /** Whether this rendition's ceiling has to be measured before the encode instead of enforced during it. */
