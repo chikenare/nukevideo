@@ -9,7 +9,7 @@ use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
 
@@ -77,27 +77,6 @@ class PerTitleCrfService
                 'error' => $e->getMessage(),
             ]);
 
-            $this->settleOnTemplateCrf($crfKey, $e);
-        }
-    }
-
-    /**
-     * Record that this stream keeps its template CRF, so a retry doesn't resolve another one. The
-     * chunks it encodes are cached by stream and index alone ({@see ProcessChunkJob}),
-     * not by parameters: a probe that failed once and succeeded on the retry reused the chunks
-     * already encoded at the template CRF and encoded the rest at the new one — one rendition, two
-     * qualities, and an average nothing had estimated. A retry with `--reprobe` mints new streams
-     * and probes them from scratch. Best effort: failing to write this only brings the old
-     * behaviour back.
-     */
-    private function settleOnTemplateCrf(string $crfKey, Throwable $e): void
-    {
-        try {
-            $this->stream->update(['meta' => [...$this->stream->meta ?? [], 'per_title' => [
-                'failed' => Str::limit($e->getMessage(), 300),
-                'chosen_crf' => (int) $this->stream->input_params[$crfKey],
-            ]]]);
-        } catch (Throwable) {
         }
     }
 
@@ -152,6 +131,16 @@ class PerTitleCrfService
         $this->stream->update(['input_params' => $params, 'meta' => $meta]);
 
         Log::info('Per-title CRF resolved', ['stream' => $this->stream->id] + $meta['per_title']);
+
+        // A curve too flat or broken to extrapolate leaves the VMAF choice uncapped. Mostly static
+        // content, whose rate is container overhead that no CRF would save; say so either way.
+        if ($ceiling !== null && $estimated === null) {
+            Log::warning('Per-title bitrate curve unusable; CRF not capped against the source', [
+                'stream' => $this->stream->id,
+                'anchor_bitrates' => $bitrates,
+                'bitrate_ceiling' => $ceiling,
+            ]);
+        }
 
         // Bounded by the codec ceiling before it reached the source's rate: the rendition will
         // outweigh its source, and nothing downstream stops it. Say so.
@@ -556,7 +545,35 @@ class PerTitleCrfService
         }
 
         // Redelivery: a previous attempt already resolved this stream.
-        return ! isset($this->stream->meta['per_title']);
+        if (isset($this->stream->meta['per_title'])) {
+            return false;
+        }
+
+        return ! $this->hasEncodedChunks();
+    }
+
+    /**
+     * Whether an earlier run already encoded chunks of this rendition. They are cached by stream and
+     * index alone ({@see ProcessChunkJob}), not by parameters, so resolving a CRF now —
+     * after a probe that failed on the first run and let the chunks encode at the template's —
+     * would leave the retry reusing those and encoding the rest at the new one: one rendition, two
+     * qualities, and an average nothing estimated. Before any chunk exists a failed probe is simply
+     * tried again. `--reprobe` mints new streams, so it always probes. An unreadable store reads as
+     * no chunks: the old behaviour, never a lost probe.
+     */
+    private function hasEncodedChunks(): bool
+    {
+        $video = $this->stream->video;
+
+        if (! $video || ! $this->stream->ulid) {
+            return false;
+        }
+
+        try {
+            return Storage::disk('chunks')->files("{$video->chunksDir()}/{$this->stream->ulid}") !== [];
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /** Quality knobs the probe can steer: CRF (CPU codecs) and QSV ICQ, both CRF-like scales. */

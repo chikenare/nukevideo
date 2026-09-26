@@ -2,11 +2,13 @@
 
 use App\Models\Project;
 use App\Models\Stream;
+use App\Models\Video;
 use App\Services\PerTitleCrfService;
 use App\Services\SampleEncode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -229,6 +231,8 @@ describe('capCrfToBitrate', function () {
 });
 
 describe('apply against the source bitrate', function () {
+    beforeEach(fn () => Storage::fake('chunks'));
+
     /**
      * Encodes write a sample sized to `$bitrates[crf]` over SampleEncode::SECONDS; VMAF passes
      * answer `$scores[crf]`, or `$scores[crf][window]`. Both are keyed off the sample path, which carries the anchor CRF.
@@ -267,8 +271,9 @@ describe('apply against the source bitrate', function () {
             return Process::result("0.000000\n");
         }
 
+        // The read starts a second before its window (see SampleEncode::windowBytes).
         $interval = $command[array_search('-read_intervals', $command, true) + 1];
-        $start = (float) explode('%', $interval)[0];
+        $start = (float) explode('%', $interval)[0] + 1;
         $window = array_search($start, array_map('floatval', SampleEncode::windows(1480.0)));
         $rate = is_array($sourceRate) ? ($sourceRate[$window] ?? null) : $sourceRate;
 
@@ -401,13 +406,10 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
-            ->and($stream->meta['per_title']['chosen_crf'])->toBe(22)
-            ->and($stream->meta['per_title']['failed'])->toContain('No sample window scored');
+            ->and($stream->meta)->not->toHaveKey('per_title');
     });
 
-    it('never re-resolves a stream whose probe failed, so a retry cannot mix two CRFs', function () use ($template, $source) {
-        // Chunks are cached by stream and index, not by parameters: a retry that resolved a new
-        // CRF reused the chunks already encoded at the template's and encoded the rest at its own.
+    it('tries a failed probe again on a retry, while no chunk is encoded yet', function () use ($template, $source) {
         Process::fake(['*' => Process::result(exitCode: 1)]);
         $stream = persistedPerTitleStream($template, $source, 1280, 960);
 
@@ -416,9 +418,22 @@ describe('apply against the source bitrate', function () {
         fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000]);
         (new PerTitleCrfService($stream->refresh()))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
-        // A second resolve would have landed on CRF 38 and replaced the marker with its curve.
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(38);
+    });
+
+    it('never re-resolves a rendition whose chunks are already encoded, so a retry cannot mix two CRFs', function () use ($template, $source) {
+        // The first run's probe failed and its chunks encoded at the template CRF. They are cached
+        // by stream and index, not parameters: a new CRF here would encode the rest differently.
+        Process::fake(['*' => Process::result(exitCode: 1)]);
+        $stream = persistedPerTitleStream($template, $source, 1280, 960);
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        Storage::disk('chunks')->put(Video::find($stream->video_id)->chunkKey($stream, 0), 'chunk');
+
+        fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000]);
+        (new PerTitleCrfService($stream->refresh()))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
-            ->and($stream->meta['per_title'])->toHaveKey('failed')
-            ->and($stream->meta['per_title'])->not->toHaveKey('vmaf_crf');
+            ->and($stream->meta)->not->toHaveKey('per_title');
     });
 });

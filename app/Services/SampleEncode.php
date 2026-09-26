@@ -86,11 +86,13 @@ class SampleEncode
             $result = Process::timeout(60)->run([
                 'ffprobe', '-v', 'error',
                 '-select_streams', (string) $track,
-                // An ABSOLUTE end, well past the window. A `+duration` end counts from the keyframe
-                // the read seeks back to, so a long GOP ate into it: with a 30s GOP, a window 25s
-                // past its keyframe counted 372 of its 500 packets. The slack covers B-frames,
-                // which arrive out of presentation order: 2s of it still missed 13 packets of 479.
-                '-read_intervals', sprintf('%.3f%%%.3f', $from, $from + self::SECONDS * 2),
+                // From a second early to an ABSOLUTE end well past the window; the pts filter below
+                // keeps exactly the window. A `+duration` end counts from the keyframe the read
+                // seeks back to, so a long GOP ate into it: with a 30s GOP, a window 25s past its
+                // keyframe counted 372 of its 500 packets. The early start is for containers that
+                // seek by decode time (MPEG-TS): a frame decoded just before `from` but shown after
+                // it was never read. The end slack covers B-frames arriving out of order.
+                '-read_intervals', sprintf('%.3f%%%.3f', max(0.0, $from - 1), $from + self::SECONDS * 2),
                 '-show_entries', 'packet=pts_time,size',
                 '-of', 'csv=p=0',
                 $sourcePath,

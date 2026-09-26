@@ -41,6 +41,26 @@ it('reads a whole window however far back its keyframe sits', function () {
     }
 });
 
+it('reads a whole window from a source that seeks by decode time', function () {
+    // MPEG-TS seeks to `from` by dts: a frame decoded just before the window but shown inside it
+    // was never read, one packet short on every window.
+    $path = sys_get_temp_dir().'/nukevideo-bframes.ts';
+    Process::timeout(120)->run(sprintf(
+        'ffmpeg -hide_banner -v error -y -f lavfi -i testsrc2=s=320x180:r=25 -t 60 '
+        .'-c:v libx264 -preset ultrafast -g 250 -bf 3 -b:v 400k %s',
+        escapeshellarg($path),
+    ))->throw();
+
+    try {
+        $start = (float) trim(Process::run(['ffprobe', '-v', 'error', '-show_entries', 'format=start_time', '-of', 'csv=p=0', $path])->output());
+
+        expect(SampleEncode::sourceBytes($path, 0, [25.057, 13.0]))
+            ->toBe([scannedWindowBytes($path, $start + 25.057), scannedWindowBytes($path, $start + 13.0)]);
+    } finally {
+        @unlink($path);
+    }
+});
+
 it('reads a window it cannot read as null, never as a short count', function () {
     Process::fake(['*' => Process::result(exitCode: 1)]);
 
