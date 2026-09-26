@@ -2,11 +2,13 @@
 
 use App\Models\Project;
 use App\Models\Stream;
+use App\Models\Video;
 use App\Services\PerTitleCrfService;
 use App\Services\SampleEncode;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 uses(RefreshDatabase::class);
@@ -154,20 +156,20 @@ describe('apply guards', function () {
         Process::assertNothingRan();
     });
 
-    it('measures the anchors against the template VBV, not the source-tightened one', function () {
+    it('measures the anchors without any VBV, so both curves answer to the CRF alone', function () {
         Process::fake();
 
-        // Video 6275's shape: a 1.8 Mbps source under a 7000k/14000k SVT-AV1 template.
+        // Video 6275's shape: a 1.8 Mbps source under a 7000k/14000k SVT-AV1 template. A VBV that
+        // pins the low anchor flattens the curves; video 9078's own 6000k sent it to CRF 46.
         (new PerTitleCrfService(perTitleStream(
             ['video_codec' => 'libsvtav1', 'svtav1_crf' => 26, 'target_vmaf' => 94, 'maxrate' => '7000k', 'bufsize' => '14000k'],
             ['source_codec' => 'h264', 'source_bit_rate' => 1_807_276, 'source_width' => 1920, 'source_height' => 1080],
         )))->apply('/tmp/src.mkv', 6800.0);
 
         Process::assertRan(fn ($process) => str_contains($process->command, '-fps_mode passthrough')
-            && str_contains($process->command, '-maxrate 7000k')
-            && str_contains($process->command, '-bufsize 14000k'));
-        Process::assertDidntRun(fn ($process) => str_contains($process->command, '-fps_mode passthrough')
-            && ! str_contains($process->command, '-maxrate 7000k'));
+            && str_contains($process->command, '-crf 26'));
+        Process::assertDidntRun(fn ($process) => str_contains($process->command, '-maxrate')
+            || str_contains($process->command, '-bufsize'));
     });
 
     it('does not treat a lossless crf of zero as missing', function () {
@@ -211,6 +213,12 @@ describe('capCrfToBitrate', function () {
         expect(PerTitleCrfService::capCrfToBitrate([45 => 3_000_000, 51 => 2_500_000], 51, 500_000, 51))->toBe(51);
     });
 
+    it('never extrapolates a curve too flat to be CRF talking', function () {
+        // 30 → 2.0, 38 → 1.9 Mbps against a 1.0 Mbps ceiling would ask for CRF 138.
+        expect(PerTitleCrfService::capCrfToBitrate([30 => 2_000_000, 38 => 1_900_000], 30, 1_000_000, 63))->toBe(30)
+            ->and(PerTitleCrfService::estimateBitrate([30 => 2_000_000, 38 => 1_900_000], 30))->toBeNull();
+    });
+
     it('keeps the vmaf choice when the curve is broken or missing', function (array $bitrates) {
         expect(PerTitleCrfService::capCrfToBitrate($bitrates, 30, 1_000_000, 63))->toBe(30);
     })->with([
@@ -223,6 +231,8 @@ describe('capCrfToBitrate', function () {
 });
 
 describe('apply against the source bitrate', function () {
+    beforeEach(fn () => Storage::fake('chunks'));
+
     /**
      * Encodes write a sample sized to `$bitrates[crf]` over SampleEncode::SECONDS; VMAF passes
      * answer `$scores[crf]`, or `$scores[crf][window]`. Both are keyed off the sample path, which carries the anchor CRF.
@@ -261,8 +271,9 @@ describe('apply against the source bitrate', function () {
             return Process::result("0.000000\n");
         }
 
+        // The read starts a second before its window (see SampleEncode::windowBytes).
         $interval = $command[array_search('-read_intervals', $command, true) + 1];
-        $start = (float) explode('%', $interval)[0];
+        $start = (float) explode('%', $interval)[0] + 1;
         $window = array_search($start, array_map('floatval', SampleEncode::windows(1480.0)));
         $rate = is_array($sourceRate) ? ($sourceRate[$window] ?? null) : $sourceRate;
 
@@ -300,17 +311,18 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         $stream->refresh();
+        // Aimed at 0.85x the 1.49 Mbps source: ln(1.2665/3.2) / (ln(2.0/3.2) / 8) ≈ 15.8 over 22.
         expect($stream->meta['per_title']['vmaf_crf'])->toBe(30)
-            ->and($stream->input_params['svtav1_crf'])->toBe(32)
+            ->and($stream->input_params['svtav1_crf'])->toBe(38)
             ->and($stream->meta['per_title']['anchor_bitrates'])->toBe([22 => 3_200_000, 30 => 2_000_000])
-            ->and($stream->meta['per_title']['bitrate_ceiling'])->toBe(1_788_000)
-            ->and($stream->meta['per_title']['estimated_bitrate'])->toBeLessThanOrEqual(1_788_000)
+            ->and($stream->meta['per_title']['bitrate_target'])->toBe(1_266_500)
+            ->and($stream->meta['per_title']['estimated_bitrate'])->toBeLessThanOrEqual(1_266_500)
             ->and(glob(sys_get_temp_dir().'/pertitle_*'))->toBe([]);
     });
 
     it('compares the samples with what the source spent over the same windows', function () use ($template, $source) {
-        // The windows ran 2.0 Mbps against a 1.49 Mbps file: the samples were busy footage, not
-        // an overshoot. Against the file average this read as 1.34x and went to CRF 32.
+        // The windows ran 2.0 Mbps against a 1.49 Mbps file: the samples were busy footage, and
+        // measured against the file average they would have pushed the CRF to 38, not 33.
         fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000], 2_000_000);
         $stream = persistedPerTitleStream($template, $source, 1280, 960);
 
@@ -318,8 +330,8 @@ describe('apply against the source bitrate', function () {
 
         $meta = $stream->refresh()->meta['per_title'];
         expect($meta['window_source_bitrate'])->toBe(2_000_000)
-            ->and($meta['bitrate_ceiling'])->toBe(2_400_000)
-            ->and($stream->input_params['svtav1_crf'])->toBe(30);
+            ->and($meta['bitrate_target'])->toBe(1_700_000)
+            ->and($stream->input_params['svtav1_crf'])->toBe(33);
     });
 
     it('falls back to the file-wide average when a window of the source cannot be read', function () use ($template, $source) {
@@ -330,8 +342,8 @@ describe('apply against the source bitrate', function () {
 
         $meta = $stream->refresh()->meta['per_title'];
         expect($meta['window_source_bitrate'])->toBeNull()
-            ->and($meta['bitrate_ceiling'])->toBe(1_788_000)
-            ->and($stream->input_params['svtav1_crf'])->toBe(32);
+            ->and($meta['bitrate_target'])->toBe(1_266_500)
+            ->and($stream->input_params['svtav1_crf'])->toBe(38);
     });
 
     it('keeps the vmaf crf when the source rate is unknown', function () use ($template, $source) {
@@ -341,19 +353,19 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(30)
-            ->and($stream->meta['per_title']['bitrate_ceiling'])->toBeNull();
+            ->and($stream->meta['per_title']['bitrate_target'])->toBeNull();
     });
 
     it('scales the ceiling down with a downscaled rendition', function () use ($template, $source) {
-        // 960x720 of a 1280x960 source: (0.5625)^0.75 of 1.49 Mbps, then the 1.2 tolerance.
+        // 960x720 of a 1280x960 source: (0.5625)^0.75 of 1.49 Mbps, aimed at 0.85 of that.
         fakeAnchors([22 => 97.0, 30 => 95.5], [22 => 2_000_000, 30 => 1_300_000]);
         $stream = persistedPerTitleStream(['svtav1_crf' => 22, 'target_vmaf' => 95] + $template, $source, 960, 720);
 
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         $meta = $stream->refresh()->meta['per_title'];
-        expect($meta['bitrate_ceiling'])->toBe((int) round(round(1_490_000 * 0.5625 ** 0.75) * 1.2))
-            ->and($meta['estimated_bitrate'])->toBeLessThanOrEqual($meta['bitrate_ceiling'])
+        expect($meta['bitrate_target'])->toBe((int) round(round(1_490_000 * 0.5625 ** 0.75) * 0.85))
+            ->and($meta['estimated_bitrate'])->toBeLessThanOrEqual($meta['bitrate_target'])
             ->and($stream->input_params['svtav1_crf'])->toBeGreaterThan($meta['vmaf_crf']);
     });
 
@@ -366,7 +378,7 @@ describe('apply against the source bitrate', function () {
 
         // Past MAX_INCREASE all the way to the codec ceiling, and still over: say so.
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(63);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'cannot bring the rendition under'));
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'cannot reach its bitrate target'));
     });
 
     it('pools vmaf only over windows both anchors scored', function () use ($template, $source) {
@@ -392,6 +404,34 @@ describe('apply against the source bitrate', function () {
         $stream = persistedPerTitleStream($template, $source, 1280, 960);
 
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
+            ->and($stream->meta)->not->toHaveKey('per_title');
+    });
+
+    it('tries a failed probe again on a retry, while no chunk is encoded yet', function () use ($template, $source) {
+        Process::fake(['*' => Process::result(exitCode: 1)]);
+        $stream = persistedPerTitleStream($template, $source, 1280, 960);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000]);
+        (new PerTitleCrfService($stream->refresh()))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(38);
+    });
+
+    it('never re-resolves a rendition whose chunks are already encoded, so a retry cannot mix two CRFs', function () use ($template, $source) {
+        // The first run's probe failed and its chunks encoded at the template CRF. They are cached
+        // by stream and index, not parameters: a new CRF here would encode the rest differently.
+        Process::fake(['*' => Process::result(exitCode: 1)]);
+        $stream = persistedPerTitleStream($template, $source, 1280, 960);
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        Storage::disk('chunks')->put(Video::find($stream->video_id)->chunkKey($stream, 0), 'chunk');
+
+        fakeAnchors([22 => 97.31, 30 => 96.16], [22 => 3_200_000, 30 => 2_000_000]);
+        (new PerTitleCrfService($stream->refresh()))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(22)
             ->and($stream->meta)->not->toHaveKey('per_title');

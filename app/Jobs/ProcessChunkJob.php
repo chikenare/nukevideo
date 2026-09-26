@@ -11,6 +11,7 @@ use App\Services\ChunkProgressReporter;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
 use App\Services\UsageService;
+use App\Services\VideoService;
 use App\Support\MediaDuration;
 use App\Support\Scratch;
 use Illuminate\Bus\Batchable;
@@ -69,6 +70,15 @@ class ProcessChunkJob implements ShouldQueue
 
     public function handle(): void
     {
+        // A job of a run that is already over. SkipIfBatchCancelled lets it through, since a batch
+        // row that is gone reads as "not cancelled": a timed-out job redelivered after the retry
+        // would encode its window into the new run.
+        if ($this->belongsToFinishedRun()) {
+            Log::info('ProcessChunk skipped: its run was retried', ['stream' => $this->streamId, 'chunk' => $this->chunkIndex]);
+
+            return;
+        }
+
         $stream = Stream::with(['video', 'outputs'])->find($this->streamId);
 
         if (! $stream || ! $stream->video) {
@@ -253,7 +263,9 @@ class ProcessChunkJob implements ShouldQueue
         // Clean up the scratch file on permanent failure so it doesn't leak.
         @unlink($this->localPath($video->chunkKey($stream, $this->chunkIndex)));
 
-        if (! in_array($video->status, Video::ACTIVE_STATUSES, true)) {
+        // Its run was retried while it was still inside ffmpeg: the video it would fail is the
+        // retry, healthy, and failing it would cancel that run's batches too.
+        if (! in_array($video->status, Video::ACTIVE_STATUSES, true) || $this->belongsToFinishedRun()) {
             return;
         }
 
@@ -262,5 +274,16 @@ class ProcessChunkJob implements ShouldQueue
         // Video renditions carry no name (only sidecar tracks do); label them by height.
         $label = $stream->name ?? "{$stream->height}p";
         $video->markAsFailed("Rendition {$label} failed on chunk {$this->chunkIndex}: {$e->getMessage()}");
+    }
+
+    /**
+     * Whether this job's batch is gone: {@see VideoService::retry()} deletes the
+     * failed run's batch rows before the new run fans out, so a missing row is the one sign a job
+     * outlived its run. A cancelled batch is not: the framework cancels the batch before calling
+     * {@see failed()} on the very job whose failure cancelled it.
+     */
+    private function belongsToFinishedRun(): bool
+    {
+        return $this->batchId !== null && $this->batch() === null;
     }
 }

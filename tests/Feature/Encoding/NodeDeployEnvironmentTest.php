@@ -266,3 +266,41 @@ describe('edge token settings', function () {
         expect($env)->toContain('VOD_TOKEN_NAME=__hdnea__');
     });
 });
+
+describe('name resolution inside the containers', function () {
+    beforeEach(fn () => fakeCdnProvider('self_hosted'));
+
+    it('keeps a lost DNS packet to a one-second retry in every container a deploy raises', function (array $attributes) {
+        // A home router's NAT dropped one of the A/AAAA pair glibc sends from a single socket, and
+        // 1 in 10-30 lookups inside the workers stalled 5s; the usage insert to ClickHouse gave up
+        // after 1s every time.
+        $script = app(NodeService::class)->buildDeployScript(deployableNode($attributes));
+
+        preg_match_all('/^[A-Z_]*RUN_ARGS=\'(--name .*)$/m', $script, $runs);
+
+        expect($runs[1])->not->toBeEmpty();
+
+        foreach ($runs[1] as $run) {
+            expect($run)->toContain('--dns-opt single-request-reopen --dns-opt timeout:1 --dns-opt attempts:3');
+        }
+    })->with([
+        'worker with its storage' => [['type' => 'worker']],
+        'proxy' => [['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false, 'storage_endpoint' => null]],
+    ]);
+});
+
+it('hands the ClickHouse timeouts to the workers, which are the ones writing usage rows', function () {
+    fakeCdnProvider('self_hosted');
+    putenv('CLICKHOUSE_TIMEOUT=9');
+    putenv('CLICKHOUSE_CONNECT_TIMEOUT=4');
+
+    try {
+        $env = app(NodeService::class)->getEnvironmentVariables(deployableNode());
+    } finally {
+        putenv('CLICKHOUSE_TIMEOUT');
+        putenv('CLICKHOUSE_CONNECT_TIMEOUT');
+    }
+
+    expect($env)->toContain('CLICKHOUSE_TIMEOUT=9')
+        ->toContain('CLICKHOUSE_CONNECT_TIMEOUT=4');
+});

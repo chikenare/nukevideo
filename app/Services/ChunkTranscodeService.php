@@ -166,8 +166,7 @@ class ChunkTranscodeService
         return str_starts_with($codec, 'av1') || $tenBitSource ? 'p010le' : 'nv12';
     }
 
-    /** `$clampToSource: false` is for per-title anchors only — see {@see resolveRateControl}. */
-    public function buildVideoArguments(bool $windowed = false, bool $clampToSource = true): string
+    public function buildVideoArguments(bool $windowed = false): string
     {
         // Copy fast-path: remux when the source already matches the target codec/size at or under the
         // target bitrate. Never for window-cut chunks — `-c:v copy` snaps back to the previous
@@ -180,7 +179,7 @@ class ChunkTranscodeService
             ]);
         }
 
-        $params = $this->resolveRateControl($this->stream->input_params ?? [], $clampToSource);
+        $params = $this->resolveRateControl($this->stream->input_params ?? []);
 
         $accel = self::accelForCodec($params['video_codec'] ?? null);
 

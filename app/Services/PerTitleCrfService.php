@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Jobs\ProcessChunkJob;
 use App\Models\Stream;
 use Closure;
 use Illuminate\Process\Exceptions\ProcessTimedOutException;
 use Illuminate\Process\Pool;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
 
@@ -30,6 +32,18 @@ class PerTitleCrfService
     private const MAX_DECREASE = 4;
 
     private const MAX_INCREASE = 12;
+
+    /**
+     * Where the bitrate cap aims, as a share of the source's rate: a re-encode must never outweigh
+     * its source, and the aim has to absorb the estimate's error, since the cap lands right on it.
+     * Over the first 34 capped renditions in production the real rate ran 0.71-1.13x the estimate
+     * (median 0.97); the low end was the VBV-pinned curve anchors are now measured without. At
+     * 0.85 an estimate may run 17% short and the rendition still stays under its source.
+     */
+    private const SOURCE_TARGET = 0.85;
+
+    /** d ln(bps) / d crf of a curve worth extrapolating: half the rate within ~35 CRF steps. */
+    private const MIN_BITRATE_SLOPE = -0.02;
 
     /**
      * How far above the target a flat curve must sit to read as saturation. VMAF only stops
@@ -91,10 +105,11 @@ class PerTitleCrfService
         // file-wide average: the windows can be busier than the file, and the ratio is what
         // carries over to the whole rendition. Up to the codec ceiling, not MAX_INCREASE: that
         // bound keeps VMAF's guess near the template, while this is a measured limit. A grainy
-        // cel-animation episode (1080p, 1.94 Mbps H.264): VMAF took SVT-AV1 to CRF 30, which
-        // encoded at 1.59x the source; this took it to CRF 40, which encoded at 1.01x.
-        $ceiling = (new ChunkTranscodeService($this->stream))->sourceAverageCeiling($windowSourceRate);
-        $chosen = $ceiling === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $ceiling, $maxCrf);
+        // cel-animation episode (1080p, 1.94 Mbps H.264) that VMAF alone sent to 1.59x its source
+        // encoded at 0.75x with this, and still scored VMAF 94.2 against a target of 94.
+        $cap = (new ChunkTranscodeService($this->stream))->sourceBitrateCap($windowSourceRate);
+        $aim = $cap === null ? null : (int) round($cap * self::SOURCE_TARGET);
+        $chosen = $aim === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $aim, $maxCrf);
         $estimated = self::estimateBitrate($bitrates, $chosen);
 
         $params[$crfKey] = $chosen;
@@ -107,7 +122,7 @@ class PerTitleCrfService
             'anchors' => array_map(fn (float $score) => round($score, 2), $anchors),
             'anchor_bitrates' => $bitrates,
             'window_source_bitrate' => $windowSourceRate,
-            'bitrate_ceiling' => $ceiling,
+            'bitrate_target' => $aim,
             'estimated_bitrate' => $estimated === null ? null : (int) round($estimated),
             'windows' => count($windows),
         ];
@@ -116,14 +131,25 @@ class PerTitleCrfService
 
         Log::info('Per-title CRF resolved', ['stream' => $this->stream->id] + $meta['per_title']);
 
-        // Bounded by the codec ceiling before it reached the source's rate: the rendition will
-        // outweigh its source, and nothing downstream stops it. Say so.
-        if ($ceiling !== null && $estimated !== null && $estimated > $ceiling) {
-            Log::warning('Per-title CRF cannot bring the rendition under its source bitrate', [
+        // A curve too flat or broken to extrapolate leaves the VMAF choice uncapped. Mostly static
+        // content, whose rate is container overhead that no CRF would save; say so either way.
+        if ($aim !== null && $estimated === null) {
+            Log::warning('Per-title bitrate curve unusable; CRF not capped against the source', [
+                'stream' => $this->stream->id,
+                'anchor_bitrates' => $bitrates,
+                'bitrate_target' => $aim,
+            ]);
+        }
+
+        // The codec's top CRF still estimates above the aim. That is not yet an overshoot — the
+        // aim sits under the source — but the margin that absorbs the estimate's error is gone,
+        // and PackageVideoJob will say whether the rendition really outweighed its source.
+        if ($aim !== null && $estimated !== null && $estimated > $aim) {
+            Log::warning('Per-title CRF cannot reach its bitrate target under the source', [
                 'stream' => $this->stream->id,
                 'chosen_crf' => $chosen,
                 'estimated_bitrate' => (int) round($estimated),
-                'bitrate_ceiling' => $ceiling,
+                'bitrate_target' => $aim,
             ]);
         }
     }
@@ -215,7 +241,13 @@ class PerTitleCrfService
             return null;
         }
 
-        return [$lowCrf, $lowRate, (log($highRate) - log($lowRate)) / ($highCrf - $lowCrf)];
+        $slope = (log($highRate) - log($lowRate)) / ($highCrf - $lowCrf);
+
+        // Too flat to be CRF talking. Every encoder here halves its rate within 6-15 CRF steps
+        // (SVT-AV1 measured at 12-15), so a pair that barely moves is a pinned or noisy reading —
+        // and extrapolated, 30 → 2.0 Mbps / 38 → 1.9 Mbps against a 1.0 Mbps ceiling asks for
+        // CRF 138, which the codec ceiling would turn into an unwatchable 63.
+        return $slope <= self::MIN_BITRATE_SLOPE ? [$lowCrf, $lowRate, $slope] : null;
     }
 
     /**
@@ -367,16 +399,17 @@ class PerTitleCrfService
     private function encodeSampleCommand(int $crf, string $crfKey, float $start, string $sourcePath, string $samplePath): string
     {
         // Replicated stream so the anchor CRF renders through the exact same argument builder
-        // (scale, GOP, *-params, the template's VBV) the real chunk encode will use. Except two
-        // things. The GPU scale filter: vpp_qsv needs a hw device this command never sets up, so
-        // blinding the replica's pix_fmt meta drops it to the software decode+scale fallback path.
-        // And the source clamp: a VBV tightened to the source makes both anchors score alike, the
-        // flat curve reads as saturation, and the probe walks the CRF up into starved scenes. That
-        // held at PEAK_HEADROOM too: on a grainy episode the 3x ceiling pinned CRF 22, both anchors
-        // scored 96.7/96.5 and the flattened bitrate slope extrapolated to CRF 45. Left off, the
-        // samples run a little heavier than the chunks will, so the bitrate cap errs on the lean side.
+        // (scale, GOP, *-params) the real chunk encode will use — without any VBV, so both the VMAF
+        // and the size answer to the CRF alone. A VBV pinning the low anchor flattens both curves:
+        // tightened to the source it made both anchors score alike and the flat curve read as
+        // saturation (video 6275); at PEAK_HEADROOM a grainy episode's anchors scored 96.7/96.5 and
+        // the bitrate slope extrapolated to CRF 45; and even the template's own 6000k pinned CRF 22
+        // at 5.9 Mbps, sending renditions to CRF 43-46 at 0.84x their source. The real encode's VBV
+        // only ever trims what these samples spend, so the cap errs on the lean side. One more
+        // thing differs: the GPU scale filter. vpp_qsv needs a hw device this command never sets
+        // up, so blinding the replica's pix_fmt meta drops it to the software decode+scale path.
         $probe = $this->stream->replicate();
-        $probe->input_params = [$crfKey => $crf] + ($probe->input_params ?? []);
+        $probe->input_params = [$crfKey => $crf] + array_diff_key($probe->input_params ?? [], ['maxrate' => true, 'bufsize' => true]);
         $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);
         $service = new ChunkTranscodeService($probe);
 
@@ -385,7 +418,7 @@ class PerTitleCrfService
             $start,
             SampleEncode::SECONDS,
             escapeshellarg($sourcePath),
-            $service->buildVideoArguments(windowed: true, clampToSource: false),
+            $service->buildVideoArguments(windowed: true),
             $service->outputFormat(),
             escapeshellarg($samplePath),
         );
@@ -512,7 +545,35 @@ class PerTitleCrfService
         }
 
         // Redelivery: a previous attempt already resolved this stream.
-        return ! isset($this->stream->meta['per_title']);
+        if (isset($this->stream->meta['per_title'])) {
+            return false;
+        }
+
+        return ! $this->hasEncodedChunks();
+    }
+
+    /**
+     * Whether an earlier run already encoded chunks of this rendition. They are cached by stream and
+     * index alone ({@see ProcessChunkJob}), not by parameters, so resolving a CRF now —
+     * after a probe that failed on the first run and let the chunks encode at the template's —
+     * would leave the retry reusing those and encoding the rest at the new one: one rendition, two
+     * qualities, and an average nothing estimated. Before any chunk exists a failed probe is simply
+     * tried again. `--reprobe` mints new streams, so it always probes. An unreadable store reads as
+     * no chunks: the old behaviour, never a lost probe.
+     */
+    private function hasEncodedChunks(): bool
+    {
+        $video = $this->stream->video;
+
+        if (! $video || ! $this->stream->ulid) {
+            return false;
+        }
+
+        try {
+            return Storage::disk('chunks')->files("{$video->chunksDir()}/{$this->stream->ulid}") !== [];
+        } catch (Throwable) {
+            return false;
+        }
     }
 
     /** Quality knobs the probe can steer: CRF (CPU codecs) and QSV ICQ, both CRF-like scales. */

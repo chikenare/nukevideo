@@ -6,10 +6,13 @@ use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Console\Commands\RetryVideos;
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
+use App\Jobs\EncodeSidecarTracksJob;
 use App\Jobs\PrepareVideoJob;
 use App\Models\Project;
 use App\Models\Video;
 use App\Observers\VideoObserver;
+use Illuminate\Bus\UniqueLock;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -95,7 +98,11 @@ class VideoService
         $live = $this->liveEncodeBatches($video);
 
         if ($live > 0) {
-            return "{$live} encode batch(es) are still unfinished — their jobs are still coming. Wait for them.";
+            return "{$live} encode batch(es) still have jobs out — queued, or still finishing after the failure. Wait for them.";
+        }
+
+        if ($this->sidecarPassRunning($video)) {
+            return 'The audio and subtitle pass of the failed run is still encoding. Wait for it to finish.';
         }
 
         return null;
@@ -157,12 +164,43 @@ class VideoService
             ->log("Video queued for another run: {$video->name}");
     }
 
+    /**
+     * Whether the failed run's audio and subtitle pass still holds its unique lock — it does from
+     * dispatch until it finishes or fails. It is in no batch, so nothing above sees it, and it ran
+     * on long after the chunks failed: failing late, it cancelled the retry's batches and failed
+     * the retry. And while the lock is held the retry's own pass is not even dispatched — the
+     * framework drops a unique job it cannot lock — so a retry let through here would hang.
+     */
+    private function sidecarPassRunning(Video $video): bool
+    {
+        $lock = Cache::lock(UniqueLock::getKey(new EncodeSidecarTracksJob($video->id, '')), 1);
+
+        if (! $lock->get()) {
+            return true;
+        }
+
+        $lock->release();
+
+        return false;
+    }
+
     /** Encode batches of this video that have not finished, i.e. jobs still on their way to it. */
     private function liveEncodeBatches(Video $video): int
     {
+        // A cancelled batch reads as finished — the framework stamps finished_at along with
+        // cancelled_at — but cancelling only stops the jobs that have not started: one already
+        // inside ffmpeg runs on, uploads its chunk into the retry, and on failure used to fail the
+        // retry itself. Jobs still out are its pending ones not yet failed. Only for as long as a
+        // job can live, though: a worker killed mid-job never settles its count, and that must
+        // not block the retry forever.
+        // The nodes' own limit, not this host's env: the jobs run there ({@see \App\Console\Commands\ReapStuckVideos}).
+        $drainedBy = now()->subSeconds(NodeService::WORKER_STOP_GRACE)->getTimestamp();
+
         return DB::table('job_batches')
             ->where('name', 'like', "encode video {$video->id} %")
-            ->whereNull('finished_at')
+            ->where(fn ($query) => $query->whereNull('finished_at')->orWhere(fn ($query) => $query
+                ->where('cancelled_at', '>=', $drainedBy)
+                ->whereColumn('pending_jobs', '>', 'failed_jobs')))
             ->count();
     }
 

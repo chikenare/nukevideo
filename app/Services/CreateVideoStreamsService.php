@@ -130,9 +130,12 @@ class CreateVideoStreamsService
 
     /**
      * What the container spends on video, for sources whose video track states no rate of its own.
-     * The container's rate covers every track, so the tracks that do state one are discounted; what
-     * remains still bounds the video from above rather than measuring it, which is all its readers
-     * ask of it — a ceiling. Zero when the container states no rate either.
+     * The container's rate covers every track, so every other track that states one is discounted —
+     * in its `bit_rate` or, in a Matroska that went through mkvmerge, only in its BPS tag, which this
+     * used to miss: a remux carrying 384k of 5.1 audio read as 1.71 Mbps of video for 1.2 real, and
+     * every ceiling scaled from it let renditions outweigh the source unnoticed. What remains still
+     * bounds the video from above rather than measuring it, which is all its readers ask of it — a
+     * ceiling. Zero when the container states no rate either.
      */
     private function containerVideoBitRate(Format $format, StreamCollection $streams): int
     {
@@ -142,15 +145,37 @@ class CreateVideoStreamsService
             return 0;
         }
 
+        $video = $streams->videos()->first();
         $stated = 0;
 
         foreach ($streams as $stream) {
-            if ($stream->get('codec_type') !== 'video' && is_numeric($rate = $stream->get('bit_rate'))) {
-                $stated += (int) $rate;
+            if ($stream->get('index') !== $video?->get('index')) {
+                $stated += self::statedBitRate($stream) ?? 0;
             }
         }
 
         return max(0, (int) $containerRate - $stated);
+    }
+
+    /**
+     * A track's own rate: its `bit_rate`, else an mkvmerge BPS tag. A stated 0 is no statement, so
+     * it falls through like a missing one instead of reading as a track that costs nothing.
+     */
+    private static function statedBitRate(FFStream $stream): ?int
+    {
+        $bitRate = $stream->get('bit_rate');
+
+        if (is_numeric($bitRate) && (int) $bitRate > 0) {
+            return (int) $bitRate;
+        }
+
+        foreach (($stream->get('tags') ?? []) as $tag => $value) {
+            if (stripos((string) $tag, 'BPS') === 0 && is_numeric($value) && (int) $value > 0) {
+                return (int) $value;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -356,8 +381,19 @@ class CreateVideoStreamsService
                 $rungs[$channels] ??= $config;
             }
 
+            // No cap against a source more efficient than the target: HE-AAC or Opus matched
+            // bit for bit in AAC-LC would sound worse than what came in, the same reason the video
+            // ceiling skips a source codec that outranks the target's.
+            $sourceRate = self::audioCodecRank($stream->get('codec_name'), $stream->get('profile'))
+                > self::audioCodecRank($sharedAudioParams['audio_codec'] ?? null, $sharedAudioParams['audio_profile'] ?? null)
+                ? null
+                : self::statedBitRate($stream);
+
             foreach ($rungs as $channels => $config) {
-                $inputParams = array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]);
+                $inputParams = self::capAudioBitrateToSource(
+                    array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]),
+                    $sourceRate,
+                );
                 $key = $stream->get('index').':'.$this->streamSignature($inputParams);
 
                 if (! isset($this->audioStreamCache[$key])) {
@@ -379,6 +415,52 @@ class CreateVideoStreamsService
         }
 
         return $streamIds;
+    }
+
+    /**
+     * A re-encode must not outweigh its source, audio included: the template's 128k Opus over a
+     * 96 kbps mono AC3 track shipped a track a third heavier than the one it came from, and a 96k
+     * AAC stereo one grew by a quarter. The template's rate stands whenever the source spent as
+     * much or more, and when the source states no rate at all. Only a rate-driven encode is
+     * touched: AAC's `-q:a` and fdk's `-vbr` pick their own rate and ignore `-b:a`. The floor is
+     * there for a bogus probe value, not a real track; nothing ships under 32k.
+     */
+    private static function capAudioBitrateToSource(array $params, ?int $sourceRate): array
+    {
+        if ($sourceRate === null || empty($params['audio_bitrate']) || isset($params['audio_vbr']) || isset($params['audio_vbr_fdk'])) {
+            return $params;
+        }
+
+        $asked = (int) round((float) $params['audio_bitrate'] * (str_ends_with(strtolower((string) $params['audio_bitrate']), 'k') ? 1000 : 1));
+        $cap = max(self::MIN_AUDIO_BPS, $sourceRate);
+
+        if ($asked > $cap) {
+            // Down to whole kbps, so the target never lands above the source's own rate.
+            $params['audio_bitrate'] = intdiv($cap, 1000).'k';
+        }
+
+        return $params;
+    }
+
+    private const MIN_AUDIO_BPS = 32_000;
+
+    /**
+     * Rough efficiency ordering of audio codecs, for a source track (ffprobe codec and profile) or
+     * a target (encoder and `audio_profile`). Lossless and legacy codecs rank lowest; their rates
+     * sit far above any template's anyway.
+     */
+    private static function audioCodecRank(?string $codec, ?string $profile): int
+    {
+        $profile = strtolower((string) $profile);
+
+        return match (true) {
+            in_array($codec, ['opus', 'libopus'], true) => 3,
+            $codec === 'vorbis' => 2,
+            // HE-AAC / HE-AACv2 / xHE-AAC as ffprobe names them, `aac_he` / `aac_he_v2` as a
+            // template asks for them.
+            in_array($codec, ['aac', 'libfdk_aac'], true) && str_contains($profile, 'he') => 2,
+            default => 1,
+        };
     }
 
     private static function channelLayoutLabel(int $channels): string
@@ -481,19 +563,7 @@ class CreateVideoStreamsService
      */
     private function sourceBitRate(FFStream $stream): int
     {
-        $bitRate = $stream->get('bit_rate');
-
-        if (is_numeric($bitRate)) {
-            return (int) $bitRate;
-        }
-
-        foreach (($stream->get('tags') ?? []) as $tag => $value) {
-            if (stripos((string) $tag, 'BPS') === 0 && is_numeric($value)) {
-                return (int) $value;
-            }
-        }
-
-        return $this->containerVideoBitRate;
+        return self::statedBitRate($stream) ?? $this->containerVideoBitRate;
     }
 
     /**
@@ -672,12 +742,18 @@ class CreateVideoStreamsService
                     // GPU jobs hardware-decode only when codec AND pixel format are supported.
                     'source_pix_fmt' => $stream->get('pix_fmt'),
                     'source_bit_rate' => $this->sourceBitRate($stream),
+                    // The uploaded file's size. Its `original` stream row carries it too, but that
+                    // row is deleted once the video completes (unless the template keeps the
+                    // original), and with it the only way to compare what shipped against what came in.
+                    'source_file_size' => @filesize($this->localPath) ?: null,
                     'source_fps' => $this->sourceFrameRate($stream),
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
-                // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}). The rest of the audio probe
-                // has no reader — the source's codec and bit rate live only on video renditions.
+                // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}), and the source track's own
+                // stated rate, which bounds `audio_bitrate` unless the source's codec is the more
+                // efficient one ({@see capAudioBitrateToSource}).
                 ...($codecType === 'audio' ? [
+                    'source_bit_rate' => self::statedBitRate($stream),
                     'hearing_impaired' => $this->hasDisposition($stream, 'hearing_impaired'),
                     'visual_impaired' => $this->hasDisposition($stream, 'visual_impaired'),
                     // What this track's encode is measured against ({@see \App\Jobs\EncodeSidecarTracksJob}).

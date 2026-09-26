@@ -59,44 +59,61 @@ class SampleEncode
      */
     public static function sourceBytes(string $sourcePath, int|string $track, array $windows): array
     {
-        // `-ss` counts from the file's start, packet timestamps from zero: offset by start_time.
-        $probe = Process::timeout(60)->run([
-            'ffprobe', '-v', 'error', '-show_entries', 'format=start_time', '-of', 'csv=p=0', $sourcePath,
-        ]);
-        $offset = is_numeric(trim($probe->output())) ? (float) trim($probe->output()) : 0.0;
+        try {
+            // ffmpeg's input `-ss` counts from the file's start_time; ffprobe's timestamps are
+            // absolute. Offset the windows so both read the same stretch.
+            $probe = Process::timeout(60)->run([
+                'ffprobe', '-v', 'error', '-show_entries', 'format=start_time', '-of', 'csv=p=0', $sourcePath,
+            ]);
+            $offset = is_numeric(trim($probe->output())) ? (float) trim($probe->output()) : 0.0;
+        } catch (ProcessTimedOutException) {
+            return array_map(fn () => null, $windows);
+        }
 
         $bytes = [];
 
         foreach ($windows as $i => $start) {
-            $from = $offset + $start;
+            $bytes[$i] = self::windowBytes($sourcePath, $track, $offset + $start);
+        }
+
+        return $bytes;
+    }
+
+    /** One window of {@see sourceBytes}; null when it can't be read, a timeout included. */
+    private static function windowBytes(string $sourcePath, int|string $track, float $from): ?int
+    {
+        try {
             $result = Process::timeout(60)->run([
                 'ffprobe', '-v', 'error',
                 '-select_streams', (string) $track,
-                // Well past the window. The interval counts from the keyframe the read seeks back
-                // to, and B-frames arrive out of presentation order: 2s of slack still missed 13 of
-                // a window's 479 packets on a 23.976 fps H.264, a whole window of slack none.
-                '-read_intervals', sprintf('%.3f%%+%d', $from, self::SECONDS * 2),
+                // From a second early to an ABSOLUTE end well past the window; the pts filter below
+                // keeps exactly the window. A `+duration` end counts from the keyframe the read
+                // seeks back to, so a long GOP ate into it: with a 30s GOP, a window 25s past its
+                // keyframe counted 372 of its 500 packets. The early start is for containers that
+                // seek by decode time (MPEG-TS): a frame decoded just before `from` but shown after
+                // it was never read. The end slack covers B-frames arriving out of order.
+                '-read_intervals', sprintf('%.3f%%%.3f', max(0.0, $from - 1), $from + self::SECONDS * 2),
                 '-show_entries', 'packet=pts_time,size',
                 '-of', 'csv=p=0',
                 $sourcePath,
             ]);
-
-            $total = 0;
-            $seen = false;
-
-            foreach (explode("\n", $result->successful() ? trim($result->output()) : '') as $line) {
-                [$pts, $size] = array_pad(explode(',', $line), 2, null);
-
-                if (is_numeric($pts) && is_numeric($size) && $pts >= $from && $pts < $from + self::SECONDS) {
-                    $total += (int) $size;
-                    $seen = true;
-                }
-            }
-
-            $bytes[$i] = $seen ? $total : null;
+        } catch (ProcessTimedOutException) {
+            return null;
         }
 
-        return $bytes;
+        $total = 0;
+        $seen = false;
+
+        foreach (explode("\n", $result->successful() ? trim($result->output()) : '') as $line) {
+            [$pts, $size] = array_pad(explode(',', $line), 2, null);
+
+            if (is_numeric($pts) && is_numeric($size) && $pts >= $from && $pts < $from + self::SECONDS) {
+                $total += (int) $size;
+                $seen = true;
+            }
+        }
+
+        return $seen ? $total : null;
     }
 
     public function run(float $start, float $seconds = self::SECONDS, ?Closure $tick = null): SampleResult

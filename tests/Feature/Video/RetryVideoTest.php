@@ -1,10 +1,13 @@
 <?php
 
+use App\Jobs\EncodeSidecarTracksJob;
 use App\Models\Project;
 use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
@@ -125,6 +128,68 @@ describe('videos:retry', function () {
         $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
 
         expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('refuses while a cancelled batch still has jobs finishing inside ffmpeg', function () {
+        // Cancelling stamps finished_at, but only stops the jobs not yet started; one already
+        // encoding would upload into the retry, or fail it.
+        $video = failedVideo();
+
+        DB::table('job_batches')->insert([
+            'id' => 'batch-1',
+            'name' => "encode video {$video->id} video-processing",
+            'total_jobs' => 10,
+            'pending_jobs' => 3,
+            'failed_jobs' => 1,
+            'failed_job_ids' => '[]',
+            'created_at' => now()->timestamp,
+            'cancelled_at' => now()->timestamp,
+            'finished_at' => now()->timestamp,
+        ]);
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
+
+        expect($video->fresh()->status)->toBe('failed');
+    });
+
+    it('retries once the cancelled batch has settled every job', function (int $pending, int $cancelledSecondsAgo) {
+        $video = failedVideo();
+
+        DB::table('job_batches')->insert([
+            'id' => 'batch-1',
+            'name' => "encode video {$video->id} video-processing",
+            'total_jobs' => 10,
+            'pending_jobs' => $pending,
+            'failed_jobs' => 1,
+            'failed_job_ids' => '[]',
+            'created_at' => now()->subSeconds($cancelledSecondsAgo)->timestamp,
+            'cancelled_at' => now()->subSeconds($cancelledSecondsAgo)->timestamp,
+            'finished_at' => now()->subSeconds($cancelledSecondsAgo)->timestamp,
+        ]);
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+
+        expect($video->fresh()->status)->toBe('pending');
+    })->with([
+        'every job settled' => [1, 5],
+        // A worker killed mid-job never settles its count; past a job's lifetime it cannot block.
+        'jobs out, but longer ago than any job can live' => [3, 7200],
+    ]);
+
+    it('refuses while the failed run\'s audio and subtitle pass is still encoding', function () {
+        // In no batch, so only its unique lock says it is running; failing late it failed the
+        // retry, and while it holds the lock the retry's own pass would never be dispatched.
+        $video = failedVideo();
+        $lock = Cache::lock(UniqueLock::getKey(new EncodeSidecarTracksJob($video->id, '')), 60);
+        $lock->get();
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
+        expect($video->fresh()->status)->toBe('failed');
+
+        $lock->release();
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+        expect($video->fresh()->status)->toBe('pending');
     });
 
     it('clears the finished batch of the run that failed, which would block fan-out', function () {

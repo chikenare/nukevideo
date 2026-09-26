@@ -87,6 +87,9 @@ class NodeService
         'CLICKHOUSE_USER',
         'CLICKHOUSE_PASSWORD',
         'CLICKHOUSE_ENDPOINT',
+        // The workers are the ones writing usage rows, so a longer budget set here has to reach them.
+        'CLICKHOUSE_TIMEOUT',
+        'CLICKHOUSE_CONNECT_TIMEOUT',
 
         'WEBHOOK_SECRET',
         'INTERNAL_API_SECRET',
@@ -731,9 +734,20 @@ class NodeService
      */
     private const PROXY_LOG_OPTS = '--log-opt max-size=20m --log-opt max-file=3';
 
+    /**
+     * How every container resolves names. glibc sends a lookup's A and AAAA queries at once from
+     * one socket, and a home router's NAT dropped one of the pair often enough that 1 in 10-30
+     * lookups stalled for glibc's default 5s before the retry — on the same hosts, their own
+     * systemd-resolved never did. The workers write usage to a remote ClickHouse with a short
+     * timeout, and every stall lost that row ("Resolving timed out after 1000 milliseconds").
+     * Separate sockets per query, and a 1s wait per try: a lost packet costs a second, not five.
+     * Harmless on a network that drops nothing.
+     */
+    private const DNS_OPTS = '--dns-opt single-request-reopen --dns-opt timeout:1 --dns-opt attempts:3';
+
     private function buildDockerRunArgs(string $name, string $image, array $options): string
     {
-        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS);
+        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS).' '.self::DNS_OPTS;
 
         foreach ($options['env'] ?? [] as $env) {
             $cmd .= ' -e '.escapeshellarg($env);
