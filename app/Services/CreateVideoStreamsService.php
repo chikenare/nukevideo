@@ -381,8 +381,13 @@ class CreateVideoStreamsService
                 $rungs[$channels] ??= $config;
             }
 
+            $sourceRate = self::statedBitRate($stream);
+
             foreach ($rungs as $channels => $config) {
-                $inputParams = array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]);
+                $inputParams = self::capAudioBitrateToSource(
+                    array_merge($sharedAudioParams, $config, ['channels' => (string) $channels]),
+                    $sourceRate,
+                );
                 $key = $stream->get('index').':'.$this->streamSignature($inputParams);
 
                 if (! isset($this->audioStreamCache[$key])) {
@@ -405,6 +410,33 @@ class CreateVideoStreamsService
 
         return $streamIds;
     }
+
+    /**
+     * A re-encode must not outweigh its source, audio included: the template's 128k Opus over a
+     * 96 kbps mono AC3 track shipped a track a third heavier than the one it came from, and a 96k
+     * AAC stereo one grew by a quarter. The template's rate stands whenever the source spent as
+     * much or more, and when the source states no rate at all. Only a rate-driven encode is
+     * touched: AAC's `-q:a` and fdk's `-vbr` pick their own rate and ignore `-b:a`. The floor is
+     * there for a bogus probe value, not a real track; nothing ships under 32k.
+     */
+    private static function capAudioBitrateToSource(array $params, ?int $sourceRate): array
+    {
+        if ($sourceRate === null || empty($params['audio_bitrate']) || isset($params['audio_vbr']) || isset($params['audio_vbr_fdk'])) {
+            return $params;
+        }
+
+        $asked = (int) round((float) $params['audio_bitrate'] * (str_ends_with(strtolower((string) $params['audio_bitrate']), 'k') ? 1000 : 1));
+        $cap = max(self::MIN_AUDIO_BPS, $sourceRate);
+
+        if ($asked > $cap) {
+            // Down to whole kbps, so the target never lands above the source's own rate.
+            $params['audio_bitrate'] = intdiv($cap, 1000).'k';
+        }
+
+        return $params;
+    }
+
+    private const MIN_AUDIO_BPS = 32_000;
 
     private static function channelLayoutLabel(int $channels): string
     {
@@ -692,9 +724,10 @@ class CreateVideoStreamsService
                     'source_fps' => $this->sourceFrameRate($stream),
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
-                // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}). The rest of the audio probe
-                // has no reader — the source's codec and bit rate live only on video renditions.
+                // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}), and the source track's own
+                // rate, the one its `audio_bitrate` was capped against ({@see capAudioBitrateToSource}).
                 ...($codecType === 'audio' ? [
+                    'source_bit_rate' => self::statedBitRate($stream),
                     'hearing_impaired' => $this->hasDisposition($stream, 'hearing_impaired'),
                     'visual_impaired' => $this->hasDisposition($stream, 'visual_impaired'),
                     // What this track's encode is measured against ({@see \App\Jobs\EncodeSidecarTracksJob}).

@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Project;
+use App\Models\Stream;
 use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
@@ -107,5 +108,56 @@ describe('audio ladder', function () {
             [['index' => 1, 'channels' => 6, 'tags' => []]],
             ['audio_codec' => 'libopus'],
         ))->toHaveCount(0);
+    });
+});
+
+describe('audio never outweighs its source track', function () {
+    it('lowers a rung to a source track that spent less', function (array $track, string $expected) {
+        $streams = audioStreamsFor([['index' => 1, 'tags' => ['language' => 'jpn'], ...$track]]);
+
+        expect(array_column($streams, 'bitrate'))->each->toBe($expected);
+    })->with([
+        // The Dragon Ball case: a 96k mono AC3 track under the template's 128k stereo rung.
+        'mono AC3 stating bit_rate' => [['channels' => 1, 'codec_name' => 'ac3', 'bit_rate' => '96000'], '96k'],
+        'stereo AAC at 96k' => [['channels' => 2, 'codec_name' => 'aac', 'bit_rate' => '96000'], '96k'],
+        // mkvmerge'd Matroska states it only in a tag; whole kbps, rounded down, never above it.
+        'stereo AAC, BPS tag only' => [['channels' => 2, 'codec_name' => 'aac', 'tags' => ['language' => 'jpn', 'BPS' => '117744']], '117k'],
+    ]);
+
+    it('keeps the template rate when the source spent as much or more', function () {
+        $streams = audioStreamsFor([
+            ['index' => 1, 'channels' => 6, 'bit_rate' => '640000', 'tags' => ['language' => 'eng']],
+        ]);
+
+        expect(array_column($streams, 'bitrate'))->toBe(['128k', '256k']);
+    });
+
+    it('keeps the template rate when the source states none', function () {
+        expect(array_column(audioStreamsFor([['index' => 1, 'channels' => 2, 'tags' => ['language' => 'eng']]]), 'bitrate'))
+            ->toBe(['128k']);
+    });
+
+    it('caps each rung on its own, so a 5.1 rung over a lean 5.1 track comes down too', function () {
+        // A 192k 5.1 track: the 5.1 rung's 256k comes down to 192k, the 128k stereo downmix stands.
+        $streams = audioStreamsFor([
+            ['index' => 1, 'channels' => 6, 'bit_rate' => '192000', 'tags' => ['language' => 'eng']],
+        ]);
+
+        expect(array_column($streams, 'bitrate'))->toBe(['128k', '192k']);
+    });
+
+    it('leaves a quality-VBR encode alone, which ignores -b:a anyway', function () {
+        $streams = audioStreamsFor(
+            [['index' => 1, 'channels' => 2, 'bit_rate' => '96000', 'tags' => ['language' => 'eng']]],
+            ['audio_codec' => 'aac', 'audio_vbr' => '3', 'channels' => [['channels' => '2', 'audio_bitrate' => '128k']]],
+        );
+
+        expect(array_column($streams, 'bitrate'))->toBe(['128k']);
+    });
+
+    it('records the source track rate it was capped against', function () {
+        audioStreamsFor([['index' => 1, 'channels' => 1, 'codec_name' => 'ac3', 'bit_rate' => '96000', 'tags' => ['language' => 'jpn']]]);
+
+        expect(Stream::where('type', 'audio')->first()->meta['source_bit_rate'])->toBe(96000);
     });
 });
