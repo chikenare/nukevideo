@@ -81,22 +81,51 @@ class PerTitleCrfService
             return;
         }
 
-        $anchors = $this->measureAnchors($anchorCrfs, $crfKey, $windows, $sourcePath, $tick);
-        $chosen = self::chooseCrf($anchors, $target, $maxCrf);
+        [$anchors, $bitrates, $windowSourceRate] = $this->measureAnchors($anchorCrfs, $crfKey, $windows, $sourcePath, $tick);
+        $vmafCrf = self::chooseCrf($anchors, $target, $maxCrf);
+
+        // VMAF alone will happily buy a noisy, already-compressed source's grain back at more bits
+        // than the source itself spent (video 9059: 2.03 Mbps out of a 1.49 Mbps H.264). The
+        // VBV only trims peaks now, so this is the one place the average answers to the source.
+        // The samples are compared with what the source spent over the SAME windows, not its
+        // file-wide average: the windows can be busier than the file, and the ratio is what
+        // carries over to the whole rendition. Up to the codec ceiling, not MAX_INCREASE: that
+        // bound keeps VMAF's guess near the template, while this is a measured limit. A grainy
+        // cel-animation episode (1080p, 1.94 Mbps H.264): VMAF took SVT-AV1 to CRF 30, which
+        // encoded at 1.59x the source; this took it to CRF 40, which encoded at 1.01x.
+        $ceiling = (new ChunkTranscodeService($this->stream))->sourceAverageCeiling($windowSourceRate);
+        $chosen = $ceiling === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $ceiling, $maxCrf);
+        $estimated = self::estimateBitrate($bitrates, $chosen);
 
         $params[$crfKey] = $chosen;
         $meta = $this->stream->meta ?? [];
         $meta['per_title'] = [
             'target_vmaf' => $target,
             'base_crf' => $base,
+            'vmaf_crf' => $vmafCrf,
             'chosen_crf' => $chosen,
             'anchors' => array_map(fn (float $score) => round($score, 2), $anchors),
+            'anchor_bitrates' => $bitrates,
+            'window_source_bitrate' => $windowSourceRate,
+            'bitrate_ceiling' => $ceiling,
+            'estimated_bitrate' => $estimated === null ? null : (int) round($estimated),
             'windows' => count($windows),
         ];
 
         $this->stream->update(['input_params' => $params, 'meta' => $meta]);
 
         Log::info('Per-title CRF resolved', ['stream' => $this->stream->id] + $meta['per_title']);
+
+        // Bounded by the codec ceiling before it reached the source's rate: the rendition will
+        // outweigh its source, and nothing downstream stops it. Say so.
+        if ($ceiling !== null && $estimated !== null && $estimated > $ceiling) {
+            Log::warning('Per-title CRF cannot bring the rendition under its source bitrate', [
+                'stream' => $this->stream->id,
+                'chosen_crf' => $chosen,
+                'estimated_bitrate' => (int) round($estimated),
+                'bitrate_ceiling' => $ceiling,
+            ]);
+        }
     }
 
     /**
@@ -128,14 +157,80 @@ class PerTitleCrfService
     }
 
     /**
+     * Raise `$crf` until the anchors' bitrate curve puts it at or under `$ceiling` — never lower it:
+     * this only ever takes bits away from what VMAF asked for. Bitrate is close to exponential in
+     * CRF, so the curve is interpolated in log space, and unlike VMAF it extrapolates well past the
+     * top anchor (it is what CRF is defined by), up to the codec ceiling. A curve that doesn't
+     * fall with CRF is a broken measurement, and keeps the VMAF choice.
+     *
+     * @param  array<int, int>  $bitrates  crf => measured bps
+     */
+    public static function capCrfToBitrate(array $bitrates, int $crf, int $ceiling, int $maxCrf): int
+    {
+        $curve = self::bitrateCurve($bitrates);
+
+        if ($curve === null || $ceiling <= 0 || self::estimateBitrate($bitrates, $crf) <= $ceiling) {
+            return $crf;
+        }
+
+        [$lowCrf, $lowRate, $slope] = $curve;
+        $needed = (int) ceil($lowCrf + (log($ceiling) - log($lowRate)) / $slope - 1e-9);
+
+        return max($crf, min($maxCrf, $needed));
+    }
+
+    /**
+     * The bitrate the anchors predict at `$crf`, or null when they can't predict one.
+     *
+     * @param  array<int, int>  $bitrates  crf => measured bps
+     */
+    public static function estimateBitrate(array $bitrates, int $crf): ?float
+    {
+        $curve = self::bitrateCurve($bitrates);
+
+        if ($curve === null) {
+            return null;
+        }
+
+        [$lowCrf, $lowRate, $slope] = $curve;
+
+        return $lowRate * exp($slope * ($crf - $lowCrf));
+    }
+
+    /**
+     * @param  array<int, int>  $bitrates
+     * @return ?array{0: int, 1: int, 2: float} low anchor crf, its bps, d ln(bps) / d crf
+     */
+    private static function bitrateCurve(array $bitrates): ?array
+    {
+        if (count($bitrates) !== 2 || min($bitrates) <= 0) {
+            return null;
+        }
+
+        ksort($bitrates);
+        [$lowCrf, $highCrf] = array_keys($bitrates);
+        [$lowRate, $highRate] = array_values($bitrates);
+
+        if ($highCrf <= $lowCrf || $highRate >= $lowRate) {
+            return null;
+        }
+
+        return [$lowCrf, $lowRate, (log($highRate) - log($lowRate)) / ($highCrf - $lowCrf)];
+    }
+
+    /**
      * Encode every (anchor × window) sample in ONE pool, then VMAF-score them all in a second —
      * each probe encode is short and thread-capped, and pooling both anchors together halves the
      * wall time this adds to PrepareVideoJob's fixed budget. Windows pool into a harmonic mean
      * so one bad window drags its anchor down more than a plain average would.
      *
+     * The samples' sizes come along for free: they're the bitrate each anchor costs on this source,
+     * pooled only over windows every anchor encoded so the two points compare the same footage —
+     * and next to them, what the source itself spent over those windows.
+     *
      * @param  list<int>  $anchorCrfs
      * @param  list<float>  $windows
-     * @return array<int, float> crf => pooled vmaf score
+     * @return array{0: array<int, float>, 1: array<int, int>, 2: ?int} [crf => pooled vmaf score, crf => bps, source bps over the same windows]
      */
     private function measureAnchors(array $anchorCrfs, string $crfKey, array $windows, string $sourcePath, Closure $tick): array
     {
@@ -144,6 +239,7 @@ class PerTitleCrfService
             foreach ($windows as $i => $start) {
                 $jobs[] = [
                     'crf' => $crf,
+                    'window' => $i,
                     'start' => $start,
                     'sample' => dirname($sourcePath)."/pertitle_{$this->stream->id}_{$crf}_{$i}.mp4",
                 ];
@@ -163,6 +259,10 @@ class PerTitleCrfService
             // Only score what actually encoded; a lost sample costs its window, not the probe.
             $encoded = array_keys(array_filter($encodes, fn (?string $output) => $output !== null));
 
+            // Read now: the finally below deletes the samples.
+            [$bitrates, $commonWindows] = $this->pooledBitrates($jobs, $encoded, $anchorCrfs);
+            $windowSourceRate = $this->windowSourceRate($sourcePath, $windows, $commonWindows);
+
             $outputs = $this->runPool(array_map(
                 fn (int $index) => $this->vmafCommand($jobs[$index]['start'], $sourcePath, $jobs[$index]['sample']),
                 $encoded,
@@ -171,26 +271,97 @@ class PerTitleCrfService
             array_map(fn (array $job) => @unlink($job['sample']), $jobs);
         }
 
-        $scores = [];
+        $byWindow = [];
         foreach ($outputs as $position => $output) {
             $score = $output === null ? null : self::parseVmafScore($output);
 
             if ($score !== null) {
-                $scores[$jobs[$encoded[$position]]['crf']][] = $score;
+                $job = $jobs[$encoded[$position]];
+                $byWindow[$job['window']][$job['crf']] = $score;
             }
         }
 
-        // Interpolating between anchors needs both of them; one that lost every window is no anchor.
+        // Pooled over the windows every anchor scored, for the same reason as the bitrates: an
+        // anchor that lost the hardest window would score higher than the footage warrants and
+        // bend the slope. Interpolating needs both ends, so with no window in common there's no curve.
+        $common = array_filter($byWindow, fn (array $perAnchor) => count($perAnchor) === count($anchorCrfs));
+
+        if (! $common) {
+            throw new RuntimeException('No sample window scored for every anchor');
+        }
+
+        $scores = [];
         foreach ($anchorCrfs as $crf) {
-            if (empty($scores[$crf])) {
-                throw new RuntimeException("No sample window scored for CRF {$crf}");
+            $windowScores = array_column($common, $crf);
+            $scores[$crf] = count($windowScores) / array_sum(array_map(fn (float $s) => 1 / max($s, 1.0), $windowScores));
+        }
+
+        return [$scores, $bitrates, $windowSourceRate];
+    }
+
+    /**
+     * The source's own bps over the windows the bitrates were pooled on. Null unless every one of
+     * them could be read, so a partial answer never passes for the whole; the ceiling then falls
+     * back to the file-wide average.
+     *
+     * @param  list<float>  $windows
+     * @param  list<int>  $commonWindows
+     */
+    private function windowSourceRate(string $sourcePath, array $windows, array $commonWindows): ?int
+    {
+        if (! $commonWindows) {
+            return null;
+        }
+
+        $bytes = SampleEncode::sourceBytes(
+            $sourcePath,
+            $this->stream->meta['index'] ?? 'v:0',
+            array_intersect_key($windows, array_flip($commonWindows)),
+        );
+
+        if (in_array(null, $bytes, true) || count($bytes) !== count($commonWindows)) {
+            return null;
+        }
+
+        return (int) round(array_sum($bytes) * 8 / (count($bytes) * SampleEncode::SECONDS));
+    }
+
+    /**
+     * Mean bps per anchor over the windows every anchor wrote. A window one anchor lost would
+     * otherwise put different footage on either end of the curve; with no window in common the
+     * curve is empty, and {@see capCrfToBitrate} leaves the VMAF choice alone.
+     *
+     * @param  list<array{crf: int, window: int, start: float, sample: string}>  $jobs
+     * @param  list<int>  $encoded  indexes into $jobs whose encode succeeded
+     * @param  list<int>  $anchorCrfs
+     * @return array{0: array<int, int>, 1: list<int>} [crf => bps, the windows pooled]
+     */
+    private function pooledBitrates(array $jobs, array $encoded, array $anchorCrfs): array
+    {
+        $bytes = [];
+
+        foreach ($encoded as $index) {
+            $size = (int) (@filesize($jobs[$index]['sample']) ?: 0);
+
+            if ($size > 0) {
+                $bytes[$jobs[$index]['window']][$jobs[$index]['crf']] = $size;
             }
         }
 
-        return array_map(
-            fn (array $windowScores) => count($windowScores) / array_sum(array_map(fn (float $s) => 1 / max($s, 1.0), $windowScores)),
-            $scores,
-        );
+        $common = array_filter($bytes, fn (array $perAnchor) => count($perAnchor) === count($anchorCrfs));
+
+        if (! $common) {
+            return [[], []];
+        }
+
+        $bitrates = [];
+
+        foreach ($anchorCrfs as $crf) {
+            $total = array_sum(array_map(fn (array $perAnchor) => $perAnchor[$crf], $common));
+            $bitrates[$crf] = (int) round($total * 8 / (count($common) * SampleEncode::SECONDS));
+        }
+
+        return [$bitrates, array_keys($common)];
     }
 
     private function encodeSampleCommand(int $crf, string $crfKey, float $start, string $sourcePath, string $samplePath): string
@@ -200,7 +371,10 @@ class PerTitleCrfService
         // things. The GPU scale filter: vpp_qsv needs a hw device this command never sets up, so
         // blinding the replica's pix_fmt meta drops it to the software decode+scale fallback path.
         // And the source clamp: a VBV tightened to the source makes both anchors score alike, the
-        // flat curve reads as saturation, and the probe walks the CRF up into starved scenes.
+        // flat curve reads as saturation, and the probe walks the CRF up into starved scenes. That
+        // held at PEAK_HEADROOM too: on a grainy episode the 3x ceiling pinned CRF 22, both anchors
+        // scored 96.7/96.5 and the flattened bitrate slope extrapolated to CRF 45. Left off, the
+        // samples run a little heavier than the chunks will, so the bitrate cap errs on the lean side.
         $probe = $this->stream->replicate();
         $probe->input_params = [$crfKey => $crf] + ($probe->input_params ?? []);
         $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);

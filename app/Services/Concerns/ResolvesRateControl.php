@@ -2,7 +2,9 @@
 
 namespace App\Services\Concerns;
 
+use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
+use App\Services\SampleEncode;
 
 /**
  * Every decision about how many bits a rendition may spend, in one entry point
@@ -76,9 +78,11 @@ trait ResolvesRateControl
     /**
      * The rendition's share of the source's own bitrate: the ceiling a re-encode must not outweigh.
      * Null when the probe data can't support one, or when the target codec is less efficient than
-     * the source's — matching an AV1 source's bitrate with x264 would starve it.
+     * the source's — matching an AV1 source's bitrate with x264 would starve it. `$sourceRate`
+     * replaces the file-wide average for a caller that measured the source over the same stretch
+     * it sampled ({@see SampleEncode::sourceBytes}).
      */
-    public function sourceBitrateCap(): ?int
+    public function sourceBitrateCap(?int $sourceRate = null): ?int
     {
         $meta = $this->stream->meta ?? [];
 
@@ -86,7 +90,7 @@ trait ResolvesRateControl
             return null;
         }
 
-        $sourceRate = (int) ($meta['source_bit_rate'] ?? 0);
+        $sourceRate ??= (int) ($meta['source_bit_rate'] ?? 0);
         $sourcePixels = (int) ($meta['source_width'] ?? 0) * (int) ($meta['source_height'] ?? 0);
         $targetPixels = (int) $this->stream->width * (int) $this->stream->height;
 
@@ -98,6 +102,19 @@ trait ResolvesRateControl
         $cap = (int) round($sourceRate * min(1.0, ($targetPixels / $sourcePixels) ** 0.75));
 
         return $cap >= self::MIN_CLAMP_BPS ? $cap : null;
+    }
+
+    /**
+     * The average a quality-mode rendition may land on before it outweighs its source. Since the
+     * peak ceiling moved to {@see PEAK_HEADROOM} the VBV no longer pins the mean anywhere near the
+     * source, so the CRF is all that does — and it has to be chosen against this number
+     * ({@see PerTitleCrfService}), since no encoder flag enforces it.
+     */
+    public function sourceAverageCeiling(?int $sourceRate = null): ?int
+    {
+        $cap = $this->sourceBitrateCap($sourceRate);
+
+        return $cap === null ? null : (int) round($cap * self::OVERSHOOT_TOLERANCE);
     }
 
     /** Whether this rendition's ceiling has to be measured before the encode instead of enforced during it. */

@@ -47,6 +47,58 @@ class SampleEncode
         );
     }
 
+    /**
+     * What the source itself spent on one track over each window, in bytes — what a sample's
+     * size has to be compared with. Windows land on the busy middle of a runtime as often as not
+     * (on one episode they ran 1.09x the file's average), so against the file-wide average a
+     * sample reads heavier than the rendition it stands for. Null for a window ffprobe couldn't
+     * read; the caller falls back to the file-wide rate.
+     *
+     * @param  list<float>  $windows  starts, as {@see windows} returns them
+     * @return array<int, ?int> window => bytes
+     */
+    public static function sourceBytes(string $sourcePath, int|string $track, array $windows): array
+    {
+        // `-ss` counts from the file's start, packet timestamps from zero: offset by start_time.
+        $probe = Process::timeout(60)->run([
+            'ffprobe', '-v', 'error', '-show_entries', 'format=start_time', '-of', 'csv=p=0', $sourcePath,
+        ]);
+        $offset = is_numeric(trim($probe->output())) ? (float) trim($probe->output()) : 0.0;
+
+        $bytes = [];
+
+        foreach ($windows as $i => $start) {
+            $from = $offset + $start;
+            $result = Process::timeout(60)->run([
+                'ffprobe', '-v', 'error',
+                '-select_streams', (string) $track,
+                // Well past the window. The interval counts from the keyframe the read seeks back
+                // to, and B-frames arrive out of presentation order: 2s of slack still missed 13 of
+                // a window's 479 packets on a 23.976 fps H.264, a whole window of slack none.
+                '-read_intervals', sprintf('%.3f%%+%d', $from, self::SECONDS * 2),
+                '-show_entries', 'packet=pts_time,size',
+                '-of', 'csv=p=0',
+                $sourcePath,
+            ]);
+
+            $total = 0;
+            $seen = false;
+
+            foreach (explode("\n", $result->successful() ? trim($result->output()) : '') as $line) {
+                [$pts, $size] = array_pad(explode(',', $line), 2, null);
+
+                if (is_numeric($pts) && is_numeric($size) && $pts >= $from && $pts < $from + self::SECONDS) {
+                    $total += (int) $size;
+                    $seen = true;
+                }
+            }
+
+            $bytes[$i] = $seen ? $total : null;
+        }
+
+        return $bytes;
+    }
+
     public function run(float $start, float $seconds = self::SECONDS, ?Closure $tick = null): SampleResult
     {
         $format = (new ChunkTranscodeService($this->stream))->outputFormat();
