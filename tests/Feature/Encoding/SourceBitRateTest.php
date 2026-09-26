@@ -7,11 +7,15 @@
  * there is not a conservative default: it removes the ceiling altogether.
  */
 
+use App\Models\Project;
 use App\Models\Video;
 use App\Services\ChunkTranscodeService;
 use App\Services\Concerns\ResolvesRateControl;
 use App\Services\CreateVideoStreamsService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Process;
+
+uses(RefreshDatabase::class);
 
 const FIXTURE_DIR = '/tmp/nukevideo-source-bitrate';
 
@@ -147,5 +151,21 @@ describe('what the rendition does with it', function () {
         expect($rate)->toBeGreaterThan(0)
             ->and($service->sourceBitrateCap())->not->toBeNull()
             ->and($service->encodesUncapped())->toBeFalse();
+    });
+});
+
+describe('the source file itself', function () {
+    it('keeps the uploaded file size on every rendition, since the original row is deleted on completion', function () {
+        $path = sourceFixture('stated.mp4', '-c:v libx264 -c:a aac -b:a 128k');
+        $video = projectVideo(Project::factory()->create());
+
+        $stream = (function () use ($video, $path) {
+            $this->localPath = $path;
+            $source = $this->probeMedia($video, $path)['streamCollection']->videos()->first();
+
+            return $this->createStream($video, $source, 'video', ['video_codec' => 'libx264', 'crf' => 23, 'width' => 640, 'height' => 360]);
+        })->call(new CreateVideoStreamsService);
+
+        expect($stream->meta['source_file_size'])->toBe(filesize($path));
     });
 });

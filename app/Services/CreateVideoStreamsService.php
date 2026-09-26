@@ -685,6 +685,10 @@ class CreateVideoStreamsService
                     // GPU jobs hardware-decode only when codec AND pixel format are supported.
                     'source_pix_fmt' => $stream->get('pix_fmt'),
                     'source_bit_rate' => $this->sourceBitRate($stream),
+                    // The uploaded file's size. Its `original` stream row carries it too, but that
+                    // row is deleted once the video completes (unless the template keeps the
+                    // original), and with it the only way to compare what shipped against what came in.
+                    'source_file_size' => @filesize($this->localPath) ?: null,
                     'source_fps' => $this->sourceFrameRate($stream),
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
