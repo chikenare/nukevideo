@@ -515,8 +515,9 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
     private function checkOutweighsSource(Video $video, Stream $stream, int $packageBytes): void
     {
         $duration = (float) $video->duration;
-        // The bare source share: the rule is that a rendition never outweighs its source, and
-        // per-title aims below it precisely so this stays quiet.
+        // The bare source share: the rule is that a rendition never outweighs its source. Per-title
+        // aims under it, so there this only speaks when its estimate was wrong; a template without
+        // a target VMAF encodes at its plain CRF, and this is the one place such an overshoot shows.
         $ceiling = (new ChunkTranscodeService($stream))->sourceBitrateCap();
 
         if ($duration <= 0 || $ceiling === null || $packageBytes <= 0) {

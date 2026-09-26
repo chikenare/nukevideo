@@ -76,7 +76,6 @@ class PerTitleCrfService
                 'stream' => $this->stream->id,
                 'error' => $e->getMessage(),
             ]);
-
         }
     }
 
@@ -106,11 +105,11 @@ class PerTitleCrfService
         // file-wide average: the windows can be busier than the file, and the ratio is what
         // carries over to the whole rendition. Up to the codec ceiling, not MAX_INCREASE: that
         // bound keeps VMAF's guess near the template, while this is a measured limit. A grainy
-        // cel-animation episode (1080p, 1.94 Mbps H.264): VMAF took SVT-AV1 to CRF 30, which
-        // encoded at 1.59x the source; this took it to CRF 40, which encoded at 1.01x.
+        // cel-animation episode (1080p, 1.94 Mbps H.264) that VMAF alone sent to 1.59x its source
+        // encoded at 0.75x with this, and still scored VMAF 94.2 against a target of 94.
         $cap = (new ChunkTranscodeService($this->stream))->sourceBitrateCap($windowSourceRate);
-        $ceiling = $cap === null ? null : (int) round($cap * self::SOURCE_TARGET);
-        $chosen = $ceiling === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $ceiling, $maxCrf);
+        $aim = $cap === null ? null : (int) round($cap * self::SOURCE_TARGET);
+        $chosen = $aim === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $aim, $maxCrf);
         $estimated = self::estimateBitrate($bitrates, $chosen);
 
         $params[$crfKey] = $chosen;
@@ -123,7 +122,7 @@ class PerTitleCrfService
             'anchors' => array_map(fn (float $score) => round($score, 2), $anchors),
             'anchor_bitrates' => $bitrates,
             'window_source_bitrate' => $windowSourceRate,
-            'bitrate_ceiling' => $ceiling,
+            'bitrate_target' => $aim,
             'estimated_bitrate' => $estimated === null ? null : (int) round($estimated),
             'windows' => count($windows),
         ];
@@ -134,22 +133,23 @@ class PerTitleCrfService
 
         // A curve too flat or broken to extrapolate leaves the VMAF choice uncapped. Mostly static
         // content, whose rate is container overhead that no CRF would save; say so either way.
-        if ($ceiling !== null && $estimated === null) {
+        if ($aim !== null && $estimated === null) {
             Log::warning('Per-title bitrate curve unusable; CRF not capped against the source', [
                 'stream' => $this->stream->id,
                 'anchor_bitrates' => $bitrates,
-                'bitrate_ceiling' => $ceiling,
+                'bitrate_target' => $aim,
             ]);
         }
 
-        // Bounded by the codec ceiling before it reached the source's rate: the rendition will
-        // outweigh its source, and nothing downstream stops it. Say so.
-        if ($ceiling !== null && $estimated !== null && $estimated > $ceiling) {
-            Log::warning('Per-title CRF cannot bring the rendition under its source bitrate', [
+        // The codec's top CRF still estimates above the aim. That is not yet an overshoot — the
+        // aim sits under the source — but the margin that absorbs the estimate's error is gone,
+        // and PackageVideoJob will say whether the rendition really outweighed its source.
+        if ($aim !== null && $estimated !== null && $estimated > $aim) {
+            Log::warning('Per-title CRF cannot reach its bitrate target under the source', [
                 'stream' => $this->stream->id,
                 'chosen_crf' => $chosen,
                 'estimated_bitrate' => (int) round($estimated),
-                'bitrate_ceiling' => $ceiling,
+                'bitrate_target' => $aim,
             ]);
         }
     }
@@ -418,7 +418,7 @@ class PerTitleCrfService
             $start,
             SampleEncode::SECONDS,
             escapeshellarg($sourcePath),
-            $service->buildVideoArguments(windowed: true, clampToSource: false),
+            $service->buildVideoArguments(windowed: true),
             $service->outputFormat(),
             escapeshellarg($samplePath),
         );

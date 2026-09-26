@@ -87,6 +87,9 @@ class NodeService
         'CLICKHOUSE_USER',
         'CLICKHOUSE_PASSWORD',
         'CLICKHOUSE_ENDPOINT',
+        // The workers are the ones writing usage rows, so a longer budget set here has to reach them.
+        'CLICKHOUSE_TIMEOUT',
+        'CLICKHOUSE_CONNECT_TIMEOUT',
 
         'WEBHOOK_SECRET',
         'INTERNAL_API_SECRET',
@@ -744,12 +747,7 @@ class NodeService
 
     private function buildDockerRunArgs(string $name, string $image, array $options): string
     {
-        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS);
-
-        // Docker refuses DNS options next to the host's network stack, which resolves on its own.
-        if (($options['network'] ?? null) !== 'host') {
-            $cmd .= ' '.self::DNS_OPTS;
-        }
+        $cmd = "--name {$name} --restart unless-stopped ".($options['log_opts'] ?? self::LOG_OPTS).' '.self::DNS_OPTS;
 
         foreach ($options['env'] ?? [] as $env) {
             $cmd .= ' -e '.escapeshellarg($env);

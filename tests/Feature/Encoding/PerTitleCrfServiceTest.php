@@ -315,7 +315,7 @@ describe('apply against the source bitrate', function () {
         expect($stream->meta['per_title']['vmaf_crf'])->toBe(30)
             ->and($stream->input_params['svtav1_crf'])->toBe(38)
             ->and($stream->meta['per_title']['anchor_bitrates'])->toBe([22 => 3_200_000, 30 => 2_000_000])
-            ->and($stream->meta['per_title']['bitrate_ceiling'])->toBe(1_266_500)
+            ->and($stream->meta['per_title']['bitrate_target'])->toBe(1_266_500)
             ->and($stream->meta['per_title']['estimated_bitrate'])->toBeLessThanOrEqual(1_266_500)
             ->and(glob(sys_get_temp_dir().'/pertitle_*'))->toBe([]);
     });
@@ -330,7 +330,7 @@ describe('apply against the source bitrate', function () {
 
         $meta = $stream->refresh()->meta['per_title'];
         expect($meta['window_source_bitrate'])->toBe(2_000_000)
-            ->and($meta['bitrate_ceiling'])->toBe(1_700_000)
+            ->and($meta['bitrate_target'])->toBe(1_700_000)
             ->and($stream->input_params['svtav1_crf'])->toBe(33);
     });
 
@@ -342,7 +342,7 @@ describe('apply against the source bitrate', function () {
 
         $meta = $stream->refresh()->meta['per_title'];
         expect($meta['window_source_bitrate'])->toBeNull()
-            ->and($meta['bitrate_ceiling'])->toBe(1_266_500)
+            ->and($meta['bitrate_target'])->toBe(1_266_500)
             ->and($stream->input_params['svtav1_crf'])->toBe(38);
     });
 
@@ -353,7 +353,7 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(30)
-            ->and($stream->meta['per_title']['bitrate_ceiling'])->toBeNull();
+            ->and($stream->meta['per_title']['bitrate_target'])->toBeNull();
     });
 
     it('scales the ceiling down with a downscaled rendition', function () use ($template, $source) {
@@ -364,8 +364,8 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         $meta = $stream->refresh()->meta['per_title'];
-        expect($meta['bitrate_ceiling'])->toBe((int) round(round(1_490_000 * 0.5625 ** 0.75) * 0.85))
-            ->and($meta['estimated_bitrate'])->toBeLessThanOrEqual($meta['bitrate_ceiling'])
+        expect($meta['bitrate_target'])->toBe((int) round(round(1_490_000 * 0.5625 ** 0.75) * 0.85))
+            ->and($meta['estimated_bitrate'])->toBeLessThanOrEqual($meta['bitrate_target'])
             ->and($stream->input_params['svtav1_crf'])->toBeGreaterThan($meta['vmaf_crf']);
     });
 
@@ -378,7 +378,7 @@ describe('apply against the source bitrate', function () {
 
         // Past MAX_INCREASE all the way to the codec ceiling, and still over: say so.
         expect($stream->refresh()->input_params['svtav1_crf'])->toBe(63);
-        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'cannot bring the rendition under'));
+        Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'cannot reach its bitrate target'));
     });
 
     it('pools vmaf only over windows both anchors scored', function () use ($template, $source) {

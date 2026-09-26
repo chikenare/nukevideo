@@ -203,16 +203,6 @@ describe('encoders that cap themselves', function () {
         expect($args)->toContain('-maxrate 4000k')->toContain('-bufsize 8000k');
     });
 
-    it('keeps the template VBV whole when asked not to clamp to the source', function () {
-        // Per-title anchors: their VMAF has to answer to the CRF, not to a source-tightened VBV.
-        $args = (new ChunkTranscodeService(matrixStream(
-            qualityTemplate('libsvtav1', ['maxrate' => '7000k', 'bufsize' => '14000k']),
-            meta: [...LIGHT_SOURCE, 'source_bit_rate' => 1_807_276],
-        )))->buildVideoArguments(windowed: true, clampToSource: false);
-
-        expect($args)->toContain('-maxrate 7000k')->toContain('-bufsize 14000k');
-    });
-
     it('steers a capped QSV quality mode into QVBR with an average below the source average', function (string $codec, string $expected) {
         $args = rateArgs(qualityTemplate($codec, ['maxrate' => '8000k', 'bufsize' => '16000k']));
 

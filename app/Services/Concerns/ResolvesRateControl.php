@@ -43,12 +43,8 @@ trait ResolvesRateControl
     /** Encoders that abort when a VBV is attached to an average bitrate. */
     private const ABR_WITHOUT_VBV = ['libsvtav1'];
 
-    /**
-     * The mode this rendition encodes in and the ceiling it may not cross. `$clampToSource: false`
-     * keeps the template's own VBV untouched — for per-title anchors, whose VMAF has to answer to
-     * the CRF alone; a source-tightened VBV flattens the curve and reads as saturation.
-     */
-    private function resolveRateControl(array $params, bool $clampToSource = true): array
+    /** The mode this rendition encodes in and the ceiling it may not cross. */
+    private function resolveRateControl(array $params): array
     {
         // ABR: the template pinned an average, so it carries its own ceiling.
         if (! empty($params['constant_bitrate'])) {
@@ -59,10 +55,6 @@ trait ResolvesRateControl
 
         if (in_array($params['video_codec'] ?? null, self::VBV_BLIND_CODECS, true)) {
             return $this->capBlindQualityMode($params, $cap);
-        }
-
-        if (! $clampToSource) {
-            $cap = null;
         }
 
         if ($cap !== null) {

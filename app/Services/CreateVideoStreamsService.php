@@ -455,7 +455,10 @@ class CreateVideoStreamsService
 
         return match (true) {
             in_array($codec, ['opus', 'libopus'], true) => 3,
-            $codec === 'vorbis', str_contains($profile, 'he') => 2,
+            $codec === 'vorbis' => 2,
+            // HE-AAC / HE-AACv2 / xHE-AAC as ffprobe names them, `aac_he` / `aac_he_v2` as a
+            // template asks for them.
+            in_array($codec, ['aac', 'libfdk_aac'], true) && str_contains($profile, 'he') => 2,
             default => 1,
         };
     }
@@ -747,7 +750,8 @@ class CreateVideoStreamsService
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
                 // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}), and the source track's own
-                // rate, the one its `audio_bitrate` was capped against ({@see capAudioBitrateToSource}).
+                // stated rate, which bounds `audio_bitrate` unless the source's codec is the more
+                // efficient one ({@see capAudioBitrateToSource}).
                 ...($codecType === 'audio' ? [
                     'source_bit_rate' => self::statedBitRate($stream),
                     'hearing_impaired' => $this->hasDisposition($stream, 'hearing_impaired'),

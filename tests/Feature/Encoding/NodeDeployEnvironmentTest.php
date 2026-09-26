@@ -288,3 +288,19 @@ describe('name resolution inside the containers', function () {
         'proxy' => [['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false, 'storage_endpoint' => null]],
     ]);
 });
+
+it('hands the ClickHouse timeouts to the workers, which are the ones writing usage rows', function () {
+    fakeCdnProvider('self_hosted');
+    putenv('CLICKHOUSE_TIMEOUT=9');
+    putenv('CLICKHOUSE_CONNECT_TIMEOUT=4');
+
+    try {
+        $env = app(NodeService::class)->getEnvironmentVariables(deployableNode());
+    } finally {
+        putenv('CLICKHOUSE_TIMEOUT');
+        putenv('CLICKHOUSE_CONNECT_TIMEOUT');
+    }
+
+    expect($env)->toContain('CLICKHOUSE_TIMEOUT=9')
+        ->toContain('CLICKHOUSE_CONNECT_TIMEOUT=4');
+});
