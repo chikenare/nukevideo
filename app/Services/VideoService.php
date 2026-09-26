@@ -95,7 +95,7 @@ class VideoService
         $live = $this->liveEncodeBatches($video);
 
         if ($live > 0) {
-            return "{$live} encode batch(es) are still unfinished — their jobs are still coming. Wait for them.";
+            return "{$live} encode batch(es) still have jobs out — queued, or still finishing after the failure. Wait for them.";
         }
 
         return null;
@@ -160,9 +160,19 @@ class VideoService
     /** Encode batches of this video that have not finished, i.e. jobs still on their way to it. */
     private function liveEncodeBatches(Video $video): int
     {
+        // A cancelled batch reads as finished — the framework stamps finished_at along with
+        // cancelled_at — but cancelling only stops the jobs that have not started: one already
+        // inside ffmpeg runs on, uploads its chunk into the retry, and on failure used to fail the
+        // retry itself. Jobs still out are its pending ones not yet failed. Only for as long as a
+        // job can live, though: a worker killed mid-job never settles its count, and that must
+        // not block the retry forever.
+        $drainedBy = now()->subSeconds((int) config('nuke.video.worker_timeout') + 60)->getTimestamp();
+
         return DB::table('job_batches')
             ->where('name', 'like', "encode video {$video->id} %")
-            ->whereNull('finished_at')
+            ->where(fn ($query) => $query->whereNull('finished_at')->orWhere(fn ($query) => $query
+                ->where('cancelled_at', '>=', $drainedBy)
+                ->whereColumn('pending_jobs', '>', 'failed_jobs')))
             ->count();
     }
 
