@@ -381,7 +381,13 @@ class CreateVideoStreamsService
                 $rungs[$channels] ??= $config;
             }
 
-            $sourceRate = self::statedBitRate($stream);
+            // No cap against a source more efficient than the target: HE-AAC or Opus matched
+            // bit for bit in AAC-LC would sound worse than what came in, the same reason the video
+            // ceiling skips a source codec that outranks the target's.
+            $sourceRate = self::audioCodecRank($stream->get('codec_name'), $stream->get('profile'))
+                > self::audioCodecRank($sharedAudioParams['audio_codec'] ?? null, $sharedAudioParams['audio_profile'] ?? null)
+                ? null
+                : self::statedBitRate($stream);
 
             foreach ($rungs as $channels => $config) {
                 $inputParams = self::capAudioBitrateToSource(
@@ -437,6 +443,22 @@ class CreateVideoStreamsService
     }
 
     private const MIN_AUDIO_BPS = 32_000;
+
+    /**
+     * Rough efficiency ordering of audio codecs, for a source track (ffprobe codec and profile) or
+     * a target (encoder and `audio_profile`). Lossless and legacy codecs rank lowest; their rates
+     * sit far above any template's anyway.
+     */
+    private static function audioCodecRank(?string $codec, ?string $profile): int
+    {
+        $profile = strtolower((string) $profile);
+
+        return match (true) {
+            in_array($codec, ['opus', 'libopus'], true) => 3,
+            $codec === 'vorbis', str_contains($profile, 'he') => 2,
+            default => 1,
+        };
+    }
 
     private static function channelLayoutLabel(int $channels): string
     {

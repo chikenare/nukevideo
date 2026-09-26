@@ -124,6 +124,34 @@ describe('audio never outweighs its source track', function () {
         'stereo AAC, BPS tag only' => [['channels' => 2, 'codec_name' => 'aac', 'tags' => ['language' => 'jpn', 'BPS' => '117744']], '117k'],
     ]);
 
+    it('never caps against a source more efficient than the target', function (array $track, array $audioConfig, array $expected) {
+        // Matched bit for bit, AAC-LC sounds worse than the HE-AAC or Opus it came from.
+        $streams = audioStreamsFor([['index' => 1, 'channels' => 2, 'tags' => ['language' => 'eng'], ...$track]], $audioConfig);
+
+        expect(array_column($streams, 'bitrate'))->toBe($expected);
+    })->with([
+        'HE-AAC into AAC-LC' => [
+            ['codec_name' => 'aac', 'profile' => 'HE-AAC', 'bit_rate' => '64000'],
+            ['audio_codec' => 'aac', 'channels' => [['channels' => '2', 'audio_bitrate' => '128k']]],
+            ['128k'],
+        ],
+        'Opus into AAC' => [
+            ['codec_name' => 'opus', 'bit_rate' => '48000'],
+            ['audio_codec' => 'aac', 'channels' => [['channels' => '2', 'audio_bitrate' => '128k']]],
+            ['128k'],
+        ],
+        'Opus into Opus still caps' => [
+            ['codec_name' => 'opus', 'bit_rate' => '96000'],
+            AUDIO_CONFIG,
+            ['96k'],
+        ],
+        'HE-AAC into HE-AAC still caps' => [
+            ['codec_name' => 'aac', 'profile' => 'HE-AAC', 'bit_rate' => '64000'],
+            ['audio_codec' => 'aac', 'audio_profile' => 'aac_he', 'channels' => [['channels' => '2', 'audio_bitrate' => '128k']]],
+            ['64k'],
+        ],
+    ]);
+
     it('keeps the template rate when the source spent as much or more', function () {
         $streams = audioStreamsFor([
             ['index' => 1, 'channels' => 6, 'bit_rate' => '640000', 'tags' => ['language' => 'eng']],

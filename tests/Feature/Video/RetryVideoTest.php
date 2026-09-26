@@ -1,10 +1,13 @@
 <?php
 
+use App\Jobs\EncodeSidecarTracksJob;
 use App\Models\Project;
 use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
@@ -172,6 +175,22 @@ describe('videos:retry', function () {
         // A worker killed mid-job never settles its count; past a job's lifetime it cannot block.
         'jobs out, but longer ago than any job can live' => [3, 7200],
     ]);
+
+    it('refuses while the failed run\'s audio and subtitle pass is still encoding', function () {
+        // In no batch, so only its unique lock says it is running; failing late it failed the
+        // retry, and while it holds the lock the retry's own pass would never be dispatched.
+        $video = failedVideo();
+        $lock = Cache::lock(UniqueLock::getKey(new EncodeSidecarTracksJob($video->id, '')), 60);
+        $lock->get();
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
+        expect($video->fresh()->status)->toBe('failed');
+
+        $lock->release();
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+        expect($video->fresh()->status)->toBe('pending');
+    });
 
     it('clears the finished batch of the run that failed, which would block fan-out', function () {
         $video = failedVideo();
