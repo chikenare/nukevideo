@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Jobs\ProcessChunkJob;
 use App\Models\Stream;
 use App\Support\Cpu;
+use InvalidArgumentException;
 
 class ChunkTranscodeService
 {
@@ -166,7 +168,15 @@ class ChunkTranscodeService
         return str_starts_with($codec, 'av1') || $tenBitSource ? 'p010le' : 'nv12';
     }
 
-    public function buildVideoArguments(bool $windowed = false): string
+    /**
+     * `$gapFill` (['rate' => '24000/1001', 'timescale' => 24000]) resamples to that frame rate,
+     * repeating a frame across any stretch the source holds none, so a chunk that ends inside such
+     * a hole comes out its full length ({@see ProcessChunkJob}). Both values come from the chunk's
+     * own first, short encode: its neighbours are concatenated with `-c copy`, which needs one
+     * timescale — the source's rounded `source_fps` gave 23.976 a 1/11988 timescale against their
+     * 1/24000, and that window played at double speed. Software filter path only.
+     */
+    public function buildVideoArguments(bool $windowed = false, ?array $gapFill = null): string
     {
         // Copy fast-path: remux when the source already matches the target codec/size at or under the
         // target bitrate. Never for window-cut chunks — `-c:v copy` snaps back to the previous
@@ -198,6 +208,16 @@ class ChunkTranscodeService
             if ($accel && $this->gpuEncodeFormat($params['video_codec']) === 'p010le') {
                 $scale = $scale ? "{$scale},format=p010le" : '-vf format=p010le';
             }
+
+            if ($gapFill !== null) {
+                // A rational such as 24000/1001; assertSafeArgValue()'s charset has no '/'.
+                if (! preg_match('#^\d+/\d+$#', (string) $gapFill['rate'])) {
+                    throw new InvalidArgumentException("Unsafe frame rate: {$gapFill['rate']}");
+                }
+
+                $filter = 'fps='.$gapFill['rate'];
+                $scale = $scale ? "{$scale},{$filter}" : "-vf {$filter}";
+            }
         }
 
         if ($scale) {
@@ -205,6 +225,10 @@ class ChunkTranscodeService
         }
 
         $args = array_merge($args, $this->buildParamsArguments($params, 'video'));
+
+        if ($gapFill !== null && ! ($accel && $this->hardwareDecodes())) {
+            $args[] = '-video_track_timescale '.(int) $gapFill['timescale'];
+        }
 
         $args[] = $this->keyframeGridArguments($params);
         $args[] = '-map '.$this->mapTarget();

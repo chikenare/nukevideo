@@ -8,11 +8,13 @@ use App\Models\Stream;
 use App\Models\Video;
 use App\Services\ChunkPlanner;
 use App\Services\ChunkProgressReporter;
+use App\Services\ChunkTranscodeService;
 use App\Services\Concerns\EmitsHeartbeat;
 use App\Services\EncodeCommandBuilder;
 use App\Services\UsageService;
 use App\Services\VideoService;
 use App\Support\MediaDuration;
+use App\Support\MediaSource;
 use App\Support\Scratch;
 use Illuminate\Bus\Batchable;
 use Illuminate\Bus\Queueable;
@@ -127,7 +129,7 @@ class ProcessChunkJob implements ShouldQueue
             );
         }
 
-        $this->assertWindowEncoded($localPath, $windowDuration);
+        $this->assertWindowEncoded($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration);
         $this->upload($chunkKey, $localPath);
         $this->reportDone($outputs);
     }
@@ -137,9 +139,34 @@ class ProcessChunkJob implements ShouldQueue
      * read that dies mid-window still exits 0, and a chunk that stops short would concat into a
      * rendition shorter than the manifest declares.
      */
-    private function assertWindowEncoded(string $localPath, float $windowDuration): void
+    private function assertWindowEncoded(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration): void
     {
         $short = MediaDuration::truncated($localPath, $windowDuration);
+
+        if ($short === null) {
+            return;
+        }
+
+        // A source that simply holds no picture there — a damaged rip, a few seconds with audio
+        // and no video — reads short on every attempt, on every node: it failed seven episodes,
+        // always the same chunk. Windows open on a keyframe, so such a hole only ever cuts the end
+        // of one. Re-encode it repeating the last frame across the hole, as a player shows a copy
+        // of the source; a short read over the network still fails and is retried.
+        // The fill keeps the short encode's own rate and timescale, so it concatenates with its
+        // neighbours ({@see ChunkTranscodeService::buildVideoArguments()}).
+        $timing = MediaSource::videoTiming($localPath);
+
+        if ($timing !== null && $this->sourceHoldsNoPicture($stream, $sourceUrl, $this->start + $short, $this->end)) {
+            Log::warning('Source has no picture at the end of this chunk; filling it with the last frame', [
+                'stream' => $this->streamId,
+                'chunk' => $this->chunkIndex,
+                'from' => round($this->start + $short, 3),
+                'to' => round($this->end, 3),
+            ]);
+
+            $this->encode($stream, $sourceUrl, $localPath, $video, $outputs, $windowDuration, $timing);
+            $short = MediaDuration::truncated($localPath, $windowDuration);
+        }
 
         if ($short !== null) {
             throw new RuntimeException(
@@ -148,13 +175,20 @@ class ProcessChunkJob implements ShouldQueue
         }
     }
 
+    /** Whether the source has no video packet at all from where the chunk stopped to its end. */
+    private function sourceHoldsNoPicture(Stream $stream, string $sourceUrl, float $from, float $to): bool
+    {
+        // Past the last encoded frame, which starts up to a frame before the shortfall.
+        return MediaSource::packetsBetween($sourceUrl, $stream->meta['index'] ?? 'v:0', $from + 0.05, $to) === 0;
+    }
+
     /**
      * Encode this rendition's chunk, beating the heartbeat and reporting per-chunk progress off
      * ffmpeg's `time=` output to every output the stream belongs to.
      *
      * @param  \Illuminate\Support\Collection<int,Output>  $outputs
      */
-    private function encode(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration): void
+    private function encode(Stream $stream, string $sourceUrl, string $localPath, Video $video, $outputs, float $windowDuration, ?array $gapFill = null): void
     {
         $command = EncodeCommandBuilder::build(
             new Collection([$stream]),
@@ -162,6 +196,7 @@ class ProcessChunkJob implements ShouldQueue
             [$stream->id => $localPath],
             $this->start,
             $this->end,
+            $gapFill,
         );
 
         Log::debug($command);
