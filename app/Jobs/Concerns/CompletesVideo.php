@@ -23,7 +23,9 @@ trait CompletesVideo
             return false;
         }
 
-        return DB::transaction(function () use ($video) {
+        // $reason too: without it this threw on every failure it recorded and rolled the FAILED
+        // status back, leaving the video for the reaper, 41 minutes later and without its cause.
+        return DB::transaction(function () use ($video, $reason) {
             $locked = Video::whereKey($video->id)->lockForUpdate()->first();
 
             if (! $locked || in_array($locked->status, [VideoStatus::COMPLETED->value, VideoStatus::FAILED->value])) {

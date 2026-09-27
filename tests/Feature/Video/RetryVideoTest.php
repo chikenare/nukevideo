@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\EncodeSidecarTracksJob;
+use App\Jobs\PackageVideoJob;
 use App\Models\Project;
 use App\Models\Template;
 use App\Models\User;
@@ -294,5 +295,31 @@ describe('videos:retry', function () {
 
     it('reports an unknown video instead of failing silently', function () {
         $this->artisan('videos:retry', ['video' => ['01ZZZZZZZZZZZZZZZZZZZZZZZZ']])->assertFailed();
+    });
+});
+
+describe('a failed run that is not finished yet', function () {
+    it('waits while its package job holds the lock, which would drop the retry\'s own', function () {
+        $video = failedVideo();
+        $lock = Cache::lock(UniqueLock::getKey(new PackageVideoJob($video->id)), 60);
+        $lock->get();
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
+        expect($video->fresh()->status)->toBe('failed');
+
+        $lock->release();
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+        expect($video->fresh()->status)->toBe('pending');
+    });
+
+    it('waits while it still reports progress, and retries once it has gone quiet', function () {
+        $video = failedVideo(['last_heartbeat_at' => now()->subMinute()]);
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertFailed();
+        expect($video->fresh()->status)->toBe('failed');
+
+        $video->forceFill(['last_heartbeat_at' => now()->subMinutes(7)])->save();
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+        expect($video->fresh()->status)->toBe('pending');
     });
 });
