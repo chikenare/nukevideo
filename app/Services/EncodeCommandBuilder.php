@@ -11,6 +11,7 @@ class EncodeCommandBuilder
 {
     /**
      * Assemble a multi-output ffmpeg command reading one `$source`, one output per stream.
+     * `$gapFill` is {@see ChunkTranscodeService::buildVideoArguments()}'s.
      * Pass `$start`/`$end` for a video chunk: `-ss/-to` before `-i` plus re-encode cuts exactly
      * `[start, end)` frame-accurately (a `-c copy` extract can't — it snaps back to the previous
      * keyframe and the windows overlap). Omit them for audio/subtitle sidecars (whole source).
@@ -18,7 +19,7 @@ class EncodeCommandBuilder
      * @param  Collection<int,Stream>  $streams
      * @param  array<int,string>  $outputPaths  stream id → local output path
      */
-    public static function build(Collection $streams, string $source, array $outputPaths, ?float $start = null, ?float $end = null): string
+    public static function build(Collection $streams, string $source, array $outputPaths, ?float $start = null, ?float $end = null, ?array $gapFill = null): string
     {
         $types = $streams->pluck('type')->unique();
 
@@ -50,7 +51,7 @@ class EncodeCommandBuilder
             $path = $outputPaths[$stream->id];
 
             $parts[] = match ($stream->type) {
-                'video' => sprintf('-fps_mode passthrough %s -f %s "%s"', $svc->buildVideoArguments($windowed), $svc->outputFormat(), $path),
+                'video' => sprintf('-fps_mode passthrough %s -f %s "%s"', $svc->buildVideoArguments($windowed, $gapFill), $svc->outputFormat(), $path),
                 'audio' => sprintf('%s -movflags +faststart -f %s "%s"', $svc->buildAudioArguments(), $svc->outputFormat(), $path),
                 'subtitle' => sprintf('-map %s -c:s webvtt -f %s "%s"', $svc->mapTarget(), $svc->outputFormat(), $path),
             };

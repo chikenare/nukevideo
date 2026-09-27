@@ -7,6 +7,7 @@ use App\Console\Commands\RetryVideos;
 use App\Enums\VideoStatus;
 use App\Jobs\CleanupVideoResourcesJob;
 use App\Jobs\EncodeSidecarTracksJob;
+use App\Jobs\PackageVideoJob;
 use App\Jobs\PrepareVideoJob;
 use App\Models\Project;
 use App\Models\Video;
@@ -105,6 +106,19 @@ class VideoService
             return 'The audio and subtitle pass of the failed run is still encoding. Wait for it to finish.';
         }
 
+        // Same reason as the sidecar: while the failed run's package job holds its lock, the
+        // retry's own would be dropped. A lost job's lock expires ({@see PackageVideoJob::$uniqueFor}).
+        if ($this->holdsUniqueLock(new PackageVideoJob($video->id))) {
+            return 'The failed run\'s packaging still holds its lock. Wait for it to finish or expire.';
+        }
+
+        // A sidecar pass that fails fast settles the video FAILED while its PrepareVideoJob is
+        // still probing; retried then, that Prepare fanned its batches out into the retry. Every
+        // live job beats at least every few minutes, so wait until the failed run has gone quiet.
+        if ($video->last_heartbeat_at?->gt(now()->subMinutes(6))) {
+            return 'The failed run reported progress less than 6 minutes ago. Retry in a few minutes.';
+        }
+
         return null;
     }
 
@@ -173,7 +187,12 @@ class VideoService
      */
     private function sidecarPassRunning(Video $video): bool
     {
-        $lock = Cache::lock(UniqueLock::getKey(new EncodeSidecarTracksJob($video->id, '')), 1);
+        return $this->holdsUniqueLock(new EncodeSidecarTracksJob($video->id, ''));
+    }
+
+    private function holdsUniqueLock(object $job): bool
+    {
+        $lock = Cache::lock(UniqueLock::getKey($job), 1);
 
         if (! $lock->get()) {
             return true;

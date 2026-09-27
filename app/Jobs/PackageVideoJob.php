@@ -54,6 +54,11 @@ class PackageVideoJob implements ShouldBeUnique, ShouldQueue
 
     public $timeout = 1800;
 
+    // Without it the unique lock never expired: a package job lost with a stopped worker kept it
+    // forever, and the framework silently dropped every later dispatch for the video, its retry's
+    // included (video 9082 encoded every chunk and hung in UPLOADING). Covers every try.
+    public int $uniqueFor = 10800;
+
     public function __construct(
         public int $videoId,
     ) {}

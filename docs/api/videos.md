@@ -192,8 +192,9 @@ Returns the requeued video, in the same shape as [Get Video](#get-video), with `
 `pending`.
 
 Responds `409` when the video cannot be retried, with the reason in `message`: it is not `failed`,
-its source is gone from both the internal mirror and S3, or its previous run still has encode
-batches in flight — those jobs are still on their way and must be allowed to land.
+its source is gone from both the internal mirror and S3, or its previous run is not finished yet —
+encode batches with jobs still out, its audio/subtitle pass or packaging still holding its lock, or
+progress reported within the last few minutes. Those jobs must be allowed to land first.
 
 ## Playback URLs
 
