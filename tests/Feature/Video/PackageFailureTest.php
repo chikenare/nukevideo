@@ -10,12 +10,17 @@ use App\Jobs\EncodeSidecarTracksJob;
 use App\Jobs\PackageVideoJob;
 use App\Models\Project;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Storage;
 use Spatie\Activitylog\Models\Activity;
 
 uses(RefreshDatabase::class);
 
-beforeEach(fn () => Storage::fake('chunks'));
+beforeEach(function () {
+    Storage::fake('chunks');
+    // Settling the video clears its chunk progress, a Redis hash; no Redis in CI.
+    Redis::shouldReceive('del')->andReturn(1);
+});
 
 function failureReason(int $videoId): ?string
 {
