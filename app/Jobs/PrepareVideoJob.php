@@ -5,8 +5,10 @@ namespace App\Jobs;
 use App\Console\Commands\DispatchPendingVideosCommand;
 use App\Enums\VideoStatus;
 use App\Jobs\Concerns\SyncsViaS5cmd;
+use App\Models\Stream;
 use App\Models\Video;
 use App\Services\ChunkPlanner;
+use App\Services\ChunkTranscodeService;
 use App\Services\CreateVideoStreamsService;
 use App\Services\PerTitleCrfService;
 use App\Services\QualityBitrateProbe;
@@ -16,6 +18,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
@@ -341,6 +344,8 @@ class PrepareVideoJob implements ShouldQueue
             return false;
         }
 
+        $this->discardStaleChunks($video, $streams, $windows);
+
         $chunkCount = count($windows);
 
         // Authoritative window count: the packager asserts each rendition concatenated exactly this
@@ -403,6 +408,52 @@ class PrepareVideoJob implements ShouldQueue
         }
 
         return true;
+    }
+
+    /**
+     * A staged chunk is reused by its index alone ({@see ProcessChunkJob}), so it is only a cache
+     * hit while index N still means the same window encoded the same way. A deploy between a
+     * failure and its retry can change either — the window sizing, or how the rate control
+     * resolves — and the retry would then concat old chunks with new ones: content repeated or
+     * skipped at the joins, audio drifting, one rendition at two VBV settings. Each rendition's
+     * plan is recorded next to its chunks; a retry that plans differently starts that rendition
+     * over. Chunks staged before plans were recorded adopt the current one, as they always did.
+     *
+     * @param  Collection<int, Stream>  $streams
+     * @param  list<array{0:float,1:float}>  $windows
+     */
+    private function discardStaleChunks(Video $video, $streams, array $windows): void
+    {
+        $disk = Storage::disk('chunks');
+        $bounds = array_map(fn (array $window) => array_map(fn (float $t) => sprintf('%.4f', $t), $window), $windows);
+
+        foreach ($streams as $stream) {
+            // Beside the rendition's directory, not in it: a file in there reads as an encoded chunk.
+            $key = "{$video->chunksDir()}/{$stream->ulid}.plan";
+            $dir = "{$video->chunksDir()}/{$stream->ulid}";
+
+            // Thread counts are the node's, not the plan's: the node that encodes a chunk is rarely
+            // the one that planned it, and that makes the same bytes.
+            $arguments = preg_replace(
+                '/-threads \d+ ?|[:=]?(?:lp|pools)=\d+/',
+                '',
+                (new ChunkTranscodeService($stream))->buildVideoArguments(windowed: true),
+            );
+            $plan = hash('sha256', json_encode([$bounds, $arguments]));
+            $recorded = $disk->exists($key) ? trim((string) $disk->get($key)) : null;
+
+            if ($recorded !== null && $recorded !== $plan && $disk->files($dir) !== []) {
+                Log::warning('Retry planned differently; discarding staged chunks', [
+                    'video' => $this->videoId,
+                    'stream' => $stream->id,
+                ]);
+                $disk->deleteDirectory($dir);
+            }
+
+            if ($recorded !== $plan) {
+                $disk->put($key, $plan);
+            }
+        }
     }
 
     public function failed(Throwable $e): void
