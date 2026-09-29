@@ -9,6 +9,7 @@ use App\Services\CreateVideoStreamsService;
 use App\Services\ManifestEditor;
 use App\Services\PackagerCommandBuilder;
 use App\Services\VodLinkService;
+use Closure;
 use Illuminate\Database\Eloquent\Attributes\ObservedBy;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -16,6 +17,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
+use Throwable;
 
 #[ObservedBy(OutputObserver::class)]
 class Output extends Model
@@ -247,8 +249,10 @@ class Output extends Model
             }
         }
 
-        Redis::hmset($key, $seed);
-        Redis::expire($key, 86400); // 24h
+        $this->bestEffort('seed', function () use ($key, $seed) {
+            Redis::hmset($key, $seed);
+            Redis::expire($key, 86400); // 24h
+        });
     }
 
     /** HSET per (chunk, rendition) field, so retries are idempotent and parallel workers never
@@ -258,8 +262,10 @@ class Output extends Model
     {
         $key = self::chunkProgressKey($this->id);
 
-        Redis::hset($key, "{$chunkIndex}:{$streamId}", max(0, min(100, $percent)));
-        Redis::expire($key, 86400);
+        $this->bestEffort('report', function () use ($key, $chunkIndex, $streamId, $percent) {
+            Redis::hset($key, "{$chunkIndex}:{$streamId}", max(0, min(100, $percent)));
+            Redis::expire($key, 86400);
+        });
     }
 
     /**
@@ -287,6 +293,29 @@ class Output extends Model
 
     public function clearChunkProgress(): void
     {
-        Redis::del(self::chunkProgressKey($this->id));
+        $this->bestEffort('clear', fn () => Redis::del(self::chunkProgressKey($this->id)));
+    }
+
+    /**
+     * Progress is a display value, and every write of it happens inside work that matters more: a
+     * chunk's encode (the ffmpeg progress callback), the fan-out, a video closing out after its
+     * packaging. Workers can sit on the far side of a WAN from Redis, where a connection drops now
+     * and then — and a failed write here used to throw out of the encode it was describing,
+     * killing it mid-way (about twenty chunk encodes in four days of production). So log and go
+     * on: the next report rewrites the field, a missed clear expires with the hash's TTL, and a
+     * missed seed only leaves the percent without its divisor until the chunks report.
+     *
+     * Throwable rather than RedisException: which client throws what depends on the connector.
+     */
+    private function bestEffort(string $write, Closure $callback): void
+    {
+        try {
+            $callback();
+        } catch (Throwable $e) {
+            Log::warning("Chunk progress {$write} failed; carrying on without it", [
+                'output' => $this->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }
