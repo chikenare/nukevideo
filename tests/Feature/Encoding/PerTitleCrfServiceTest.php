@@ -19,8 +19,16 @@ describe('chooseCrf', function () {
         expect(PerTitleCrfService::chooseCrf([30 => 97.0, 38 => 93.5], 94, 63))->toBe(37);
     });
 
-    it('extrapolates below the base crf when the source needs more bits', function () {
-        expect(PerTitleCrfService::chooseCrf([23 => 90.0, 31 => 85.0], 94, 51))->toBe(19);
+    it('extrapolates below the base crf when the target is within reach', function () {
+        // 23 → 93.0, 31 → 88.0: slope -0.625, target 94 lands 1.6 steps under the base.
+        expect(PerTitleCrfService::chooseCrf([23 => 93.0, 31 => 88.0], 94, 51))->toBe(21);
+    });
+
+    it('keeps the base crf when the target is out of reach below it', function () {
+        // A grainy 1080p episode: 94 extrapolates to CRF ~16, and the four steps the probe used to
+        // take toward it cost 46% more bits for ~1 VMAF point, still short of the target.
+        expect(PerTitleCrfService::chooseCrf([26 => 90.86, 34 => 88.37], 94, 63))->toBe(26)
+            ->and(PerTitleCrfService::chooseCrf([30 => 80.0, 38 => 70.0], 94, 63))->toBe(30);
     });
 
     it('never extrapolates upward past the top anchor', function () {
@@ -28,10 +36,6 @@ describe('chooseCrf', function () {
         expect(PerTitleCrfService::chooseCrf([30 => 99.9, 38 => 99.5], 80, 63))->toBe(38)
             // A barely sloped curve extrapolated 26 → 38 before; the top anchor is the limit.
             ->and(PerTitleCrfService::chooseCrf([26 => 94.24, 34 => 93.7], 93, 63))->toBe(34);
-    });
-
-    it('bounds the downward swing around the base crf', function () {
-        expect(PerTitleCrfService::chooseCrf([30 => 80.0, 38 => 70.0], 94, 63))->toBe(26);
     });
 
     it('falls back to the top anchor on a saturated flat curve', function () {
@@ -54,16 +58,25 @@ describe('chooseCrf', function () {
 });
 
 describe('sample windows', function () {
-    it('uses three windows for a short feature and four for a long one', function () {
-        expect(SampleEncode::windows(1500.0))->toHaveCount(3)
-            ->and(SampleEncode::windows(6800.0))->toHaveCount(4);
+    it('spreads the same number of windows over any runtime', function () {
+        expect(SampleEncode::windows(130.0))->toHaveCount(SampleEncode::WINDOWS)
+            ->and(SampleEncode::windows(1500.0))->toHaveCount(SampleEncode::WINDOWS)
+            ->and(SampleEncode::windows(6800.0))->toHaveCount(SampleEncode::WINDOWS);
+    });
+
+    it('never overlaps two windows, even on the shortest runtime it samples', function () {
+        $starts = SampleEncode::windows((float) SampleEncode::MIN_DURATION);
+
+        foreach (array_slice($starts, 1) as $i => $start) {
+            expect($start - $starts[$i])->toBeGreaterThanOrEqual((float) SampleEncode::SECONDS);
+        }
     });
 
     it('keeps every window inside the runtime', function () {
         foreach ([130.0, 1500.0, 6800.0] as $duration) {
             foreach (SampleEncode::windows($duration) as $start) {
                 expect($start)->toBeGreaterThanOrEqual(0.0)
-                    ->and($start)->toBeLessThanOrEqual($duration - 20);
+                    ->and($start)->toBeLessThanOrEqual($duration - SampleEncode::SECONDS);
             }
         }
     });
@@ -311,8 +324,9 @@ describe('apply against the source bitrate', function () {
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
         $stream->refresh();
-        // Aimed at 0.85x the 1.49 Mbps source: ln(1.2665/3.2) / (ln(2.0/3.2) / 8) ≈ 15.8 over 22.
-        expect($stream->meta['per_title']['vmaf_crf'])->toBe(30)
+        // VMAF aims at 96.5, CRF 28; the cap at 0.85x the 1.49 Mbps source then asks for
+        // ln(1.2665/3.2) / (ln(2.0/3.2) / 8) ≈ 15.8 over 22.
+        expect($stream->meta['per_title']['vmaf_crf'])->toBe(28)
             ->and($stream->input_params['svtav1_crf'])->toBe(38)
             ->and($stream->meta['per_title']['anchor_bitrates'])->toBe([22 => 3_200_000, 30 => 2_000_000])
             ->and($stream->meta['per_title']['bitrate_target'])->toBe(1_266_500)
@@ -352,7 +366,7 @@ describe('apply against the source bitrate', function () {
 
         (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
 
-        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(30)
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(28)
             ->and($stream->meta['per_title']['bitrate_target'])->toBeNull();
     });
 
@@ -381,11 +395,78 @@ describe('apply against the source bitrate', function () {
         Log::shouldHaveReceived('warning')->withArgs(fn (string $message) => str_contains($message, 'cannot reach its bitrate target'));
     });
 
+    // Template 6 in production: SVT-AV1 10-bit 1080p, base CRF 26, target VMAF 94.
+    $hd = ['video_codec' => 'libsvtav1', 'svtav1_crf' => 26, 'target_vmaf' => 94, 'maxrate' => '7000k', 'bufsize' => '14000k'];
+    $hdSource = ['source_codec' => 'h264', 'source_bit_rate' => 9_454_185, 'source_width' => 1920, 'source_height' => 1080];
+
+    it('keeps the base crf on grain whose target is out of reach, where the old probe spent 46% more', function () use ($hd, $hdSource) {
+        // Vampire Diaries S01E20: VMAF 94 is out of reach at any CRF, and chasing it used to cost
+        // CRF 22 at 6.0 Mbps for 93.2; CRF 26 measured 4.3 Mbps and 92.4.
+        fakeAnchors([26 => 90.86, 34 => 88.37], [26 => 4_125_662, 34 => 1_448_305], 8_912_081);
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(26)
+            ->and($stream->meta['per_title']['anchors'])->toHaveKeys([26, 34])->toHaveCount(2);
+    });
+
+    it('measures further anchors while the top one still clears the target', function () use ($hd, $hdSource) {
+        // A flat cartoon: 96+ at base + 8 capped the old probe at 34, 2.4 Mbps where 1.1 met 94.
+        fakeAnchors(
+            [26 => 97.5, 34 => 96.8, 42 => 95.2, 50 => 93.0],
+            [26 => 3_300_000, 34 => 2_400_000, 42 => 1_700_000, 50 => 1_150_000],
+            8_000_000,
+        );
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        // Decided on 42 → 95.2 and 50 → 93.0, aimed at 94.5: 42 + 0.7 / 0.275 ≈ 44.5.
+        expect($stream->refresh()->meta['per_title']['anchors'])->toHaveKeys([26, 34, 42, 50])
+            ->and($stream->input_params['svtav1_crf'])->toBe(45);
+    });
+
+    it('stops stepping up once the top anchor sits near the target', function () use ($hd, $hdSource) {
+        fakeAnchors([26 => 96.0, 34 => 94.8], [26 => 3_000_000, 34 => 2_000_000], 8_000_000);
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        // 94.8 is under 94 + STEP_UP_MARGIN: no third anchor, and the top one caps the CRF.
+        expect($stream->refresh()->meta['per_title']['anchors'])->toHaveCount(2)
+            ->and($stream->input_params['svtav1_crf'])->toBe(34);
+    });
+
+    it('aims a little over the target, since the sample reads high', function () use ($hd, $hdSource) {
+        // Interpolated onto 94 itself this would be 30; onto 94.5 it is 28.
+        fakeAnchors([26 => 95.0, 34 => 93.0], [26 => 3_000_000, 34 => 2_000_000], 8_000_000);
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        expect($stream->refresh()->input_params['svtav1_crf'])->toBe(28);
+    });
+
+    it('decides on the anchors it has when an extra one fails', function () use ($hd, $hdSource) {
+        fakeAnchors(
+            [26 => 97.5, 34 => 96.8, 42 => array_fill(0, SampleEncode::WINDOWS, null)],
+            [26 => 3_300_000, 34 => 2_400_000, 42 => 1_700_000],
+            8_000_000,
+        );
+        $stream = persistedPerTitleStream($hd, $hdSource, 1920, 1080);
+
+        (new PerTitleCrfService($stream))->apply(sys_get_temp_dir().'/src.mkv', 1480.0);
+
+        expect($stream->refresh()->meta['per_title']['anchors'])->toHaveKeys([26, 34])->toHaveCount(2)
+            ->and($stream->input_params['svtav1_crf'])->toBe(34);
+    });
+
     it('pools vmaf only over windows both anchors scored', function () use ($template, $source) {
         // The top anchor lost its hardest window (60). Pooled over whatever each anchor kept, 30
         // would read 97.5 against 22's ~80.9 — a curve rising with CRF — and hold the base CRF.
         fakeAnchors(
-            [22 => [60.0, 98.0, 98.0], 30 => [null, 97.5, 97.5]],
+            [22 => [60.0, ...array_fill(0, 7, 98.0)], 30 => [null, ...array_fill(0, 7, 97.5)]],
             [22 => 1_000_000, 30 => 700_000],
         );
         $stream = persistedPerTitleStream($template, $source, 1280, 960);
@@ -398,7 +479,7 @@ describe('apply against the source bitrate', function () {
 
     it('keeps the template crf when no window scored for both anchors', function () use ($template, $source) {
         fakeAnchors(
-            [22 => [98.0, null, null], 30 => [null, 97.5, 97.5]],
+            [22 => [98.0, ...array_fill(0, 7, null)], 30 => [null, ...array_fill(0, 7, 97.5)]],
             [22 => 1_000_000, 30 => 700_000],
         );
         $stream = persistedPerTitleStream($template, $source, 1280, 960);
