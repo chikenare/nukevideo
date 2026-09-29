@@ -28,10 +28,41 @@ class PerTitleCrfService
 
     private const ANCHOR_STEP = 8;
 
-    // The probe corrects the template CRF, it doesn't replace template intent — bound the swing.
-    private const MAX_DECREASE = 4;
+    /**
+     * How far under the low anchor VMAF may pull the CRF. Only a target within this reach is
+     * chased at all: each step down costs ~12% more bits, and below the anchor the line is a
+     * guess that flattens as VMAF nears its ceiling. Four steps extrapolated there cost a grainy
+     * 1080p episode (26 → 90.9, 34 → 88.4, target 94) 46% more bits for ~1 VMAF point, and it
+     * still missed the target: 6.0 Mbps where CRF 26 measured 4.1.
+     */
+    private const MAX_DECREASE = 2;
 
     private const MAX_INCREASE = 12;
+
+    /**
+     * Where per-title aims, in VMAF points over the template's target. The sample reads high: eight
+     * 8s windows scored 0.37 over 24 windows spread across the same eleven episodes, so a CRF
+     * interpolated right onto the target lands just under it in the real encode.
+     */
+    private const PROBE_BIAS = 0.5;
+
+    /**
+     * How far over the target the top anchor must score to measure one more, ANCHOR_STEP higher.
+     * The CRF never leaves the measured range, so a top anchor that still clears the target caps
+     * it there: clean and animated sources scored 96+ at base + 8 in the benchmark and spent 30-60%
+     * more bits than their target needed — and about half of production sat on its top anchor.
+     */
+    private const STEP_UP_MARGIN = 1.0;
+
+    /** Anchors measured past the first two, at most: base + 24 reaches a flat cartoon's target. */
+    private const MAX_EXTRA_ANCHORS = 2;
+
+    /**
+     * Wall seconds a rendition's probe may have spent and still measure another anchor. Each one
+     * costs about what the last took, and PrepareVideoJob runs every rendition's probe and the
+     * preflight inside its fixed timeout; an extra anchor is a saving, never worth that job.
+     */
+    private const EXTRA_ANCHOR_BUDGET = 420;
 
     /**
      * Where the bitrate cap aims, as a share of the source's rate: a re-encode must never outweigh
@@ -95,8 +126,15 @@ class PerTitleCrfService
             return;
         }
 
+        $startedAt = microtime(true);
         [$anchors, $bitrates, $windowSourceRate] = $this->measureAnchors($anchorCrfs, $crfKey, $windows, $sourcePath, $tick);
-        $vmafCrf = self::chooseCrf($anchors, $target, $maxCrf);
+        [$anchors, $bitrates] = $this->stepUp($anchors, $bitrates, $target, $maxCrf, $crfKey, $windows, $sourcePath, $tick, microtime(true) - $startedAt);
+
+        // The decision is made on the top two anchors: stepping up only goes on while the top one
+        // clears the target, so the target sits between those two, or under the base.
+        $pair = self::topPair($anchors);
+        $pairRates = array_intersect_key($bitrates, $pair);
+        $vmafCrf = self::chooseCrf($pair, $target + self::PROBE_BIAS, $maxCrf);
 
         // VMAF alone will happily buy a noisy, already-compressed source's grain back at more bits
         // than the source itself spent (video 9059: 2.03 Mbps out of a 1.49 Mbps H.264). The
@@ -109,8 +147,9 @@ class PerTitleCrfService
         // encoded at 0.75x with this, and still scored VMAF 94.2 against a target of 94.
         $cap = (new ChunkTranscodeService($this->stream))->sourceBitrateCap($windowSourceRate);
         $aim = $cap === null ? null : (int) round($cap * self::SOURCE_TARGET);
-        $chosen = $aim === null ? $vmafCrf : self::capCrfToBitrate($bitrates, $vmafCrf, $aim, $maxCrf);
-        $estimated = self::estimateBitrate($bitrates, $chosen);
+        $chosen = $aim === null ? $vmafCrf : self::capCrfToBitrate($pairRates, $vmafCrf, $aim, $maxCrf);
+
+        $estimated = self::estimateBitrate($pairRates, $chosen);
 
         $params[$crfKey] = $chosen;
         $meta = $this->stream->meta ?? [];
@@ -136,7 +175,7 @@ class PerTitleCrfService
         if ($aim !== null && $estimated === null) {
             Log::warning('Per-title bitrate curve unusable; CRF not capped against the source', [
                 'stream' => $this->stream->id,
-                'anchor_bitrates' => $bitrates,
+                'anchor_bitrates' => $pairRates,
                 'bitrate_target' => $aim,
             ]);
         }
@@ -155,6 +194,73 @@ class PerTitleCrfService
     }
 
     /**
+     * Measure one more anchor, ANCHOR_STEP above the top one, while the top one still clears the
+     * target by STEP_UP_MARGIN — up to MAX_EXTRA_ANCHORS, and only while the time spent plus what
+     * the last anchor took stays inside EXTRA_ANCHOR_BUDGET. An extra anchor that fails leaves the
+     * decision to what was measured; it never fails the probe.
+     *
+     * @param  array<int, float>  $anchors
+     * @param  array<int, int>  $bitrates
+     * @param  list<float>  $windows
+     * @return array{0: array<int, float>, 1: array<int, int>}
+     */
+    private function stepUp(array $anchors, array $bitrates, int $target, int $maxCrf, string $crfKey, array $windows, string $sourcePath, Closure $tick, float $spent): array
+    {
+        $perAnchor = $spent / count($anchors);
+
+        for ($extra = 0; $extra < self::MAX_EXTRA_ANCHORS; $extra++) {
+            $top = max(array_keys($anchors));
+            $next = min($top + self::ANCHOR_STEP, $maxCrf);
+
+            if ($next <= $top || $anchors[$top] < $target + self::STEP_UP_MARGIN) {
+                break;
+            }
+
+            if ($spent + $perAnchor > self::EXTRA_ANCHOR_BUDGET) {
+                Log::info('Per-title stops stepping up: out of probe time', [
+                    'stream' => $this->stream->id,
+                    'spent' => (int) $spent,
+                    'top_anchor' => $top,
+                ]);
+                break;
+            }
+
+            $startedAt = microtime(true);
+
+            try {
+                [$more, $moreRates] = $this->measureAnchors([$next], $crfKey, $windows, $sourcePath, $tick, withSourceRate: false);
+            } catch (Throwable $e) {
+                Log::info('Per-title extra anchor failed; deciding on the anchors measured', [
+                    'stream' => $this->stream->id,
+                    'anchor' => $next,
+                    'error' => $e->getMessage(),
+                ]);
+                break;
+            }
+
+            $anchors += $more;
+            $bitrates += $moreRates;
+            $perAnchor = microtime(true) - $startedAt;
+            $spent += $perAnchor;
+        }
+
+        return [$anchors, $bitrates];
+    }
+
+    /**
+     * The two highest anchors, in CRF order.
+     *
+     * @param  array<int, float>  $anchors
+     * @return array<int, float>
+     */
+    public static function topPair(array $anchors): array
+    {
+        ksort($anchors);
+
+        return array_slice($anchors, -2, 2, true);
+    }
+
+    /**
      * Interpolate the CRF hitting `$target` from two measured anchors (crf => vmaf). VMAF is
      * near-linear in CRF over a one-step span. A flat curve gives no slope to interpolate with:
      * take the top anchor only when both sit clearly above the target (a saturated probe or a
@@ -162,7 +268,7 @@ class PerTitleCrfService
      *
      * @param  array<int, float>  $anchors
      */
-    public static function chooseCrf(array $anchors, int $target, int $maxCrf): int
+    public static function chooseCrf(array $anchors, float $target, int $maxCrf): int
     {
         ksort($anchors);
         [$lowCrf, $highCrf] = array_keys($anchors);
@@ -174,10 +280,15 @@ class PerTitleCrfService
             ? ($highScore >= $target + self::SATURATION_MARGIN ? $highCrf : $lowCrf)
             : $lowCrf + ($target - $lowScore) / $slope;
 
+        // Downward, only a target within MAX_DECREASE is worth chasing: one further away would
+        // spend steeply more bits on an extrapolated gain and miss anyway, so keep the base.
+        if ($chosen < $lowCrf - self::MAX_DECREASE) {
+            $chosen = $lowCrf;
+        }
+
         // Upward, never past the top anchor: beyond it the line is a guess, and a guess that
-        // overshoots costs visible quality (a -0.07 slope extrapolated 26 → 38). Downward, the
-        // guess only spends bits, so it may reach MAX_DECREASE below the base.
-        $chosen = max($lowCrf - self::MAX_DECREASE, min($highCrf, $lowCrf + self::MAX_INCREASE, $chosen));
+        // overshoots costs visible quality (a -0.07 slope extrapolated 26 → 38).
+        $chosen = min($highCrf, $lowCrf + self::MAX_INCREASE, $chosen);
 
         return (int) max(1, min($maxCrf, round($chosen)));
     }
@@ -264,7 +375,7 @@ class PerTitleCrfService
      * @param  list<float>  $windows
      * @return array{0: array<int, float>, 1: array<int, int>, 2: ?int} [crf => pooled vmaf score, crf => bps, source bps over the same windows]
      */
-    private function measureAnchors(array $anchorCrfs, string $crfKey, array $windows, string $sourcePath, Closure $tick): array
+    private function measureAnchors(array $anchorCrfs, string $crfKey, array $windows, string $sourcePath, Closure $tick, bool $withSourceRate = true): array
     {
         $jobs = [];
         foreach ($anchorCrfs as $crf) {
@@ -293,7 +404,7 @@ class PerTitleCrfService
 
             // Read now: the finally below deletes the samples.
             [$bitrates, $commonWindows] = $this->pooledBitrates($jobs, $encoded, $anchorCrfs);
-            $windowSourceRate = $this->windowSourceRate($sourcePath, $windows, $commonWindows);
+            $windowSourceRate = $withSourceRate ? $this->windowSourceRate($sourcePath, $windows, $commonWindows) : null;
 
             $outputs = $this->runPool(array_map(
                 fn (int $index) => $this->vmafCommand($jobs[$index]['start'], $sourcePath, $jobs[$index]['sample']),

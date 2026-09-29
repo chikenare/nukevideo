@@ -17,8 +17,16 @@ use Illuminate\Support\Facades\Process;
  */
 class SampleEncode
 {
-    /** Long enough for a bitrate to mean something, short enough to spend on every rendition. */
-    public const SECONDS = 20;
+    /**
+     * Per window. What makes a sample representative is how many places it looks, not how long it
+     * looks at each: three 20s windows misread a grainy episode by up to 5.7 VMAF and 78% bitrate
+     * against 24 windows spread over it, while eight shorter ones stayed within 1.5 VMAF — for the
+     * same 60-odd seconds of encode.
+     */
+    public const SECONDS = 8;
+
+    /** How many windows a sample spreads over the runtime; see {@see SECONDS}. */
+    public const WINDOWS = 8;
 
     /** Under this there is no middle of the runtime to sample. */
     public const MIN_DURATION = 120;
@@ -32,18 +40,16 @@ class SampleEncode
     ) {}
 
     /**
-     * Window starts spread across the middle of the runtime, so a sample is representative footage
-     * rather than the credits.
+     * Window starts spread evenly across the runtime, clear of the opening and the credits at
+     * either end, so a sample is representative footage rather than the intro.
      *
      * @return list<float>
      */
     public static function windows(float $duration): array
     {
-        $count = (int) min(4, max(3, ceil($duration / 1800)));
-
         return array_map(
-            fn (int $i) => round(min($duration * (0.08 + 0.84 * $i / ($count - 1)), $duration - self::SECONDS), 3),
-            range(0, $count - 1),
+            fn (int $i) => round(min($duration * (0.06 + 0.88 * $i / (self::WINDOWS - 1)), $duration - self::SECONDS), 3),
+            range(0, self::WINDOWS - 1),
         );
     }
 
