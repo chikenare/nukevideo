@@ -161,6 +161,13 @@ class VideoService
             // video delete would do never comes either.
             $video->outputs()->get()->each->delete();
             $video->streams()->where('type', '!=', 'original')->get()->each->delete();
+
+            // What the old streams staged on the mirror is keyed by ULIDs nothing will name
+            // again, yet packaging syncs those directories whole: the old chunks were pulled down
+            // for nothing and the old sidecars published into `download/`, unreferenced. Mirror
+            // names only (see Video::SOURCE_DIR), and the mirrored source stays for the retry.
+            Storage::disk('chunks')->deleteDirectory($video->chunksDir());
+            Storage::disk('chunks')->deleteDirectory($video->finalDir());
         } else {
             $video->outputs()->update(['status' => VideoStatus::PENDING->value]);
         }

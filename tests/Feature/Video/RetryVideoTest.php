@@ -272,6 +272,31 @@ describe('videos:retry', function () {
         $disk->assertExists(originalPath($video));
     });
 
+    it('clears what the old streams staged on the mirror when it re-probes, but keeps the source', function () {
+        $video = failedVideo();
+        $rendition = $video->streams()->where('type', 'video')->first();
+        $mirror = Storage::disk('chunks');
+        $mirror->put($video->chunkKey($rendition, 0), 'chunk');
+        $mirror->put("{$video->finalDir()}/subtitle/old.vtt", 'vtt');
+        $mirror->put($video->sourceMirrorPath('mkv'), 'source');
+
+        $this->artisan('videos:retry', ['video' => [$video->id], '--reprobe' => true])->assertSuccessful();
+
+        $mirror->assertMissing($video->chunkKey($rendition, 0));
+        $mirror->assertMissing("{$video->finalDir()}/subtitle/old.vtt");
+        $mirror->assertExists($video->sourceMirrorPath('mkv'));
+    });
+
+    it('keeps the staged chunks on a plain retry, so it is a cache hit', function () {
+        $video = failedVideo();
+        $rendition = $video->streams()->where('type', 'video')->first();
+        Storage::disk('chunks')->put($video->chunkKey($rendition, 0), 'chunk');
+
+        $this->artisan('videos:retry', ['video' => [$video->id]])->assertSuccessful();
+
+        Storage::disk('chunks')->assertExists($video->chunkKey($rendition, 0));
+    });
+
     it('changes nothing with --dry-run', function () {
         $video = failedVideo();
 
