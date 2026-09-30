@@ -39,57 +39,34 @@ class NodeService {
         return res.data.data
     }
 
-    /** `disks`: spare disks to format into a proxy's cache pool, [] for none. A production proxy deploy is refused without it. */
-    async runDeploy(id: number, onMessage: (event: { type: string; data: string }) => void, body?: { disks?: string[] }): Promise<void> {
-        return this.streamSSE(`${this.BASE_PATH}/${id}/deploy`, onMessage, body)
+    async deploy(id: number, body: { force?: boolean; disks?: string[] } = {}): Promise<App.Data.ActivityLogData> {
+        const res = await this.api.post(`${this.BASE_PATH}/${id}/deploy`, body)
+        return res.data.data
     }
 
-    private async streamSSE(path: string, onMessage: (event: { type: string; data: string }) => void, body?: object): Promise<void> {
-        const baseURL = import.meta.env.VITE_URL_API || '/api'
-        const csrfToken = document.cookie
-            .split('; ')
-            .find(row => row.startsWith('XSRF-TOKEN='))
-            ?.split('=')[1]
+    async start(id: number): Promise<App.Data.ActivityLogData> {
+        const res = await this.api.post(`${this.BASE_PATH}/${id}/start`)
+        return res.data.data
+    }
 
-        const res = await fetch(`${baseURL}${path}`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: {
-                'Accept': 'text/event-stream',
-                'X-Requested-With': 'XMLHttpRequest',
-                ...(body ? { 'Content-Type': 'application/json' } : {}),
-                ...(csrfToken ? { 'X-XSRF-TOKEN': decodeURIComponent(csrfToken) } : {}),
-            },
-            ...(body ? { body: JSON.stringify(body) } : {}),
-        })
+    async stop(id: number, force = false): Promise<App.Data.ActivityLogData> {
+        const res = await this.api.post(`${this.BASE_PATH}/${id}/stop`, { force })
+        return res.data.data
+    }
 
-        if (!res.ok) {
-            throw new Error(`Request failed with status ${res.status}`)
-        }
+    async deployMany(payload: App.Data.Node.DeployNodesData): Promise<{ data: App.Data.ActivityLogData[]; skipped: number[] }> {
+        const res = await this.api.post(`${this.BASE_PATH}/deploy`, payload)
+        return res.data
+    }
 
-        const reader = res.body!.getReader()
-        const decoder = new TextDecoder()
-        let buffer = ''
+    async getOperations(filter: { node?: number } = {}): Promise<App.Data.ActivityLogData[]> {
+        const res = await this.api.get('/node-operations', { params: filter })
+        return res.data.data
+    }
 
-        while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    try {
-                        const event = JSON.parse(line.slice(6))
-                        onMessage(event)
-                    } catch {
-                        // skip malformed events
-                    }
-                }
-            }
-        }
+    async getOperationLines(id: number, after: number): Promise<{ lines: string[]; next: number; status: string }> {
+        const res = await this.api.get(`/node-operations/${id}/lines`, { params: { after } })
+        return res.data
     }
 
     async generateBootstrapToken(id: number): Promise<{ command: string }> {

@@ -67,9 +67,9 @@ Every proxy node shares the token secret, so any of them can serve any video. Wh
 
 A proxy is **routable** when it is active, has a hostname, is not draining and is answering the health probe.
 
-**Draining.** Toggle it on a node before maintenance or before taking it out for good. New playback links go to its ring neighbours; the node goes on serving the sessions it has. Deactivating a node, by contrast, stops its containers at once. Playback links stay valid for the token window (an hour by default) plus the segment query-token window (another hour): wait that long after draining before deactivating, and nobody notices.
+**Draining.** Toggle it on a node before maintenance or before taking it out for good. New playback links go to its ring neighbours; the node goes on serving the sessions it has. Stopping a node, by contrast, takes its containers down. Playback links stay valid for the token window (an hour by default) plus the segment query-token window (another hour): wait that long after draining before stopping it, and nobody notices.
 
-**Health.** `nodes:probe` runs every minute on the API host and fetches `/healthz` on every active proxy The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or reactivation. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
+**Health.** `nodes:probe` runs every minute on the API host and fetches `/healthz` on every active proxy The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or start. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
 
 An edge from before `/healthz` existed fails the probe and drops out of rotation: redeploy it.
 
@@ -120,20 +120,29 @@ POST /api/nodes
 }
 ```
 
-### Deploying
+### Deploying, starting and stopping
 
-Deployment runs a series of steps on the remote server via SSH:
+A node has three actions, in its menu on the nodes page: **Deploy**, **Start** and **Stop**. They
+run in the background — close the tab and nothing stops. **Logs** (next to Add Node, or in a
+node's menu) shows the output of the latest operation, of any node or of the one picked; the
+history of every operation is in the **Activity Log**. A node runs one operation
+at a time.
 
-1. Check the deployment steps available:
-   ```
-   GET /api/nodes/{id}/deploy/steps
-   ```
+- **Deploy** installs what the node needs, pulls the image and recreates the containers. It is also
+  how a node is updated. On a production worker it waits for the running jobs to finish (up to 11
+  minutes; development and staging do not wait); **force** kills them instead, and they are picked
+  up again about 31 minutes later. On a proxy the gap is the edge's own startup, a second or two
+  that players ride out on their buffer; the deploy fails if the new edge does not answer
+  `/healthz`, and Traefik is only replaced when it is not running or its image or flags changed.
+  Deploying a stopped node starts it.
+- **Stop** takes the node out first — no new videos, no new playback links — then stops its
+  containers, gracefully or, with force, at once. The containers stay stopped across reboots.
+- **Start** brings a stopped node back.
 
-2. Execute a specific step:
-   ```
-   POST /api/nodes/{id}/deploy
-   { "step": "step_name" }
-   ```
+To update the fleet, select the nodes and **Deploy selected**. Stopped nodes are left out. Workers deploy all at once (encoding
+waits meanwhile); proxies deploy one at a time, and the first one that fails cancels the rest, so a
+broken image never takes more than one edge down. A fleet deploy never formats a disk: adding one to
+a proxy's cache pool is a deploy of that node alone.
 
 ### Monitoring
 
@@ -151,5 +160,9 @@ Deployment runs a series of steps on the remote server via SSH:
 | `DELETE` | `/api/nodes/{id}` | Delete a node and its containers | Admin |
 | `GET` | `/api/nodes/{id}/containers` | List containers | Admin |
 | `GET` | `/api/nodes/{id}/pending-jobs` | Queue statistics | Admin |
-| `GET` | `/api/nodes/{id}/deploy/steps` | Get deploy steps | Admin |
-| `POST` | `/api/nodes/{id}/deploy` | Execute deploy step | Admin |
+| `POST` | `/api/nodes/{id}/deploy` | Deploy a node | Admin |
+| `POST` | `/api/nodes/{id}/start` | Start a node | Admin |
+| `POST` | `/api/nodes/{id}/stop` | Stop a node | Admin |
+| `POST` | `/api/nodes/deploy` | Deploy several nodes | Admin |
+| `GET` | `/api/node-operations` | List operations | Admin |
+| `GET` | `/api/node-operations/{id}/lines` | An operation's output | Admin |

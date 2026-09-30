@@ -323,6 +323,14 @@ password: string,
 namespace Node {
 export type DeployNodeData = {
 disks?: Array<any> | null,
+force: boolean,
+};
+export type DeployNodesData = {
+nodes: number[],
+force: boolean,
+};
+export type StopNodeData = {
+force: boolean,
 };
 export type StoreNodeData = {
 name: string,
@@ -339,7 +347,6 @@ name?: string,
 user?: string | null,
 ipAddress?: string,
 hostname?: string | null,
-isActive?: boolean,
 isDraining?: boolean,
 isStorageServer?: boolean,
 storageEndpoint?: string | null,
@@ -444,6 +451,7 @@ export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'ext
 export type MetricShape = 'long' | 'wide';
 export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';
+export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';

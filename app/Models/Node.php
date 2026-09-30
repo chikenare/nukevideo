@@ -169,8 +169,7 @@ class Node extends Model
     }
 
     /**
-     * Plain query-builder writes on purpose (`toBase()`): the observer reacts to `is_active`,
-     * and health must never start or stop containers, and the probe updates many nodes a
+     * Plain query-builder writes on purpose (`toBase()`): the probe updates many nodes a
      * minute. Bypassing Eloquent also leaves `updated_at` alone, which the probe relies on: it
      * reads that column as "when the operator or the deploy last wrote this node", and a
      * failed probe stamping it would renew its own grace period forever.

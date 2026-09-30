@@ -57,6 +57,9 @@ Deletes the node and removes its Docker containers from the remote server.
 DELETE /api/nodes/{id}
 ```
 
+Answers `409` while the node has an operation queued or running: a deploy finishing after the
+delete would recreate the container.
+
 ## List Containers
 
 Get Docker containers running on a node.
@@ -83,29 +86,111 @@ GET /api/nodes/{id}/pending-jobs
 }
 ```
 
-## Deployment
+## Operations
 
-### Get Deploy Steps
+Deploy, start and stop run in the background: each call answers `202` at once with the operation
+it queued, and `409` when the node already has one queued or running. An operation is an
+activity-log entry (`logName: "node"`) whose `properties.status` goes `queued` → `running` →
+`succeeded`, `failed` or `cancelled`.
 
-```
-GET /api/nodes/{id}/deploy/steps
-```
-
-Returns the list of available deployment steps for the node.
-
-### Execute Deploy Step
+### Deploy a Node
 
 ```
 POST /api/nodes/{id}/deploy
 ```
 
-**Request Body:**
+```json
+{
+  "force": false,
+  "disks": ["/dev/sdb"]
+}
+```
+
+`force` skips the drain: a worker's running jobs are killed instead of finished, and redeliver
+about 31 minutes later. It does nothing on a proxy. `disks` is required for a production proxy,
+`[]` included (see [Cache disks](/guide/nodes#cache-disks)). A successful deploy activates the node.
+
+**Response** `202`:
 
 ```json
 {
-  "step": "step_name"
+  "data": {
+    "id": 42,
+    "logName": "node",
+    "description": "Deploy worker-01",
+    "subjectType": "App\\Models\\Node",
+    "subjectId": 1,
+    "causerType": "App\\Models\\User",
+    "causerId": 1,
+    "event": "node_deploy",
+    "properties": { "action": "deploy", "force": false, "disks": null, "batch": null, "status": "queued" },
+    "createdAt": "2026-09-30T12:00:00+00:00",
+    "updatedAt": "2026-09-30T12:00:00+00:00"
+  }
 }
 ```
+
+### Deploy Several Nodes
+
+```
+POST /api/nodes/deploy
+```
+
+```json
+{
+  "nodes": [1, 2, 3],
+  "force": false
+}
+```
+
+Workers deploy in parallel. Proxies deploy one at a time, and the first one that fails cancels the
+rest. A fleet deploy never formats a disk. Busy and stopped nodes are skipped: a stopped node stays
+stopped until it is started or deployed on its own. **Response** `202`:
+`{ "data": [/* one operation per node */], "skipped": [3] }`. The operations share a
+`properties.batch`.
+
+### Start a Node
+
+```
+POST /api/nodes/{id}/start
+```
+
+Starts the containers of a node that was deployed and stopped, and activates it.
+
+### Stop a Node
+
+```
+POST /api/nodes/{id}/stop
+```
+
+```json
+{ "force": false }
+```
+
+Deactivates the node first, so it takes no new work, then stops its containers. A worker's running
+jobs are finished first (up to 11 minutes) unless `force` is set.
+
+### List Operations
+
+```
+GET /api/node-operations?node={id}
+```
+
+Newest first, 20 per page, `node` optional. Admins also see these in the activity log
+(`GET /api/activity-log`), as `node_deploy`, `node_start` and `node_stop` events.
+
+### Read an Operation's Output
+
+```
+GET /api/node-operations/{operation}/lines?after={n}
+```
+
+```json
+{ "lines": ["=== Worker image ===", "..."], "next": 57, "status": "running" }
+```
+
+Poll with `after` set to the previous `next` until `status` is no longer `queued` or `running`.
+Output is kept for seven days.
 
 ## SSH Key
 

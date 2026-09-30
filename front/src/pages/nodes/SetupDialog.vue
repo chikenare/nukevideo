@@ -9,27 +9,27 @@ import {
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import Spinner from '@/components/ui/spinner/Spinner.vue'
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed } from 'vue'
 type Node = App.Data.NodeData
 type ValidationCheck = App.Data.ValidationCheckData
 type CacheDisk = App.Data.CacheDiskData
 import NodeService from '@/services/NodeService'
+import { toast } from 'vue-sonner'
+import { ApiException } from '@/exceptions/ApiException'
 import { formatBytes } from '@/utils/byteFormatter'
-import { CheckCircle2, XCircle, AlertTriangle, Terminal, Copy, Check } from '@lucide/vue'
+import { CheckCircle2, XCircle, AlertTriangle, Copy, Check } from '@lucide/vue'
 
 const emit = defineEmits<{
   (e: 'node-updated', node: Node): void
+  (e: 'deployed', nodeId: number): void
 }>()
 
 const open = ref(false)
 const node = ref<Node | null>(null)
 
 // Deploy tab
-const deployRunning = ref(false)
-const deployFinished = ref(false)
-const deployError = ref(false)
-const deployLines = ref<string[]>([])
-const deployTerminalEl = ref<HTMLElement | null>(null)
+const deploying = ref(false)
+const forceDeploy = ref(false)
 const showJobsWarning = ref(false)
 const pendingJobsCount = ref(0)
 const reservedJobsCount = ref(0)
@@ -88,10 +88,8 @@ const copyBootstrap = async () => {
 
 const show = async (targetNode: Node) => {
   node.value = targetNode
-  deployRunning.value = false
-  deployFinished.value = false
-  deployError.value = false
-  deployLines.value = []
+  deploying.value = false
+  forceDeploy.value = false
   showJobsWarning.value = false
   pendingJobsCount.value = 0
   reservedJobsCount.value = 0
@@ -138,62 +136,26 @@ const show = async (targetNode: Node) => {
   }
 }
 
-// ── SSE handler ──
-
-const handleSSE = (event: { type: string; data: string }) => {
-  if (event.type === 'output') {
-    for (const line of event.data.split('\n')) {
-      if (line) {
-        deployLines.value.push(line)
-        nextTick(() => {
-          if (deployTerminalEl.value) deployTerminalEl.value.scrollTop = deployTerminalEl.value.scrollHeight
-        })
-      }
-    }
-  } else if (event.type === 'error') {
-    deployLines.value.push(`ERROR: ${event.data}`)
-    deployError.value = true
-    nextTick(() => {
-      if (deployTerminalEl.value) deployTerminalEl.value.scrollTop = deployTerminalEl.value.scrollHeight
-    })
-  }
-}
-
 // ── Deploy tab ──
 
-const disableNode = async () => {
-  if (!node.value) return
-  try {
-    const updated = await NodeService.updateNode(node.value.id, { isActive: false })
-    node.value = updated
-    emit('node-updated', updated)
-    showJobsWarning.value = false
-  } catch { /* stay on warning */ }
-}
-
 const runDeploy = async () => {
-  if (!node.value || deployRunning.value || needsDiskConfirmation.value || disksLoading.value || disksUnknown.value) return
+  if (!node.value || deploying.value || needsDiskConfirmation.value || disksLoading.value || disksUnknown.value) return
 
-  deployRunning.value = true
-  deployFinished.value = false
-  deployError.value = false
-  deployLines.value = []
-
+  deploying.value = true
   try {
     // A proxy always gets an explicit list, `[]` included: the API reads an absent one as
     // "every spare disk", and a list this dialog never showed is not one anyone agreed to.
-    await NodeService.runDeploy(
-      node.value.id,
-      handleSSE,
-      node.value.type === 'proxy' ? { disks: selectedDisks.value } : undefined,
-    )
+    await NodeService.deploy(node.value.id, {
+      force: forceDeploy.value,
+      ...(node.value.type === 'proxy' ? { disks: selectedDisks.value } : {}),
+    })
+    // It runs in the background: the logs take over from here.
+    emit('deployed', node.value.id)
+    open.value = false
   } catch (err) {
-    deployLines.value.push(`ERROR: ${(err as Error).message}`)
-    deployError.value = true
+    toast.error(err instanceof ApiException ? err.message : 'Failed to queue the deploy')
   }
-
-  deployRunning.value = false
-  deployFinished.value = true
+  deploying.value = false
 }
 
 // ── Validate tab ──
@@ -225,7 +187,7 @@ defineExpose({ show })
 
 <template>
   <Dialog v-model:open="open">
-    <DialogContent class="max-w-2xl max-h-[85vh] flex flex-col">
+    <DialogContent class="flex max-h-[85vh] flex-col sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>Setup {{ node?.name }}</DialogTitle>
         <DialogDescription>Install prerequisites, manage services, and validate the node.</DialogDescription>
@@ -254,11 +216,10 @@ defineExpose({ show })
                 {{ pendingJobsCount }} pending
               </span>
               <span class="text-xs text-muted-foreground mt-1">
-                Deploying will restart containers. You can disable the node first to stop new jobs.
+                A deploy waits for the running ones to finish; tick force to kill them instead.
               </span>
               <div class="flex gap-2 mt-2">
-                <Button variant="outline" size="sm" @click="disableNode">Disable node</Button>
-                <Button variant="ghost" size="sm" @click="showJobsWarning = false">Continue anyway</Button>
+                <Button variant="ghost" size="sm" @click="showJobsWarning = false">Got it</Button>
               </div>
             </div>
           </div>
@@ -315,37 +276,14 @@ defineExpose({ show })
             <span>Existing cache pool on {{ poolDisks.map(d => d.device).join(', ') }} — kept as it is.</span>
           </div>
 
-          <div
-            ref="deployTerminalEl"
-            class="flex-1 min-h-75 max-h-100 overflow-y-auto rounded-md border bg-zinc-950 p-3 font-mono text-xs"
-          >
-            <div v-if="deployLines.length === 0 && !deployRunning" class="flex items-center gap-2 text-zinc-500">
-              <Terminal class="h-4 w-4" />
-              <span>Ready to set up and deploy the node...</span>
-            </div>
-            <div v-for="(line, i) in deployLines" :key="i">
-              <span
-                :class="[
-                  line.startsWith('===') ? 'text-blue-400 font-semibold' :
-                  line.startsWith('ERROR') ? 'text-red-400' :
-                  'text-zinc-300'
-                ]"
-              >{{ line }}</span>
-            </div>
-            <div v-if="deployRunning" class="flex items-center gap-2 text-zinc-500 mt-1">
-              <Spinner class="h-3 w-3" />
-              <span>Deploying...</span>
-            </div>
-          </div>
-
-          <div class="flex justify-end gap-2">
-            <Button v-if="!deployFinished || deployError" :disabled="deployRunning || disksLoading || needsDiskConfirmation || disksUnknown" @click="runDeploy">
-              {{ deployRunning ? 'Deploying...' : deployError ? 'Retry' : 'Deploy' }}
+          <div class="flex items-center justify-end gap-3">
+            <label v-if="node?.type === 'worker'" class="flex items-center gap-1.5 text-sm text-muted-foreground">
+              <input v-model="forceDeploy" type="checkbox" class="h-3.5 w-3.5" />
+              Force (don't wait for running jobs)
+            </label>
+            <Button :disabled="deploying || disksLoading || needsDiskConfirmation || disksUnknown" @click="runDeploy">
+              {{ deploying ? 'Queuing...' : 'Deploy' }}
             </Button>
-            <div v-if="deployFinished && !deployError" class="flex items-center gap-2 text-sm text-emerald-500">
-              <CheckCircle2 class="h-4 w-4" />
-              <span>Deployed successfully</span>
-            </div>
           </div>
         </TabsContent>
 

@@ -17,8 +17,6 @@ class UpdateNodeData extends RequestData
         public string|Optional $ipAddress,
         public string|Optional|null $hostname,
         #[MapInputName(CamelCaseMapper::class)]
-        public bool|Optional $isActive,
-        #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isDraining,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isStorageServer,
@@ -39,7 +37,6 @@ class UpdateNodeData extends RequestData
             'ipAddress' => 'sometimes|ip',
             // A DNS name only; see StoreNodeData for where it ends up.
             'hostname' => ['nullable', 'string', 'max:255', 'regex:/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i'],
-            'isActive' => 'sometimes|boolean',
             'isDraining' => 'sometimes|boolean',
             'isStorageServer' => [
                 'sometimes', 'boolean',

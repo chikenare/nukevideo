@@ -15,6 +15,8 @@ class DeployNodeData extends RequestData
          * list means none: keep the cache off the disks and in a docker volume.
          */
         public array|Optional|null $disks,
+        /** Skip the drain: kill the worker's in-flight jobs (they redeliver ~31 min later). */
+        public bool $force = false,
     ) {}
 
     public static function rules(): array
@@ -32,6 +34,7 @@ class DeployNodeData extends RequestData
             'disks' => $mustChoose ? ['present', 'array'] : ['nullable', 'array'],
             // A device path lands in a shell script on the node.
             'disks.*' => ['string', 'regex:#^/dev/[a-z0-9]+$#'],
+            'force' => ['sometimes', 'boolean'],
         ];
     }
 }

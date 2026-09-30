@@ -20,15 +20,33 @@ else
 fi
 
 echo "=== Deploying proxy ==="
+# Stop before removing, so nginx finishes the requests it is serving instead of cutting them.
+# The image is already pulled, so the gap is nginx's startup: a second or two, which players
+# absorb with their buffer and segment retries.
+docker stop "$SERVICE_CONTAINER" 2>/dev/null || true
 docker rm -f "$SERVICE_CONTAINER" 2>/dev/null || true
 run_container "$RUN_ARGS"
 
+# A proxy that does not answer /healthz fails the deploy — and with it a fleet deploy's chain,
+# before the next proxy is touched. wget is busybox's, the image is alpine.
+echo "Waiting for the edge to answer..."
+n=0
+until docker exec "$SERVICE_CONTAINER" wget -q -O /dev/null http://127.0.0.1/healthz 2>/dev/null; do
+    n=$((n+1)); [ $n -ge 30 ] && { echo "Edge did not come up"; docker logs --tail 50 "$SERVICE_CONTAINER"; exit 1; }
+    sleep 2
+done
+echo "Edge is up"
+
 # Traefik fronts the edge unless something else already holds port 80 on this host — a reverse
 # proxy of the operator's own, which then routes by the same labels. Ours is recognised by name
-# and replaced; anything else is left in charge.
+# and left alone when it already runs with exactly this configuration (the hash the API puts in
+# its `nukevideo.config` label): replacing it drops TLS on the host for a few seconds, the
+# longest gap of any proxy deploy.
 echo "=== Traefik ==="
 if docker ps --format '{{.Names}} {{.Ports}}' | grep -v '^nukevideo_traefik ' | grep -q ':80->'; then
     echo "Port 80 is held by another container — leaving the host's own reverse proxy in front"
+elif [ "$(docker inspect -f '{{.State.Running}} {{index .Config.Labels "nukevideo.config"}}' nukevideo_traefik 2>/dev/null)" = "true $TRAEFIK_CONFIG" ]; then
+    echo "Traefik already running this configuration — kept"
 else
     docker rm -f nukevideo_traefik 2>/dev/null || true
     run_container "$TRAEFIK_RUN_ARGS"

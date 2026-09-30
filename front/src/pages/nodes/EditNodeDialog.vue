@@ -105,10 +105,6 @@ defineExpose({ show })
           <p class="text-xs text-muted-foreground">The public address playback links point at. Redeploy after changing: Traefik's router and the certificate are issued for it.</p>
           <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
         </div>
-        <div class="flex items-center justify-between">
-          <Label for="edit_node_active">Active</Label>
-          <Switch id="edit_node_active" v-model="node.isActive" @update:checked="node.isActive = $event" />
-        </div>
         <div v-if="node.type === 'proxy'" class="grid gap-2">
           <div class="flex items-center justify-between">
             <Label for="edit_node_draining">Draining</Label>
@@ -116,7 +112,7 @@ defineExpose({ show })
           </div>
           <p class="text-xs text-muted-foreground">
             Keeps the node out of new playback links while it goes on serving the sessions it has.
-            Use it before maintenance; deactivating stops the containers at once.
+            Use it before maintenance; Stop takes the containers down.
           </p>
         </div>
         <div v-if="node.type === 'worker'" class="grid gap-2">

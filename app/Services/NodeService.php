@@ -279,6 +279,30 @@ class NodeService
     }
 
     /**
+     * `docker start` on what the deploy raised. Only starts containers that exist: a node that
+     * was never deployed has nothing to start, and saying so beats a deploy half-happening
+     * behind a button.
+     */
+    public function startServices(Node $node, \Closure $onOutput): void
+    {
+        $containers = implode(' ', $node->deployedContainerNames());
+        $this->ssh($node, "docker start {$containers} 2>&1", 60, onOutput: $onOutput);
+        $node->markHealthy();
+    }
+
+    /**
+     * Graceful by default: the worker was created with `--stop-timeout` WORKER_STOP_GRACE, so a
+     * plain `docker stop` is Horizon finishing its in-flight jobs first. `$force` kills — those
+     * jobs redeliver after QUEUE_RETRY_AFTER instead.
+     */
+    public function stopServices(Node $node, bool $force, \Closure $onOutput): void
+    {
+        $containers = implode(' ', $node->deployedContainerNames());
+        $verb = $force ? 'kill' : 'stop';
+        $this->ssh($node, "docker {$verb} {$containers} 2>&1 || true", self::WORKER_STOP_GRACE + 60, onOutput: $onOutput);
+    }
+
+    /**
      * The deploy is bash that lives in `resources/deploy/*.sh`, unchanged from node to node. What
      * this composes is the header in front of it: one assignment per variable, every value
      * quoted, and nothing a shell would read as code. The PHP side decides (which image, which
@@ -475,6 +499,9 @@ class NodeService
                 '${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}',
             ],
             'log_opts' => self::PROXY_LOG_OPTS,
+            // nginx is PID 1, and SIGTERM is its fast shutdown: open connections are dropped.
+            // SIGQUIT finishes the requests in flight, which is what a `docker stop` means here.
+            'stop_signal' => 'SIGQUIT',
         ]);
 
         return [
@@ -484,7 +511,7 @@ class NodeService
             'CACHE_FALLBACK_MAX_SIZE' => ProxyCacheService::FALLBACK_MAX_SIZE,
             // Unset means every spare disk; a list (possibly empty) means exactly those.
             'CHOSEN_DISKS' => $disks === null ? null : implode(' ', $disks),
-            'TRAEFIK_RUN_ARGS' => $this->traefikRunArgs($isProduction),
+            ...$this->traefikVars($isProduction),
         ];
     }
 
@@ -493,8 +520,13 @@ class NodeService
      * another container already holds port 80, which is a host with its own reverse proxy (the
      * development machine, say). Development terminates no TLS: the edge is plain HTTP behind a
      * hostname; production adds the ACME resolver the proxy's router labels name.
+     *
+     * Returned with a hash of everything it is run with. proxy.sh keeps a running
+     * Traefik whose label carries the same hash — replacing it drops TLS on the host for a few
+     * seconds — and replaces it otherwise. The image alone would not do: a development panel's
+     * Traefik has no TLS and runs under the same name, and a flag change keeps the image tag.
      */
-    private function traefikRunArgs(bool $tls): string
+    private function traefikVars(bool $tls): array
     {
         $command = '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
             .' --entrypoints.web.address=:80';
@@ -505,7 +537,7 @@ class NodeService
                 .' --certificatesresolvers.le.acme.storage=/certs/acme.json';
         }
 
-        return $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
+        $options = [
             'ports' => $tls ? ['80:80', '443:443', '8080:8080'] : ['80:80', '8080:8080'],
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
@@ -513,7 +545,16 @@ class NodeService
             ],
             'command' => $command,
             'network' => 'nukevideo_default',
-        ]);
+        ];
+        $config = substr(md5($this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', $options)), 0, 12);
+
+        return [
+            'TRAEFIK_RUN_ARGS' => $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
+                ...$options,
+                'labels' => ["nukevideo.config={$config}"],
+            ]),
+            'TRAEFIK_CONFIG' => $config,
+        ];
     }
 
     /**
@@ -774,6 +815,10 @@ class NodeService
         if (! empty($options['group_add'])) {
             // Raw on purpose: the value may be a shell expansion resolved on the node.
             $cmd .= " --group-add {$options['group_add']}";
+        }
+
+        if (! empty($options['stop_signal'])) {
+            $cmd .= ' --stop-signal '.$options['stop_signal'];
         }
 
         if (! empty($options['stop_timeout'])) {
