@@ -16,7 +16,9 @@ exactly what a tenant would.
 ::: tip Send your project and the answer is yours alone
 Every read below narrows to one project when the request carries project context — the
 `X-Project-Ulid` header, or a project API key, which carries its own. Scoped that way, the numbers
-and the identifiers in them are your project's and nobody else's.
+and the identifiers in them are your project's and nobody else's. The exceptions say so where they
+appear: encoding time, the node count and the [queue](#queue) are always instance-wide, and the
+[batch by tracking id](#batch-bandwidth-by-tracking-id) read never narrows to a project.
 
 Without project context the aggregates are **instance-wide**: totals across every project on the
 installation. Those name nobody, which is why they are shared at all. The breakdowns that *do* name
@@ -106,7 +108,9 @@ is a different thing, and unscoped those five would enumerate whoever else is on
 viewer addresses, viewer labels, customer labels and video ULIDs.
 
 Send `X-Project-Ulid` (or call with a project API key) and they are populated with your project's
-own. `cards`, `bandwidthOverTime` and `encodingOverTime` are unaffected — they are aggregates.
+own. `cards`, `bandwidthOverTime` and `encodingOverTime` are unaffected — they are aggregates. Of
+those, `encodingOverTime` and the `cpu_encoding` and `nodes` cards are instance-wide even with
+project context; everything else narrows to the project.
 :::
 
 #### Card keys
@@ -150,8 +154,8 @@ GET /api/analytics?from=2026-04-01&to=2026-04-30&video=01J...&trackingId=custome
 ```
 
 Every bandwidth series in the response is narrowed by the same filter, so the whole payload describes
-that one slice. `topExternalUsers` and the encoding series come from upload metrics instead and are
-not affected.
+that one slice. `topExternalUsers` (upload volume) and the encoding series come from other metrics
+and are not affected.
 
 ## Metrics query
 
@@ -182,7 +186,7 @@ POST /api/metrics
 | `from`, `to` | date | The range, inclusive. Required |
 | `dimensions` | string[] | What to group by, from the table below. Required, at least one |
 | `metrics` | string[] | Which metrics to include. Defaults to the four delivery metrics |
-| `videos` | string[] | Narrow to these video ULIDs, up to 1000. Silently intersected with the ones your project owns |
+| `videos` | string[] | Narrow to these video ULIDs, up to 1000. With project context a ULID your project does not own simply matches nothing; without it the list is taken as given |
 | `trackingIds` | string[] | Narrow to these tracking ids, up to 1000 |
 | `externalUserIds` | string[] | Narrow to these customer labels, up to 1000 |
 | `shape` | string | `long` (default) or `wide` — see [Shapes](#shapes) |
@@ -224,7 +228,8 @@ installation. A viewer's address is also personal data, which is why it gets no 
 Grouping by `external_user_id`, filtering by `externalUserIds`, or asking for `upload_bytes` or
 `encoding_cpu` adds `user_id = <your account>` to the query. Those numbers are booked per account,
 and `external_user_id` is *your* customer label — reporting them across accounts would hand one
-tenant another's customers. Delivered bytes carry no such pin: they stay instance-wide.
+tenant another's customers. Delivered bytes carry no such pin: they are as wide as the project
+scope leaves them — your project's with project context, instance-wide without.
 :::
 
 ### Shapes
@@ -420,8 +425,8 @@ business reading. A project key gets `403`.
 
 ## Usage
 
-Consumption for the authenticated **account**, across every metric — the one read on this page that
-is scoped rather than instance-wide, and the one to bill from when your attribution happens at upload
+Consumption for the authenticated **account**, across every metric — the one read on this page
+scoped to an account rather than to a project, and the one to bill from when your attribution happens at upload
 time rather than at link-mint time.
 
 ```

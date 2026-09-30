@@ -4,14 +4,14 @@ NukeVideo serves **pre-packaged, static CMAF**. Encoded renditions are packaged 
 
 ## One Package, Both Protocols
 
-Each output is packaged in a single pass into CMAF fragments. Because HLS and DASH can reference the same fragmented-MP4 segments, that one package serves **both** protocols:
+Each output's renditions are packaged once into CMAF fragments. Because HLS and DASH can reference the same fragmented-MP4 segments, that one package serves **both** protocols:
 
 | Protocol | Manifest | Use Case |
 |----------|----------|----------|
 | HLS | `.m3u8` | Apple devices, most browsers, widest compatibility |
 | DASH | `.mpd` | Android, smart TVs, DRM-ready |
 
-Subtitles are packaged as CMAF too and referenced from both manifests. Multiple audio and subtitle tracks (with per-language labels) are supported.
+Subtitles are packaged separately for each protocol — fragmented-MP4 WebVTT for DASH, plain WebVTT for HLS, whose players cannot read the fragmented form — and grafted into the matching manifests. Multiple audio and subtitle tracks (with per-language labels) are supported.
 
 ## How Delivery Works
 
@@ -52,7 +52,7 @@ unattributed.
 | Field | Type | Notes |
 |-------|------|-------|
 | `resolution` | integer | Caps every output's ladder at this height. Nothing else in the body selects what comes back — every format each output serves is in the answer. |
-| `ip` | string | The viewer's address, when the link is minted from your backend: the token is bound to the address that fetches the manifest. |
+| `ip` | string | The viewer's address, when the link is minted from your backend; defaults to the caller's. Neither delivery layer enforces it today: the self-hosted token carries it but the edge never checks it, and Bunny tokens are not IP-bound, so a link plays from any address until it expires. |
 | `trackingId` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 
 ## Token-Based Access Control
@@ -69,7 +69,7 @@ The exact signing scheme depends on the delivery layer:
 - **Bunny CDN** uses HMAC-SHA256 tokens in directory mode: the token is a path prefix scoped to the video's directory, so the manifest and all of its relative segments authenticate under one token.
 
 Either way the token is what ties a session's traffic back to the link that was minted, which is
-how a `tracking_id` is attributed without ever appearing in the URL.
+how a `trackingId` is attributed without ever appearing in the URL.
 
 ## Caching
 

@@ -1,6 +1,7 @@
 # Users
 
-Manage user accounts. All user management endpoints require **admin** privileges.
+Manage user accounts. All user management endpoints require **admin** privileges, and a project
+API key gets `403` on them even when the project's owner is an admin.
 
 ## List Users
 
@@ -15,11 +16,10 @@ GET /api/users
   "data": [
     {
       "id": 1,
-      "ulid": "01HX...",
       "name": "Admin",
       "email": "admin@nukevideo.local",
-      "is_admin": true,
-      "created_at": "2025-01-15T10:30:00Z"
+      "isAdmin": true,
+      "projects": null
     }
   ]
 }
@@ -30,6 +30,8 @@ GET /api/users
 ```
 GET /api/users/{id}
 ```
+
+Returns `{ "data": { ... } }` with the same user object.
 
 ## Create User
 
@@ -44,9 +46,12 @@ POST /api/users
   "name": "New User",
   "email": "user@example.com",
   "password": "secure_password",
-  "is_admin": false
+  "isAdmin": false
 }
 ```
+
+`password` needs at least 8 characters and `email` must be unused. `isAdmin` is optional and
+defaults to `false`.
 
 ## Update User
 
@@ -60,9 +65,11 @@ PUT /api/users/{id}
 {
   "name": "Updated Name",
   "email": "updated@example.com",
-  "is_admin": true
+  "isAdmin": true
 }
 ```
+
+Every field is optional, and `password` (at least 8 characters) can be sent here too to reset it.
 
 ## Delete User
 
@@ -71,15 +78,43 @@ DELETE /api/users/{id}
 ```
 
 ::: warning
-Deleting a user does not automatically delete their videos. Ensure videos are reassigned or deleted before removing a user account.
+Deleting a user deletes **everything they own**: each of their projects, with its videos (and their
+files in storage), templates and API key. It responds `409` while any of their videos is still
+processing, and `403` if you try to delete yourself.
 :::
 
 ## Activity Log
 
-Get the activity log for the authenticated user:
+Get the activity log of the current project — it needs project context (`X-Project-Ulid`, or a
+project API key) and responds `400` without it. Unlike the rest of this page it is not admin-only:
 
 ```
 GET /api/activity-log
 ```
 
-This returns a history of actions performed by the user (video uploads, template changes, etc.).
+This returns the events recorded against the project's videos (queued for processing, failures,
+and so on), newest first, 20 per page (`?page=`). An admin also sees the node operations, which
+belong to no project:
+
+```json
+{
+  "data": [
+    {
+      "id": 42,
+      "logName": "video",
+      "description": "Video queued for processing: intro.mp4",
+      "subjectType": "App\\Models\\Video",
+      "subjectId": 7,
+      "causerType": "App\\Models\\User",
+      "causerId": 1,
+      "event": "video_processing_started",
+      "properties": {},
+      "createdAt": "2026-07-13T00:00:00+00:00",
+      "updatedAt": "2026-07-13T00:00:00+00:00"
+    }
+  ],
+  "currentPage": 1,
+  "perPage": 20,
+  "total": 1
+}
+```

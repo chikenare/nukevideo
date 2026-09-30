@@ -19,7 +19,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to ClickHouse through a Vector.dev pipeline.
 
-Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, stream/query token expiry). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, stream/query token expiry). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 
@@ -92,7 +92,7 @@ php artisan bunny:ingest-logs --from=2026-08-20T10:00:00Z
 | Infrastructure to run | Your own proxy servers | None (managed by Bunny) |
 | Origin | S3 (via AWS auth) | S3 pull-zone origin |
 | Token scheme | Akamai-style HMAC | HMAC-SHA256, directory mode |
-| IP binding | Cloudflare real-IP aware | Not IP-bound |
+| IP binding | Not IP-bound (the token carries the IP, the edge never checks it) | Not IP-bound |
 | Edge caching | Local nginx cache per node | Bunny global edge |
 | Bandwidth analytics | Built-in (Vector → ClickHouse) | Built-in (Logging API poll → ClickHouse) |
 

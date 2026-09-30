@@ -4,7 +4,7 @@ Manage video resources. Videos are created automatically when a file is uploaded
 
 ## List Videos
 
-Returns a paginated list of videos for the authenticated user.
+Returns a paginated list of the project's videos.
 
 ```
 GET /api/videos
@@ -360,21 +360,22 @@ conditions of the whole video, so they fail the request rather than appearing in
 |--------|-------------|
 | `pending` | Uploaded, waiting to be dispatched |
 | `downloading` | Source file being fetched |
-| `running` | Segmentation and encoding in progress |
-| `uploading` | Encoded chunks being assembled and uploaded to S3 |
+| `running` | Probing and chunk encoding in progress |
+| `uploading` | Encoded chunks being packaged and uploaded to S3 |
 | `completed` | All outputs have reached a terminal state (at least one completed) |
-| `failed` | Ingestion pipeline failed before any output could be produced |
+| `failed` | No output could be produced |
 
 ## Output Statuses
 
-Each output tracks its own encoding independently. A video can have some outputs `completed` and others `failed` at the same time — failed outputs can be deleted by the user while the video continues to function with the remaining completed outputs.
+Each output carries its own status, which is what [Playback URLs](#playback-urls) reads: only a
+`completed` output's manifests are minted.
 
 | Status | Description |
 |--------|-------------|
 | `pending` | Waiting for the encode batch to start |
-| `running` | Chunks being encoded and uploaded |
-| `completed` | Final file assembled and available in S3 |
-| `failed` | Concat or upload failed; output is unusable |
+| `running` | Chunks being encoded |
+| `completed` | Packaged and synced to S3, ready for playback |
+| `failed` | The run failed before this output was packaged; it is unusable |
 
 ## Upload Flow
 
@@ -399,12 +400,14 @@ These endpoints coordinate multipart uploads with S3:
 
 ### Upload Metadata
 
-When creating an upload, you can pass optional metadata to associate the video with external systems:
+`GET /api/s3/params` and `POST /api/s3/multipart` take the file name and the upload's metadata,
+including optional ids that associate the video with external systems:
 
 ```json
 {
   "filename": "video.mp4",
   "metadata": {
+    "project": "01ABD...",
     "template": "01ABC...",
     "externalUserId": "user-123",
     "externalResourceId": "post-456"
@@ -414,8 +417,13 @@ When creating an upload, you can pass optional metadata to associate the video w
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `metadata.template` | string | **Required.** Template ULID to use for processing |
-| `metadata.externalUserId` | string | Optional. ID of the user in your external system |
-| `metadata.externalResourceId` | string | Optional. ID of the resource (post, product, etc.) in your external system |
+| `filename` | string | **Required.** Up to 255 characters. |
+| `metadata.project` | string | **Required.** ULID of the project the video belongs to. Uppy's requests do not carry the `X-Project-Ulid` header, so the project travels here. With a project API key it must be that key's own project (`403` otherwise). |
+| `metadata.template` | string | **Required.** ULID of an **enabled** template of that project, used for processing |
+| `metadata.externalUserId` | string | Optional, up to 255 characters. ID of the user in your external system |
+| `metadata.externalResourceId` | string | Optional, up to 255 characters. ID of the resource (post, product, etc.) in your external system |
+
+The other multipart endpoints take the upload's `key` and refuse (`403`) an upload that was not
+started by the same caller.
 
 These fields are stored on the video record and returned in API responses as `externalUserId` and `externalResourceId`. The `externalUserId` is also recorded in usage tracking, allowing you to query per-user metrics via the [Usage API](/api/analytics#usage).

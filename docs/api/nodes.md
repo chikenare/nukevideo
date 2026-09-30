@@ -10,11 +10,44 @@ See the [Nodes guide](/guide/nodes) for architecture details.
 GET /api/nodes
 ```
 
+**Response:** `{ "data": { "nodes": [/* Node objects */] } }` — the whole fleet, unpaginated.
+
 ## Get Node
 
 ```
 GET /api/nodes/{id}
 ```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "id": 1,
+    "uuid": "9b2f…",
+    "name": "edge-1",
+    "user": "root",
+    "ipAddress": "203.0.113.10",
+    "type": "proxy",
+    "accel": null,
+    "hostname": "edge-1.example.com",
+    "isActive": true,
+    "isDraining": false,
+    "isHealthy": true,
+    "healthFailures": 0,
+    "lastHealthyAt": "2026-09-30T12:00:00+00:00",
+    "isStorageServer": false,
+    "storageEndpoint": null,
+    "services": [{ "name": "nukevideo_proxy_1", "running": 1, "desired": 1, "state": "running" }],
+    "log": null,
+    "env": null,
+    "lastSeenAt": "5 minutes ago"
+  }
+}
+```
+
+`isActive` is only changed by deploy, start and stop (see [Operations](#operations)).
+`lastSeenAt` is human-readable ("5 minutes ago"), not a timestamp.
 
 ## Create Node
 
@@ -27,27 +60,41 @@ POST /api/nodes
 ```json
 {
   "name": "worker-us-east-1",
-  "ip_address": "203.0.113.10",
-  "user": "deploy",
-  "type": "worker",
-  "hostname": "worker-1.example.com"
+  "ipAddress": "203.0.113.10",
+  "user": "root",
+  "type": "worker"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Display name |
-| `ip_address` | string | Yes | Server IP address |
-| `user` | string | Yes | SSH username |
+| `name` | string | Yes | Display name, unique |
+| `ipAddress` | string | Yes | Server IP address, used for SSH |
 | `type` | string | Yes | `worker` or `proxy` |
-| `hostname` | string | No | Server hostname (required for proxy nodes) |
-| `workers` | integer | No | Number of parallel workers (1–20 for workers, 1 for proxy) |
+| `user` | string | No | SSH username, a POSIX login name. Defaults to `root` |
+| `hostname` | string | No | DNS name the edge is served at. Needed for a proxy to receive playback links |
+| `accel` | string | No | `intel` or `nvidia` for a GPU worker; omit (or `null`) for CPU |
+| `isStorageServer` | boolean | No | This worker hosts the LAN `chunks` store. Only one node may be it |
+| `storageEndpoint` | string | No | URL of that store (e.g. `http://10.0.0.5:9000`) |
+
+**Response:** `{ "data": { /* Node */ } }`. Creating a node does not deploy it: that is a
+separate [deploy](#deploy-a-node).
 
 ## Update Node
 
 ```
 PUT /api/nodes/{id}
 ```
+
+`PATCH` works too. Every field is optional: `name`, `user`, `ipAddress`, `hostname`, `accel`,
+`isStorageServer`, `storageEndpoint`, plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isDraining` | boolean | Stop sending new playback links to this proxy (see [Scaling delivery](/guide/nodes#scaling-delivery)) |
+| `env` | string | `KEY=value` lines for this node alone, applied at its next deploy on top of the [node environment](#node-environment) |
+
+**Response:** `{ "data": { /* Node */ }, "message": "Node updated successfully" }`.
 
 ## Delete Node
 
@@ -60,31 +107,79 @@ DELETE /api/nodes/{id}
 Answers `409` while the node has an operation queued or running: a deploy finishing after the
 delete would recreate the container.
 
-## List Containers
-
-Get Docker containers running on a node.
+## Validate a Node
 
 ```
-GET /api/nodes/{id}/containers
+POST /api/nodes/{id}/validate
 ```
 
-## Pending Jobs
+Runs its checks over SSH: `docker`, `network`, `containers` and `disk`, plus `gpu` (a test encode)
+on a node with `accel` and `cache` (the cache pool) on a proxy.
 
-Get queue statistics for a node.
+**Response:**
+
+```json
+{
+  "checks": [
+    { "key": "docker", "label": "Docker", "status": "ok", "output": "Docker version 27.3.1 …" },
+    { "key": "disk", "label": "Disk Space", "status": "error", "output": "Connection refused" }
+  ]
+}
+```
+
+## Cache Disks
+
+What a deploy would do to a proxy's disks, so they can be picked before deploying (see
+[Cache disks](/guide/nodes#cache-disks)).
 
 ```
-GET /api/nodes/{id}/pending-jobs
+GET /api/nodes/{id}/cache-disks
 ```
 
 **Response:**
 
 ```json
 {
-  "pending": 5,
-  "reserved": 2,
-  "total": 7
+  "data": {
+    "preselect": true,
+    "disks": [
+      { "device": "/dev/sdb", "size": 4000787030016, "model": "…", "state": "empty", "detail": "" }
+    ]
+  }
 }
 ```
+
+`state` is `system` (never touched), `nukevideo` (already the cache, mounted as is), or `empty` /
+`foreign` (formatted into the pool if listed in the deploy's `disks`). `preselect` is `false` on a
+development panel. A worker answers `{ "preselect": false, "disks": [] }`.
+
+## Bootstrap Command
+
+For a worker the panel cannot reach over SSH (behind NAT, say): a one-line command that installs the
+worker when run on the machine itself.
+
+```
+POST /api/nodes/{id}/bootstrap-token
+```
+
+**Response:** `{ "command": "curl -fsSL \"https://…/api/nodes/1/bootstrap?…\" | bash" }`. Workers
+only (`422` for a proxy).
+
+The URL (`GET /api/nodes/{id}/bootstrap`, no auth — it is a signed URL) serves the deploy script.
+It is valid for **15 minutes** and **once**: a second fetch answers `410`. The script carries the
+instance's credentials in cleartext, so treat the command like a password.
+
+## Node Environment
+
+`KEY=value` lines injected into every node's containers at deploy time. A node's own `env` is
+applied on top; variables the deploy owns cannot be overridden by either.
+
+```
+GET   /api/node-environment
+PATCH /api/node-environment
+```
+
+Both answer `{ "data": { "environment": "…" } }`; `PATCH` takes `{ "environment": "…" }`.
 
 ## Operations
 

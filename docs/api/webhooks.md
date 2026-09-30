@@ -52,7 +52,7 @@ only the side effects.
 | Event | When |
 |-------|------|
 | `video.created` | The upload was ingested and the video row exists. Fires **before the source is probed**: `duration` is `0`, `aspectRatio` is empty, `outputs` is empty and `streams` holds only the `original`. |
-| `video.updated` | The video's own fields (`PUT\|PATCH /api/videos/{ulid}`) or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished, including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
+| `video.updated` | The video's own fields (`name`, `externalUserId`, `externalResourceId` through `PUT\|PATCH /api/videos/{ulid}`) changed — at any point — or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished (`completed` or `failed`), including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
 | `video.completed` | Every output reached a terminal state and at least one succeeded. |
 | `video.error` | The video failed — either every output failed, or a pipeline failure (a stalled worker, an unreachable source) ended the run. |
 | `video.deleted` | The video was deleted. Only sent for videos that carry an `externalResourceId`. The payload is the video as it was just before deletion. |
@@ -94,7 +94,7 @@ mirroring — poll it only while a video is in a non-terminal status.
 Triggered when a video file upload to S3 is complete.
 
 ```
-POST /webhooks/video-uploaded
+POST /api/webhooks/video-uploaded
 ```
 
 ### Authentication
@@ -126,42 +126,53 @@ outright rather than falling back to the bearer token.
 | `Authorization` | `Bearer <WEBHOOK_SECRET>` — the generic form |
 | `x-e2-notification-signature` | base64 HMAC-SHA256 of the body; takes precedence when sent |
 
+A request that fails either check gets `403`.
+
 ### Request Body
 
-The webhook payload contains information about the uploaded file, including:
-- File path in S3
-- User ID
-- Template ID
-- File metadata
+A standard S3 event notification (the shape MinIO and RustFS send), either wrapped in `Records` or
+as a bare array of records:
+
+```json
+{
+  "EventName": "s3:ObjectCreated:CompleteMultipartUpload",
+  "Records": [
+    { "eventName": "s3:ObjectCreated:CompleteMultipartUpload",
+      "s3": { "bucket": { "name": "videos" }, "object": { "key": "tmp-videos/...", "size": 734003200 } } }
+  ]
+}
+```
+
+Only `s3:ObjectCreated:CompleteMultipartUpload` and `s3:ObjectCreated:Put` are acted on, and only
+for keys under the upload folder (`tmp-videos/`); anything else is acknowledged and ignored. The
+body carries no user, project or template: those were stored server-side when the upload was
+signed, and are looked up by the object key.
 
 ### Processing
 
-When a valid webhook is received, NukeVideo:
+For each matching record, NukeVideo:
 
-1. Validates the webhook signature.
-2. Creates a video record in the database.
-3. Dispatches the `OnVideoUploaded` job to start processing.
-4. The job probes the file, creates stream records, and dispatches the encoding batch.
+1. Queues an `OnVideoUploaded` job with the object key and size, and answers `200` straight away.
+2. The job looks up the upload's metadata, creates the video (status `pending`) with its
+   `original` stream, books the upload volume and sends `video.created`.
+3. The `videos:dispatch` scheduler later claims a worker slot and hands the video to the encoding
+   pipeline, which probes the source and fans out the encode.
+
+Ingestion is idempotent on the object key, so a redelivered notification never creates a second
+video.
 
 ### Retry Behavior
 
-If the initial processing fails, the `OnVideoUploaded` job retries with exponential backoff:
-
-| Attempt | Delay |
-|---------|-------|
-| 1 | 30 seconds |
-| 2 | 60 seconds |
-| 3 | 120 seconds |
-| 4 | 5 minutes |
-| 5 | 10 minutes |
-
-The job will retry for up to **6 hours** before being marked as failed.
+If ingestion fails (typically the upload metadata or the user, project or template cannot be
+found), `OnVideoUploaded` is attempted **5 times** in all, waiting 10s, 30s, 60s and 120s between
+attempts.
 
 ### Failure Handling
 
-On final failure, the system:
-- Marks the video as `failed`.
-- Cleans up any temporary files.
+On final failure there is no video to mark, so the system:
+- Keeps the uploaded source — it may be the user's only copy; orphaned sources are reclaimed later
+  by age.
+- Records a `video_upload_processing_failed` entry in the uploader's activity log.
 - Logs the error for investigation.
 
 ## Configuring the Inbound Webhook
@@ -175,7 +186,7 @@ WEBHOOK_SECRET=your_secure_random_string
 When configuring your S3 provider to send webhooks, point the notification URL to:
 
 ```
-https://api.yourdomain.com/webhooks/video-uploaded
+https://api.yourdomain.com/api/webhooks/video-uploaded
 ```
 
 Ensure the webhook secret matches between your S3 configuration and the NukeVideo `.env` file.
