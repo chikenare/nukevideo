@@ -147,7 +147,7 @@ class AnalyticsController extends Controller
             'limit' => 'nullable|integer|min:1|max:'.TrackingIdBytesQueryData::MAX_BATCH,
             // `bandwidthByVideo` gets its own, and a smaller one: it is a time series, so its row
             // count is this times the length of the range.
-            'video_series_limit' => 'nullable|integer|min:1|max:100',
+            'videoSeriesLimit' => 'nullable|integer|min:1|max:100',
         ]);
 
         $from = $request->input('from');

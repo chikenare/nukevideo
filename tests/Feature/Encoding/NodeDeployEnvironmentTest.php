@@ -304,3 +304,21 @@ it('hands the ClickHouse timeouts to the workers, which are the ones writing usa
     expect($env)->toContain('CLICKHOUSE_TIMEOUT=9')
         ->toContain('CLICKHOUSE_CONNECT_TIMEOUT=4');
 });
+
+describe('fleet-wide timing', function () {
+    beforeEach(fn () => fakeCdnProvider('self_hosted'));
+
+    it('keeps the worker timeout and the redelivery window the same on every node', function () {
+        // Chunks are planned against the timeout of the node that prepares the video and encoded
+        // on whichever node pulls them: one node running longer than the rest plans windows the
+        // others kill mid-encode. The reaper and the redeploy drain read the same constants.
+        $env = app(NodeService::class)->getEnvironmentVariables(
+            deployableNode(['env' => "VIDEO_WORKER_TIMEOUT=1200\nREDIS_QUEUE_RETRY_AFTER=60"])
+        );
+
+        expect($env)->toContain('VIDEO_WORKER_TIMEOUT='.NodeService::WORKER_TIMEOUT)
+            ->and($env)->toContain('REDIS_QUEUE_RETRY_AFTER='.NodeService::QUEUE_RETRY_AFTER)
+            ->and($env)->not->toContain('VIDEO_WORKER_TIMEOUT=1200')
+            ->and($env)->not->toContain('REDIS_QUEUE_RETRY_AFTER=60');
+    });
+});

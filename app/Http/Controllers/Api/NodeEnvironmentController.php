@@ -2,10 +2,10 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Data\Node\UpdateNodeEnvironmentData;
 use App\Http\Controllers\Controller;
 use App\Settings\NodeSettings;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 
 class NodeEnvironmentController extends Controller
 {
@@ -16,13 +16,9 @@ class NodeEnvironmentController extends Controller
         ]);
     }
 
-    public function update(Request $request, NodeSettings $settings): JsonResponse
+    public function update(UpdateNodeEnvironmentData $data, NodeSettings $settings): JsonResponse
     {
-        $validated = $request->validate([
-            'environment' => ['required', 'string'],
-        ]);
-
-        $settings->environment = $validated['environment'];
+        $settings->environment = $data->environment ?? '';
         $settings->save();
 
         return response()->json([

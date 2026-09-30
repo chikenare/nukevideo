@@ -117,4 +117,8 @@ it('rejects a filter that could not have come out of the log columns', function 
     'a tracking id past the column width' => 'trackingId=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     'a metric that is not a delivery metric' => 'metric=encoding_cpu',
     'a metric that does not exist' => 'metric=made_up',
+    // The name the endpoint reads: a rule on `video_series_limit` checked a key nobody sends, and
+    // let any series length through to ClickHouse.
+    'a video series longer than the cap' => 'videoSeriesLimit=500',
+    'a video series of nothing' => 'videoSeriesLimit=0',
 ]);

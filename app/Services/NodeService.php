@@ -193,6 +193,11 @@ class NodeService
         'AWS_SECRET_ACCESS_KEY',
         'AWS_BUCKET',
         'AWS_ENDPOINT',
+        // Fleet-wide by nature: chunks are planned against the timeout of the node that prepares
+        // the video and encoded on whichever node pulls them, and the reaper and the redeploy
+        // drain read the constants these come from. One node set apart kills the others' chunks.
+        'VIDEO_WORKER_TIMEOUT',
+        'REDIS_QUEUE_RETRY_AFTER',
     ];
 
     /**

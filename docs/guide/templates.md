@@ -62,11 +62,11 @@ NukeVideo includes built-in presets for common use cases. You can adopt a preset
 
 | Slug | Name |
 |------|------|
-| `hls-h264-multi` | HLS (H.264) — 1080p/720p/480p, stereo AAC |
-| `hls-hevc-4k` | HLS 4K Premium (H.265) — up to 2160p, 5.1 and stereo AAC |
+| `hls-h264-multi` | H.264 (HLS + DASH) — 1080p/720p/480p, stereo AAC |
+| `hls-hevc-4k` | 4K Premium H.265 (HLS + DASH) — up to 2160p, 5.1 and stereo AAC |
 | `dash-av1-efficient` | DASH AV1 — SVT-AV1, Opus |
 | `dash-av1-qsv` | DASH AV1 (Intel QSV) — hardware AV1, Opus |
-| `hls-h264-mobile` | HLS Mobile-First (H.264) — 720p and below |
+| `hls-h264-mobile` | Mobile-First H.264 (HLS + DASH) — 720p and below |
 
 ```
 GET /api/template-presets

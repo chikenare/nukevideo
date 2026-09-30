@@ -353,6 +353,9 @@ storageEndpoint?: string | null,
 accel?: string | null,
 env?: string | null,
 };
+export type UpdateNodeEnvironmentData = {
+environment: string | null,
+};
 }
 namespace Profile {
 export type UpdatePasswordData = {

@@ -4,6 +4,7 @@ namespace App\Data\Video;
 
 use App\Data\RequestData;
 use App\Models\Output;
+use App\Services\Cdn\BunnyProvider;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\TrackingRegistry;
 use App\Support\TrackingId;
@@ -31,10 +32,10 @@ class PlayVideoData extends RequestData
         #[Min(144), Max(4320)]
         public ?int $resolution = null,
         /**
-         * The address that will fetch the manifests, when minting from your own backend. Bunny
-         * binds the token to it and refuses playback from any other address; the self-hosted edge
-         * signs it into the token but never checks it ({@see SelfHostedProvider::sign}), so there
-         * a wrong address costs nothing — and buys nothing either.
+         * The address that will fetch the manifests, when minting from your own backend. Neither
+         * provider enforces it: Bunny leaves it out of the signature ({@see BunnyProvider}), and
+         * the self-hosted edge signs it into the token but never checks it
+         * ({@see SelfHostedProvider::sign}). A wrong address costs nothing — and buys nothing.
          */
         #[IP]
         public ?string $ip = null,

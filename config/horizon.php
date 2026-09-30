@@ -98,9 +98,9 @@ $nodeOpsSupervisor = [
     'nice' => 0,
 ];
 
-// GPU nodes (NODE_ACCEL=intel|nvidia) run one extra supervisor for their hardware queue, on top
-// of the CPU supervisors — the cores are still there. Concurrency is GPU encode sessions, not
-// cores ({@see \App\Support\Gpu}); override per node with GPU_WORKER_PROCESSES.
+// GPU nodes (NODE_ACCEL=intel|nvidia) run a supervisor for their hardware queue in place of the
+// CPU transcode one (orchestration and packaging still run beside it). Concurrency is GPU encode
+// sessions, not cores ({@see \App\Support\Gpu}); override per node with GPU_WORKER_PROCESSES.
 $accel = env('NODE_ACCEL');
 
 $gpuWorker = [
