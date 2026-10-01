@@ -15,8 +15,6 @@ function deployableNode(array $attributes = []): Node
         'name' => 'node-test',
         'type' => 'worker',
         'is_active' => true,
-        'is_storage_server' => true,
-        'storage_endpoint' => 'http://10.0.0.99:9000',
         ...$attributes,
     ]);
 }
@@ -134,7 +132,7 @@ describe('development and production deploys on one host', function () {
         asLocalEnvironment();
         config(['nuke.registry' => '10.0.0.240:5000']);
         $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         expect($script)->toContain("IMAGE='10.0.0.240:5000/nukevideo-proxy:node-dev'");
@@ -182,9 +180,10 @@ describe('chunk store bootstrap', function () {
 
         expect($script)->not->toContain('minio/mc')
             ->toContain('--entrypoint sh "$IMAGE" -c "$STORAGE_BUCKET_CMD"')
-            ->toMatch("/^STORAGE_BUCKET_CMD='s5cmd --endpoint-url http:\/\/127\.0\.0\.1:9000 ls \| grep /m")
+            // The store listens on the private address only, so the probe asks it there.
+            ->toMatch('/^STORAGE_BUCKET_CMD=\'s5cmd --endpoint-url http:\/\/\$CHUNK_STORE_IP:9000 ls \| grep /m')
             // `mb` errors on a bucket it already made, so a redeploy must only list it.
-            ->toContain('|| s5cmd --endpoint-url http://127.0.0.1:9000 mb');
+            ->toContain('|| s5cmd --endpoint-url http://$CHUNK_STORE_IP:9000 mb');
     });
 });
 
@@ -192,7 +191,7 @@ describe('vector placement', function () {
     it('ships edge logs from a self-hosted proxy', function () {
         fakeCdnProvider('self_hosted');
         $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         expect($script)->toContain("VECTOR_RUN_ARGS='--name nukevideo_vector")
@@ -214,7 +213,7 @@ describe('vector placement', function () {
         // API into the same bandwidth pipeline instead.
         fakeCdnProvider('bunny');
         $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         expect($script)->toContain("VECTOR_RUN_ARGS=''")
@@ -224,7 +223,7 @@ describe('vector placement', function () {
     it('hands vector only the two variables its config reads', function () {
         fakeCdnProvider('self_hosted');
         $script = app(NodeService::class)->buildDeployScript(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         preg_match('/^VECTOR_RUN_ARGS=.*$/m', $script, $matches);
@@ -250,7 +249,7 @@ describe('edge token settings', function () {
         ]);
 
         $env = app(NodeService::class)->getEnvironmentVariables(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         expect($env)->toContain('VOD_TOKEN_NAME=nv_token');
@@ -260,7 +259,7 @@ describe('edge token settings', function () {
         fakeCdnProvider('self_hosted');
 
         $env = app(NodeService::class)->getEnvironmentVariables(
-            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false])
+            deployableNode(['type' => 'proxy', 'hostname' => 'edge.example.com'])
         );
 
         expect($env)->toContain('VOD_TOKEN_NAME=__hdnea__');
@@ -285,7 +284,7 @@ describe('name resolution inside the containers', function () {
         }
     })->with([
         'worker with its storage' => [['type' => 'worker']],
-        'proxy' => [['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false, 'storage_endpoint' => null]],
+        'proxy' => [['type' => 'proxy', 'hostname' => 'edge.example.com']],
     ]);
 });
 

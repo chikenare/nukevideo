@@ -1,0 +1,143 @@
+<?php
+
+use App\Models\Node;
+use App\Services\NodeService;
+use App\Settings\CdnSettings;
+use App\Settings\NodeSettings;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+
+uses(RefreshDatabase::class);
+
+beforeEach(function () {
+    CdnSettings::fake([
+        'provider' => 'self_hosted',
+        'providers' => ['self_hosted' => ['token_secret' => 'secret']],
+    ]);
+});
+
+function storeNode(array $attributes = []): Node
+{
+    return Node::create([
+        'ip_address' => '10.0.0.'.random_int(2, 250),
+        'user' => 'deploy',
+        'name' => 'node-'.uniqid(),
+        'type' => 'worker',
+        'is_active' => true,
+        ...$attributes,
+    ]);
+}
+
+function chunkStoreAddress(): string
+{
+    return app(NodeSettings::class)->refresh()->chunk_store_address;
+}
+
+describe('where the chunk store lives', function () {
+    it('goes to the first worker, so a new fleet needs nothing configured', function () {
+        $first = storeNode(['ip_address' => '10.0.0.20']);
+        storeNode(['ip_address' => '10.0.0.21']);
+
+        expect(chunkStoreAddress())->toBe($first->ip_address);
+    });
+
+    it('never goes to a proxy, which runs no chunk store', function () {
+        storeNode(['type' => 'proxy', 'hostname' => 'edge.example.com']);
+
+        expect(chunkStoreAddress())->toBe('');
+    });
+
+    it('is cleared when the node holding it is deleted, and only then', function () {
+        $store = storeNode(['ip_address' => '10.0.0.20']);
+        storeNode(['ip_address' => '10.0.0.21'])->delete();
+
+        expect(chunkStoreAddress())->toBe('10.0.0.20');
+
+        $store->delete();
+
+        expect(chunkStoreAddress())->toBe('');
+    });
+});
+
+describe('what the workers are told', function () {
+    it('points every worker at the chunk store', function () {
+        storeNode(['ip_address' => '10.0.0.20']);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(storeNode());
+
+        expect($env)->toContain('CHUNKS_S3_ENDPOINT=http://10.0.0.20:9000');
+    });
+
+    it('takes the port with the address, where 9000 is already in use', function () {
+        // A host running other S3-compatible stores (or a development stack) has 9000 taken.
+        storeNode(['ip_address' => '10.0.0.20']);
+        app(NodeSettings::class)->fill(['chunk_store_address' => '10.0.0.20:9009'])->save();
+
+        $worker = storeNode();
+        $env = app(NodeService::class)->getEnvironmentVariables($worker);
+        $script = app(NodeService::class)->buildDeployScript($worker);
+
+        expect($env)->toContain('CHUNKS_S3_ENDPOINT=http://10.0.0.20:9009')
+            ->and($script)->toContain("CHUNK_STORE_HOST='10.0.0.20'")
+            ->and($script)->toContain('CHUNK_STORE_PORT=9009');
+    });
+
+    it('forgets the address of a deleted node, port or not', function () {
+        $store = storeNode(['ip_address' => '10.0.0.20']);
+        app(NodeSettings::class)->fill(['chunk_store_address' => '10.0.0.20:9009'])->save();
+
+        $store->delete();
+
+        expect(chunkStoreAddress())->toBe('');
+    });
+
+    it('tells a proxy nothing about it', function () {
+        storeNode(['ip_address' => '10.0.0.20']);
+
+        $env = app(NodeService::class)->getEnvironmentVariables(storeNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+
+        expect(implode("\n", $env))->not->toContain('CHUNKS_S3_ENDPOINT');
+    });
+
+    it('refuses to deploy a worker with nowhere to put its chunks', function () {
+        $worker = storeNode();
+        app(NodeSettings::class)->fill(['chunk_store_address' => ''])->save();
+
+        expect(fn () => app(NodeService::class)->buildDeployScript($worker))
+            ->toThrow(RuntimeException::class, 'chunk store');
+    });
+});
+
+describe('the deploy', function () {
+    it('lets each worker find out on its own host whether the store is its to run', function () {
+        // The address is the private one the workers use, and the panel often reaches a node
+        // over another: the only reliable comparison is against the node's own interfaces.
+        app(NodeSettings::class)->fill(['chunk_store_address' => 'chunks.internal'])->save();
+
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toContain("CHUNK_STORE_HOST='chunks.internal'")
+            ->and($script)->toContain('CHUNK_STORE_PORT=9000')
+            ->and($script)->toContain('getent ahostsv4 "$CHUNK_STORE_HOST"')
+            ->and($script)->toContain('hostname -I');
+    });
+
+    it('fails a worker whose chunk store address no node answers on', function () {
+        // An address that is no worker's own would have every worker deploy fine and then fail
+        // every chunk. The worker that does not run the store waits for it — it may be deploying
+        // alongside — and gives up with the reason rather than with the first video.
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toContain('</dev/tcp/$CHUNK_STORE_IP/$CHUNK_STORE_PORT')
+            ->and($script)->toContain('No node answers on $CHUNK_STORE_HOST');
+    });
+
+    it('publishes the store on the private address alone', function () {
+        // On every interface it was reachable from the internet, guarded only by the same
+        // credentials as the primary bucket.
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toContain('-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"')
+            ->and($script)->not->toContain("-p '9000:9000'")
+            ->and($script)->not->toContain('-p 9000:9000');
+    });
+});

@@ -24,8 +24,6 @@ class Node extends Model
         // Written by the probe and the deploy, never by the API: the Data objects do not expose them.
         'health_failures',
         'last_healthy_at',
-        'is_storage_server',
-        'storage_endpoint',
         'log',
         'env',
     ];
@@ -37,7 +35,6 @@ class Node extends Model
             'accel' => NodeAccel::class,
             'is_active' => 'boolean',
             'is_draining' => 'boolean',
-            'is_storage_server' => 'boolean',
             'last_healthy_at' => 'datetime',
         ];
     }
@@ -84,11 +81,11 @@ class Node extends Model
     }
 
     /**
-     * The chunk store this node hosts, if it is flagged as the storage server. Named apart from the
+     * The chunk store this node runs, when the fleet's chunk store address is its own. Named apart from the
      * service container on purpose, and deliberately absent from {@see deployedContainerNames()}:
      * it is the one container on a node that the *whole fleet* depends on — every other node's
      * `chunks` disk reads and writes through it. Taking a node out of rotation must not take it
-     * down; deleting the node does, and then another node has to be flagged as storage server.
+     * down; deleting the node does, and then the chunk store needs another address.
      */
     public function storageContainerName(): string
     {

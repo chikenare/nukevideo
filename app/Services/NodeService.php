@@ -101,7 +101,6 @@ class NodeService
     public function getEnvironmentVariables(Node $node): array
     {
         $scheme = Node::proxyScheme();
-        $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
         $base = [
             'APP_ENV' => 'APP_ENV='.config('app.env'),
@@ -118,8 +117,11 @@ class NodeService
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),
         ];
 
-        if ($endpoint) {
-            $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT={$endpoint}";
+        // Workers only: a proxy reads the primary bucket and never the chunk store.
+        $chunkStore = app(NodeSettings::class)->chunkStore();
+        if ($node->type === NodeType::WORKER && $chunkStore) {
+            [$host, $port] = $chunkStore;
+            $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT=http://{$host}:{$port}";
         }
 
         if ($node->accel) {
@@ -385,8 +387,8 @@ class NodeService
 
     private function workerVars(Node $node): array
     {
-        if (! Node::where('is_storage_server', true)->whereNotNull('storage_endpoint')->exists()) {
-            throw new \RuntimeException('No storage server configured. Flag one worker as the storage server (with an endpoint) before deploying.');
+        if (! app(NodeSettings::class)->chunkStore()) {
+            throw new \RuntimeException('No chunk store configured. Set its address under Nodes → Environment before deploying a worker.');
         }
 
         $dockerFlags = $this->extractDockerFlags($node);
@@ -414,17 +416,20 @@ class NodeService
         ];
     }
 
+    /**
+     * Every worker gets the store's run arguments, and its deploy decides on the host itself
+     * whether to use them: the store runs where the fleet's chunk store address resolves to one of
+     * the node's own interfaces. Compared there and not against the node's `ip_address`, which is
+     * the address the panel reaches it by over SSH — often the public one, while the store must
+     * answer on the private network, or by a DNS name. Published on that address alone, never on
+     * every interface: it holds every in-flight source and chunk, behind the same credentials as
+     * the primary bucket.
+     */
     private function chunkStoreVars(Node $node): array
     {
-        if (! $node->is_storage_server) {
-            return ['STORAGE_RUN_ARGS' => ''];
-        }
-
         $disk = config('filesystems.disks.chunks');
-        $port = (int) (parse_url((string) $node->storage_endpoint, PHP_URL_PORT) ?: 9000);
-        $storeName = $node->storageContainerName();
 
-        $runArgs = $this->buildDockerRunArgs($storeName, 'rustfs/rustfs:latest', [
+        $runArgs = $this->buildDockerRunArgs($node->storageContainerName(), 'rustfs/rustfs:latest', [
             'env' => [
                 'RUSTFS_ACCESS_KEY='.$disk['key'],
                 'RUSTFS_SECRET_KEY='.$disk['secret'],
@@ -432,10 +437,11 @@ class NodeService
                 'RUSTFS_CONSOLE_ENABLE=false',
             ],
             'labels' => ['vector.enable='.Node::containerPrefix()],
-            'ports' => ["{$port}:9000"],
             // Prefixed like the containers: a development store must never be handed the volume
             // holding the fleet's mirrored sources and chunks.
             'volumes' => [Node::containerPrefix().'_chunks:/data'],
+            // $CHUNK_STORE_IP is resolved by worker.sh, on the node.
+            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"'],
             'command' => '/data',
         ]);
 
@@ -443,11 +449,16 @@ class NodeService
         // — minio/mc used to do it, and its image is gone from Docker Hub. `mb` alone is not
         // idempotent (a redeploy finds the bucket and errors), so it only runs when the bucket
         // list lacks it; while the store is still booting both fail and the deploy retries.
-        $s5cmd = sprintf('s5cmd --endpoint-url http://127.0.0.1:%d', $port);
+        // Single-quoted in the header and expanded inside the probe container, which is handed
+        // CHUNK_STORE_IP: the store answers on that address only.
+        [$host, $port] = app(NodeSettings::class)->chunkStore();
+        $s5cmd = 's5cmd --endpoint-url http://$CHUNK_STORE_IP:'.$port;
         $bucket = escapeshellarg('s3://'.$disk['bucket']);
 
         return [
-            'STORAGE_CONTAINER' => $storeName,
+            'CHUNK_STORE_HOST' => $host,
+            'CHUNK_STORE_PORT' => $port,
+            'STORAGE_CONTAINER' => $node->storageContainerName(),
             'STORAGE_RUN_ARGS' => $runArgs,
             'STORAGE_ACCESS_KEY' => 'AWS_ACCESS_KEY_ID='.$disk['key'],
             'STORAGE_SECRET_KEY' => 'AWS_SECRET_ACCESS_KEY='.$disk['secret'],

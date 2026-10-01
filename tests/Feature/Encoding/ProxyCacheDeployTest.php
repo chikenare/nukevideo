@@ -131,7 +131,7 @@ describe('a production proxy deploy', function () {
     });
 
     it('leaves a worker\'s disks alone', function () {
-        $node = cacheNode(['type' => 'worker', 'is_storage_server' => true, 'storage_endpoint' => 'http://10.0.0.99:9000']);
+        $node = cacheNode(['type' => 'worker']);
         $script = app(NodeService::class)->buildDeployScript($node);
 
         expect($script)->not->toContain('cache_disk_inventory')
@@ -292,7 +292,7 @@ describe('choosing the disks', function () {
     });
 
     it('still deploys a worker without a list', function () {
-        $node = cacheNode(['type' => 'worker', 'is_storage_server' => true, 'storage_endpoint' => 'http://10.0.0.99:9000']);
+        $node = cacheNode(['type' => 'worker']);
         $ssh = Mockery::mock(SSHService::class);
         $ssh->shouldReceive('run')->once()->andReturn('');
         app()->instance(SSHService::class, $ssh);

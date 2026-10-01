@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ValidationException } from '@/exceptions/ValidationException'
 import {
   Dialog,
   DialogContent,
@@ -39,6 +42,8 @@ const envLanguage = StreamLanguage.define({
 const dialogOpen = ref(false)
 const loading = ref(false)
 const editorContainer = ref<HTMLDivElement>()
+const chunkStoreAddress = ref('')
+const errors = ref<Record<string, string[]>>({})
 let editorView: EditorView | null = null
 
 const createEditor = (content: string) => {
@@ -77,6 +82,8 @@ const fetchEnvironment = async () => {
   try {
     const data = await NodeService.getEnvironment()
     text = data?.environment ?? ''
+    chunkStoreAddress.value = data?.chunkStoreAddress ?? ''
+    errors.value = {}
   } finally {
     loading.value = false
     await nextTick()
@@ -89,8 +96,11 @@ const handleSave = async () => {
   loading.value = true
   try {
     const text = editorView.state.doc.toString()
-    await NodeService.updateEnvironment(text)
+    await NodeService.updateEnvironment({ environment: text, chunkStoreAddress: chunkStoreAddress.value || null })
     dialogOpen.value = false
+  } catch (error) {
+    if (error instanceof ValidationException) errors.value = error.errors
+    else throw error
   } finally {
     loading.value = false
   }
@@ -108,7 +118,7 @@ defineExpose({ show })
 
 <template>
   <Dialog v-model:open="dialogOpen">
-    <DialogContent class="max-w-3xl max-h-[80vh] flex flex-col">
+    <DialogContent class="flex max-h-[85vh] flex-col sm:max-w-3xl">
       <DialogHeader>
         <DialogTitle>Node Environment</DialogTitle>
         <DialogDescription>
@@ -121,6 +131,17 @@ defineExpose({ show })
       </div>
 
       <div v-else class="flex flex-col gap-4 min-h-0 flex-1">
+        <div class="grid gap-2">
+          <Label for="chunk_store_address">Chunk store</Label>
+          <Input id="chunk_store_address" v-model="chunkStoreAddress" placeholder="e.g. 10.0.0.20 or chunks.internal:9009" />
+          <p class="text-xs text-muted-foreground">
+            Private address of the worker that runs the chunk store: an IP or a DNS name, with <code>:port</code> when 9000 is taken.
+            The worker whose own address this is runs it; the first worker created fills it in. Redeploy the workers after changing it.
+          </p>
+          <p v-if="errors.chunkStoreAddress" class="text-sm text-destructive">{{ errors.chunkStoreAddress[0] }}</p>
+        </div>
+
+        <Label>Variables</Label>
         <div ref="editorContainer"
           class="flex-1 min-h-[300px] overflow-auto rounded-md border border-input bg-background" />
 

@@ -36,8 +36,6 @@ GET /api/nodes/{id}
     "isHealthy": true,
     "healthFailures": 0,
     "lastHealthyAt": "2026-09-30T12:00:00+00:00",
-    "isStorageServer": false,
-    "storageEndpoint": null,
     "services": [{ "name": "nukevideo_proxy_1", "running": 1, "desired": 1, "state": "running" }],
     "log": null,
     "env": null,
@@ -74,8 +72,6 @@ POST /api/nodes
 | `user` | string | No | SSH username, a POSIX login name. Defaults to `root` |
 | `hostname` | string | No | DNS name the edge is served at. Needed for a proxy to receive playback links |
 | `accel` | string | No | `intel` or `nvidia` for a GPU worker; omit (or `null`) for CPU |
-| `isStorageServer` | boolean | No | This worker hosts the LAN `chunks` store. Only one node may be it |
-| `storageEndpoint` | string | No | URL of that store (e.g. `http://10.0.0.5:9000`) |
 
 **Response:** `{ "data": { /* Node */ } }`. Creating a node does not deploy it: that is a
 separate [deploy](#deploy-a-node).
@@ -87,7 +83,7 @@ PUT /api/nodes/{id}
 ```
 
 `PATCH` works too. Every field is optional: `name`, `user`, `ipAddress`, `hostname`, `accel`,
-`isStorageServer`, `storageEndpoint`, plus:
+plus:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -179,7 +175,10 @@ GET   /api/node-environment
 PATCH /api/node-environment
 ```
 
-Both answer `{ "data": { "environment": "…" } }`; `PATCH` takes `{ "environment": "…" }`.
+Both answer `{ "data": { "environment": "…", "chunkStoreAddress": "10.0.0.20" } }`. `PATCH` takes
+`environment` (required, empty allowed, up to 10000 characters) and, optionally,
+`chunkStoreAddress`: the [chunk store](/guide/nodes#chunk-store)'s private `host` or `host:port`,
+or empty. Both take effect at each worker's next deploy.
 
 ## Operations
 

@@ -13,6 +13,29 @@ Nodes are remote servers that handle video encoding (workers) or content deliver
 
 Each worker node runs one container (Horizon) that pulls encoding jobs from Redis queues. Sources are split into keyframe-aligned chunks and encoded in parallel across every worker of the fleet (x264, x265, SVT-AV1 on CPU; QSV or NVENC on a node whose `accel` is `intel` or `nvidia`), then packaged into static CMAF.
 
+### Chunk store
+
+The workers share a scratch S3 store on their private network — RustFS, the `chunks` disk — for
+everything between the primary bucket and the final package: the mirrored source, every encoded
+chunk and the staged audio and subtitles. It runs on one worker, and all of them must reach it
+over a private network: that traffic is the bulk of an encode, so put the store and the workers
+in the same network (with a VPN such as WireGuard or Tailscale if they span providers) rather than
+paying egress between them.
+
+Its address is one setting for the whole fleet, under **Nodes → Environment → Chunk store**: an IP
+or a DNS name, with `:port` when 9000 is taken on that host. The first worker you create fills it
+in with its own IP. At each worker's deploy the node checks whether the address resolves to one of
+its own interfaces; the one where it does runs the store, published on that address only — never
+on every interface — and every worker is pointed at it. A worker's deploy fails when no address is
+set, and when the store does not answer there within two minutes (so an address that is no
+worker's own is caught at deploy time, not on the first chunk). Proxies never use it. The API host does,
+to clear and check the mirror when a video is retried: set `CHUNKS_S3_ENDPOINT=http://<address>`
+in its `.env` (with the store's port), since it is not deployed by the panel.
+
+The store holds the videos in flight, so it is not meant to move: change the address only with no
+video processing, then redeploy every worker. Deleting the node that runs it clears the address;
+the next worker created claims it, or set it by hand.
+
 ### Job Distribution
 
 Workers are not assigned videos: they pull. `videos:dispatch` (every five seconds on the API host) admits pending videos while each hardware family — CPU, Intel, NVIDIA — has fewer videos in flight than it has active worker nodes plus one, and a video's chunk jobs then go to its family's queue, drained by every worker of that family. GPU nodes do not drain the CPU queue. How many chunks a node encodes at once is sized from its CPU cores and RAM when the container starts; `VIDEO_WORKER_PROCESSES` (CPU) or `GPU_WORKER_PROCESSES` in the node's environment overrides it.

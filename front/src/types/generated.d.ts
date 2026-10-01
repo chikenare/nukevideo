@@ -66,8 +66,6 @@ isDraining: boolean,
 isHealthy: boolean,
 healthFailures: number,
 lastHealthyAt: string | null,
-isStorageServer: boolean,
-storageEndpoint: string | null,
 services: App.Data.ServiceStatusData[],
 log: string | null,
 env: string | null,
@@ -338,9 +336,7 @@ ipAddress: string,
 type: string,
 accel: string | null,
 user?: string,
-isStorageServer?: boolean,
 hostname: string | null,
-storageEndpoint: string | null,
 };
 export type UpdateNodeData = {
 name?: string,
@@ -348,13 +344,12 @@ user?: string | null,
 ipAddress?: string,
 hostname?: string | null,
 isDraining?: boolean,
-isStorageServer?: boolean,
-storageEndpoint?: string | null,
 accel?: string | null,
 env?: string | null,
 };
 export type UpdateNodeEnvironmentData = {
 environment: string | null,
+chunkStoreAddress?: string | null,
 };
 }
 namespace Profile {

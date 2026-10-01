@@ -5,6 +5,7 @@ namespace App\Data\Node;
 use App\Data\RequestData;
 use App\Enums\NodeType;
 use App\Models\Node;
+use App\Rules\ChunkStoreConfiguredRule;
 use Spatie\LaravelData\Optional;
 
 class DeployNodeData extends RequestData
@@ -35,6 +36,7 @@ class DeployNodeData extends RequestData
             // A device path lands in a shell script on the node.
             'disks.*' => ['string', 'regex:#^/dev/[a-z0-9]+$#'],
             'force' => ['sometimes', 'boolean'],
+            'node' => [new ChunkStoreConfiguredRule($node instanceof Node ? $node : null)],
         ];
     }
 }

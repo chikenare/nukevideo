@@ -18,7 +18,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Switch } from '@/components/ui/switch'
 import { ref } from 'vue'
 import NodeService from '@/services/NodeService'
 import { ValidationException } from '@/exceptions/ValidationException'
@@ -38,8 +37,6 @@ const newNode = ref({
   hostname: '',
   type: 'worker' as 'worker' | 'proxy',
   accel: 'none' as 'none' | 'intel' | 'nvidia',
-  isStorageServer: false,
-  storageEndpoint: '',
 })
 
 const handleCreate = async () => {
@@ -54,10 +51,8 @@ const handleCreate = async () => {
       type: newNode.value.type,
       accel: newNode.value.type === 'worker' && newNode.value.accel !== 'none' ? newNode.value.accel : null,
       hostname: newNode.value.type === 'proxy' && newNode.value.hostname ? newNode.value.hostname : null,
-      storageEndpoint: newNode.value.type === 'worker' && newNode.value.isStorageServer && newNode.value.storageEndpoint ? newNode.value.storageEndpoint : null,
-      ...(newNode.value.type === 'worker' && newNode.value.isStorageServer ? { isStorageServer: true } : {}),
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none', isStorageServer: false, storageEndpoint: '' }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none' }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -137,20 +132,6 @@ const handleCreate = async () => {
             <p class="text-xs text-muted-foreground">Disables local nginx cache. Use when a CDN handles caching.</p>
           </div>
         </div>
-        <div v-if="newNode.type === 'worker'" class="flex items-center justify-between">
-          <div>
-            <Label for="node_storage">Storage Server (S3)</Label>
-            <p class="text-xs text-muted-foreground">This worker hosts the shared chunk store (RustFS). Only one node can be the storage server.</p>
-          </div>
-          <Switch id="node_storage" v-model="newNode.isStorageServer" @update:checked="newNode.isStorageServer = $event" />
-        </div>
-        <div v-if="newNode.type === 'worker' && newNode.isStorageServer" class="grid gap-2">
-          <Label for="node_storage_endpoint">Storage Endpoint</Label>
-          <Input id="node_storage_endpoint" v-model="newNode.storageEndpoint" placeholder="e.g. http://10.0.0.5:9000" />
-          <p class="text-xs text-muted-foreground">Full endpoint (local or public) the other nodes use to reach this node's chunk store.</p>
-          <p v-if="errors.storageEndpoint" class="text-sm text-destructive">{{ errors.storageEndpoint[0] }}</p>
-        </div>
-        <p v-if="errors.isStorageServer" class="text-sm text-destructive">{{ errors.isStorageServer[0] }}</p>
 
         <DialogFooter>
           <Button type="submit" :disabled="loading">

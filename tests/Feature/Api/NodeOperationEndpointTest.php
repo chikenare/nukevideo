@@ -4,6 +4,7 @@ use App\Jobs\RunNodeOperationJob;
 use App\Models\Node;
 use App\Models\Project;
 use App\Models\User;
+use App\Settings\NodeSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Bus;
 use Illuminate\Support\Facades\Redis;
@@ -154,4 +155,35 @@ it('still shows an admin only their own project\'s videos', function () {
     $this->withHeader('X-Project-Ulid', $mine->ulid)->getJson('/api/activity-log')
         ->assertOk()
         ->assertJsonCount(0, 'data');
+});
+
+describe('a deploy with no chunk store', function () {
+    beforeEach(fn () => NodeSettings::fake(['environment' => '', 'chunk_store_address' => '']));
+
+    it('is refused before it is queued, for a worker', function () {
+        // Queued, it would only fail later in the operation's log; the request can say why now.
+        $worker = apiNode();
+        NodeSettings::fake(['environment' => '', 'chunk_store_address' => '']);
+
+        $this->postJson("/api/nodes/{$worker->id}/deploy")
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('node');
+
+        Bus::assertNotDispatched(RunNodeOperationJob::class);
+    });
+
+    it('is refused for a fleet deploy that includes a worker', function () {
+        $worker = apiNode();
+        NodeSettings::fake(['environment' => '', 'chunk_store_address' => '']);
+
+        $this->postJson('/api/nodes/deploy', ['nodes' => [$worker->id]])
+            ->assertStatus(422)
+            ->assertJsonValidationErrors('nodes');
+    });
+
+    it('does not concern a proxy, which uses no chunk store', function () {
+        $proxy = apiNode(['type' => 'proxy', 'hostname' => 'edge.example.com']);
+
+        $this->postJson("/api/nodes/{$proxy->id}/deploy", ['disks' => []])->assertStatus(202);
+    });
 });

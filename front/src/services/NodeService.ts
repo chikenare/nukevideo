@@ -79,13 +79,13 @@ class NodeService {
         return res.data.checks
     }
 
-    async getEnvironment(): Promise<{ environment: string }> {
+    async getEnvironment(): Promise<{ environment: string; chunkStoreAddress: string }> {
         const res = await this.api.get('/node-environment')
         return res.data.data
     }
 
-    async updateEnvironment(environment: string): Promise<{ environment: string }> {
-        const res = await this.api.patch('/node-environment', { environment })
+    async updateEnvironment(payload: App.Data.Node.UpdateNodeEnvironmentData): Promise<{ environment: string; chunkStoreAddress: string }> {
+        const res = await this.api.patch('/node-environment', payload)
         return res.data.data
     }
 

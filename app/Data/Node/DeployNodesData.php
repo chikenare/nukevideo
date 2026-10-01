@@ -3,6 +3,7 @@
 namespace App\Data\Node;
 
 use App\Data\RequestData;
+use App\Rules\ChunkStoreConfiguredRule;
 
 class DeployNodesData extends RequestData
 {
@@ -15,7 +16,7 @@ class DeployNodesData extends RequestData
     public static function rules(): array
     {
         return [
-            'nodes' => ['required', 'array', 'min:1'],
+            'nodes' => ['required', 'array', 'min:1', new ChunkStoreConfiguredRule],
             'nodes.*' => ['integer', 'exists:nodes,id'],
         ];
     }

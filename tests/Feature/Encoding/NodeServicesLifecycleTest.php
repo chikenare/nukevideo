@@ -19,8 +19,6 @@ function lifecycleNode(array $attributes = []): Node
         'name' => 'node-test',
         'type' => 'worker',
         'is_active' => true,
-        'is_storage_server' => true,
-        'storage_endpoint' => 'http://10.0.0.99:9000',
         ...$attributes,
     ]);
 }
