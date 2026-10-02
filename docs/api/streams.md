@@ -29,7 +29,7 @@ PUT|PATCH /api/streams/{ulid}
 |-------|------|-------|
 | `name` | string | **Required.** Shown in the player's track selector. Must be unique among the video's tracks of the same type, and cannot contain `,`, `"` or a line break. |
 | `language` | string \| null | **Required**, but nullable. BCP-47 (`es`, `en-US`, `es-MX`), and it must be a language that exists — the packager normalizes it, so a manifest may show `en` for a source tagged `eng`. |
-| `forced` | boolean | **Required.** Subtitles only — marks a track that carries foreign-language dialogue. |
+| `forced` | boolean | **Required**, on every stream. Takes effect on subtitles only — marks a track that carries foreign-language dialogue; on audio it is stored and changes nothing. |
 | `hearingImpaired` | boolean \| null | Optional, **subtitles only** — a `true` on an audio track is a `422`, because audio SDH is baked into the packaged manifests. Omit it (or send `null`) to keep whatever the probe or a previous edit set. Stored in the stream's `meta`, and returned lifted out of it as `hearingImpaired`. |
 
 `name`, `language` and `forced` are required on every call, `PATCH` included — omitting one is a

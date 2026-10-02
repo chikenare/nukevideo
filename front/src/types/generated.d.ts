@@ -66,8 +66,6 @@ isDraining: boolean,
 isHealthy: boolean,
 healthFailures: number,
 lastHealthyAt: string | null,
-isStorageServer: boolean,
-storageEndpoint: string | null,
 services: App.Data.ServiceStatusData[],
 log: string | null,
 env: string | null,
@@ -323,6 +321,14 @@ password: string,
 namespace Node {
 export type DeployNodeData = {
 disks?: Array<any> | null,
+force: boolean,
+};
+export type DeployNodesData = {
+nodes: number[],
+force: boolean,
+};
+export type StopNodeData = {
+force: boolean,
 };
 export type StoreNodeData = {
 name: string,
@@ -330,21 +336,20 @@ ipAddress: string,
 type: string,
 accel: string | null,
 user?: string,
-isStorageServer?: boolean,
 hostname: string | null,
-storageEndpoint: string | null,
 };
 export type UpdateNodeData = {
 name?: string,
 user?: string | null,
 ipAddress?: string,
 hostname?: string | null,
-isActive?: boolean,
 isDraining?: boolean,
-isStorageServer?: boolean,
-storageEndpoint?: string | null,
 accel?: string | null,
 env?: string | null,
+};
+export type UpdateNodeEnvironmentData = {
+environment: string | null,
+chunkStoreAddress?: string | null,
 };
 }
 namespace Profile {
@@ -444,6 +449,7 @@ export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'ext
 export type MetricShape = 'long' | 'wide';
 export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';
+export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';

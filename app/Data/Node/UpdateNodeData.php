@@ -3,7 +3,6 @@
 namespace App\Data\Node;
 
 use App\Data\RequestData;
-use App\Models\Node;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Mappers\CamelCaseMapper;
 use Spatie\LaravelData\Optional;
@@ -17,13 +16,7 @@ class UpdateNodeData extends RequestData
         public string|Optional $ipAddress,
         public string|Optional|null $hostname,
         #[MapInputName(CamelCaseMapper::class)]
-        public bool|Optional $isActive,
-        #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isDraining,
-        #[MapInputName(CamelCaseMapper::class)]
-        public bool|Optional $isStorageServer,
-        #[MapInputName(CamelCaseMapper::class)]
-        public string|Optional|null $storageEndpoint,
         public string|Optional|null $accel,
         public string|Optional|null $env,
     ) {}
@@ -39,18 +32,7 @@ class UpdateNodeData extends RequestData
             'ipAddress' => 'sometimes|ip',
             // A DNS name only; see StoreNodeData for where it ends up.
             'hostname' => ['nullable', 'string', 'max:255', 'regex:/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i'],
-            'isActive' => 'sometimes|boolean',
             'isDraining' => 'sometimes|boolean',
-            'isStorageServer' => [
-                'sometimes', 'boolean',
-                function ($attribute, $value, $fail) use ($node) {
-                    if (filter_var($value, FILTER_VALIDATE_BOOLEAN)
-                        && Node::where('is_storage_server', true)->where('id', '!=', $node->id)->exists()) {
-                        $fail('Storage server exists.');
-                    }
-                },
-            ],
-            'storageEndpoint' => 'nullable|url',
             'accel' => 'nullable|string|in:intel,nvidia',
             'env' => 'nullable|string|max:10000',
         ];

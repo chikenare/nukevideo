@@ -2,9 +2,9 @@
 
 namespace App\Observers;
 
-use App\Jobs\StartNodeServicesJob;
-use App\Jobs\StopNodeServicesJob;
+use App\Enums\NodeType;
 use App\Models\Node;
+use App\Settings\NodeSettings;
 use Illuminate\Support\Str;
 
 class NodeObserver
@@ -14,16 +14,32 @@ class NodeObserver
         $node->uuid = Str::uuid()->toString();
     }
 
-    public function updated(Node $node): void
+    /**
+     * The first worker hosts the chunk store, so a new fleet needs nothing configured. Only while
+     * there is none: the store holds the in-flight videos' sources and chunks, and moving it
+     * because another node came along would strand them.
+     */
+    public function created(Node $node): void
     {
-        if (! $node->wasChanged('is_active')) {
-            return;
-        }
+        $settings = app(NodeSettings::class);
 
-        // Symmetric on purpose: the flag is what the dispatcher and the capacity check read, so a
-        // node whose containers do not match it is a node that accepts work it cannot do.
-        $node->is_active
-            ? StartNodeServicesJob::dispatch($node)
-            : StopNodeServicesJob::dispatch($node);
+        if ($node->type === NodeType::WORKER && $settings->chunk_store_address === '') {
+            $settings->chunk_store_address = $node->ip_address;
+            $settings->save();
+        }
+    }
+
+    /**
+     * Deleting the node that held the chunk store leaves an address nothing answers on; empty, the
+     * next worker created claims it, or another one is named in the node environment.
+     */
+    public function deleted(Node $node): void
+    {
+        $settings = app(NodeSettings::class);
+
+        if (($settings->chunkStore()[0] ?? null) === $node->ip_address) {
+            $settings->chunk_store_address = '';
+            $settings->save();
+        }
     }
 }

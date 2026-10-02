@@ -16,13 +16,13 @@ hero:
 features:
   - icon: 🎬
     title: Distributed Encoding
-    details: Videos are split into chunks and encoded in parallel across worker nodes with FFmpeg, SVT-AV1, and x264/x265. Audio is transcoded to AAC.
+    details: Videos are split into keyframe-aligned chunks and encoded in parallel across CPU (x264, x265, SVT-AV1) and GPU (Intel QSV, NVIDIA NVENC) worker nodes with FFmpeg. Audio is transcoded to AAC or Opus.
   - icon: 🎯
     title: Per-Title VMAF CRF
     details: The pipeline probes sample windows of each source, measures VMAF, and interpolates the CRF needed to hit a target quality per rendition.
   - icon: 📦
     title: Static CMAF Packaging
-    details: shaka-packager builds each output once into shared CMAF segments that serve both HLS and DASH — subtitles included. No on-the-fly repackaging.
+    details: shaka-packager builds each output once into shared CMAF segments that serve both HLS and DASH, with subtitles grafted into the same manifests. No on-the-fly repackaging.
   - icon: 📡
     title: Flexible Delivery
     details: Serve through self-hosted proxy nodes with token-validated S3 delivery, or point a Bunny CDN pull-zone at your S3 origin. Chosen per deployment.

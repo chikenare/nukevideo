@@ -32,7 +32,6 @@ const errors = ref<Record<string, string[]>>({})
 type EditableNode = Omit<Node, 'accel'> & {
   user: string
   hostname: string
-  storageEndpoint: string
   accel: string
 }
 const node = ref<EditableNode>({} as EditableNode)
@@ -43,7 +42,6 @@ const show = (initialNode: Node) => {
     ...raw,
     user: raw.user ?? '',
     hostname: raw.hostname ?? '',
-    storageEndpoint: raw.storageEndpoint ?? '',
     accel: raw.accel ?? 'none',
   }
   errors.value = {}
@@ -105,10 +103,6 @@ defineExpose({ show })
           <p class="text-xs text-muted-foreground">The public address playback links point at. Redeploy after changing: Traefik's router and the certificate are issued for it.</p>
           <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
         </div>
-        <div class="flex items-center justify-between">
-          <Label for="edit_node_active">Active</Label>
-          <Switch id="edit_node_active" v-model="node.isActive" @update:checked="node.isActive = $event" />
-        </div>
         <div v-if="node.type === 'proxy'" class="grid gap-2">
           <div class="flex items-center justify-between">
             <Label for="edit_node_draining">Draining</Label>
@@ -116,7 +110,7 @@ defineExpose({ show })
           </div>
           <p class="text-xs text-muted-foreground">
             Keeps the node out of new playback links while it goes on serving the sessions it has.
-            Use it before maintenance; deactivating stops the containers at once.
+            Use it before maintenance; Stop takes the containers down.
           </p>
         </div>
         <div v-if="node.type === 'worker'" class="grid gap-2">
@@ -134,20 +128,6 @@ defineExpose({ show })
           <p class="text-xs text-muted-foreground">Renditions using a GPU codec are routed to nodes with matching hardware. Redeploy after changing.</p>
           <p v-if="errors.accel" class="text-sm text-destructive">{{ errors.accel[0] }}</p>
         </div>
-        <div v-if="node.type === 'worker'" class="flex items-center justify-between">
-          <div>
-            <Label for="edit_node_storage">Storage Server (S3)</Label>
-            <p class="text-xs text-muted-foreground">This worker hosts the shared chunk store (RustFS). Only one node can be the storage server.</p>
-          </div>
-          <Switch id="edit_node_storage" v-model="node.isStorageServer" @update:checked="node.isStorageServer = $event" />
-        </div>
-        <div v-if="node.type === 'worker' && node.isStorageServer" class="grid gap-2">
-          <Label for="edit_node_storage_endpoint">Storage Endpoint</Label>
-          <Input id="edit_node_storage_endpoint" v-model="node.storageEndpoint" placeholder="e.g. http://10.0.0.5:9000" />
-          <p class="text-xs text-muted-foreground">Full endpoint (local or public) the other nodes use to reach this node's chunk store.</p>
-          <p v-if="errors.storageEndpoint" class="text-sm text-destructive">{{ errors.storageEndpoint[0] }}</p>
-        </div>
-        <p v-if="errors.isStorageServer" class="text-sm text-destructive">{{ errors.isStorageServer[0] }}</p>
 
         <div class="grid gap-2">
           <Label for="edit_node_env">Environment Overrides</Label>

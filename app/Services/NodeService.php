@@ -54,6 +54,14 @@ class NodeService
     // Environments whose in-flight work is disposable, so a deploy kills instead of draining.
     private const UNDRAINED_ENVIRONMENTS = ['local', 'staging'];
 
+    // The images of the containers a host shares, pinned to a release and pulled at deploy. Their
+    // tag is part of the config hash that decides whether a running one is kept, so bumping a
+    // version here is what updates the fleet — once, at each host's next deploy. A floating tag
+    // was only ever downloaded once per host and never changed the hash.
+    private const TRAEFIK_IMAGE = 'traefik:v3.6.25';
+
+    private const CHUNK_STORE_IMAGE = 'rustfs/rustfs:1.0.0';
+
     // Keeps the worker's idle Redis connection alive through ISP CGNAT during long ffmpeg
     // encodes; without outgoing traffic the NAT mapping is dropped and the next command read-errors.
     private const WORKER_SYSCTLS = [
@@ -101,7 +109,6 @@ class NodeService
     public function getEnvironmentVariables(Node $node): array
     {
         $scheme = Node::proxyScheme();
-        $endpoint = Node::where('is_storage_server', true)->value('storage_endpoint');
 
         $base = [
             'APP_ENV' => 'APP_ENV='.config('app.env'),
@@ -118,8 +125,11 @@ class NodeService
             'INTERNAL_API_URL' => 'INTERNAL_API_URL='.config('nuke.internal.url'),
         ];
 
-        if ($endpoint) {
-            $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT={$endpoint}";
+        // Workers only: a proxy reads the primary bucket and never the chunk store.
+        $chunkStore = app(NodeSettings::class)->chunkStore();
+        if ($node->type === NodeType::WORKER && $chunkStore) {
+            [$host, $port] = $chunkStore;
+            $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT=http://{$host}:{$port}";
         }
 
         if ($node->accel) {
@@ -193,6 +203,11 @@ class NodeService
         'AWS_SECRET_ACCESS_KEY',
         'AWS_BUCKET',
         'AWS_ENDPOINT',
+        // Fleet-wide by nature: chunks are planned against the timeout of the node that prepares
+        // the video and encoded on whichever node pulls them, and the reaper and the redeploy
+        // drain read the constants these come from. One node set apart kills the others' chunks.
+        'VIDEO_WORKER_TIMEOUT',
+        'REDIS_QUEUE_RETRY_AFTER',
     ];
 
     /**
@@ -279,6 +294,30 @@ class NodeService
     }
 
     /**
+     * `docker start` on what the deploy raised. Only starts containers that exist: a node that
+     * was never deployed has nothing to start, and saying so beats a deploy half-happening
+     * behind a button.
+     */
+    public function startServices(Node $node, \Closure $onOutput): void
+    {
+        $containers = implode(' ', $node->deployedContainerNames());
+        $this->ssh($node, "docker start {$containers} 2>&1", 60, onOutput: $onOutput);
+        $node->markHealthy();
+    }
+
+    /**
+     * Graceful by default: the worker was created with `--stop-timeout` WORKER_STOP_GRACE, so a
+     * plain `docker stop` is Horizon finishing its in-flight jobs first. `$force` kills — those
+     * jobs redeliver after QUEUE_RETRY_AFTER instead.
+     */
+    public function stopServices(Node $node, bool $force, \Closure $onOutput): void
+    {
+        $containers = implode(' ', $node->deployedContainerNames());
+        $verb = $force ? 'kill' : 'stop';
+        $this->ssh($node, "docker {$verb} {$containers} 2>&1 || true", self::WORKER_STOP_GRACE + 60, onOutput: $onOutput);
+    }
+
+    /**
      * The deploy is bash that lives in `resources/deploy/*.sh`, unchanged from node to node. What
      * this composes is the header in front of it: one assignment per variable, every value
      * quoted, and nothing a shell would read as code. The PHP side decides (which image, which
@@ -356,8 +395,8 @@ class NodeService
 
     private function workerVars(Node $node): array
     {
-        if (! Node::where('is_storage_server', true)->whereNotNull('storage_endpoint')->exists()) {
-            throw new \RuntimeException('No storage server configured. Flag one worker as the storage server (with an endpoint) before deploying.');
+        if (! app(NodeSettings::class)->chunkStore()) {
+            throw new \RuntimeException('No chunk store configured. Set its address under Nodes → Environment before deploying a worker.');
         }
 
         $dockerFlags = $this->extractDockerFlags($node);
@@ -385,17 +424,20 @@ class NodeService
         ];
     }
 
+    /**
+     * Every worker gets the store's run arguments, and its deploy decides on the host itself
+     * whether to use them: the store runs where the fleet's chunk store address resolves to one of
+     * the node's own interfaces. Compared there and not against the node's `ip_address`, which is
+     * the address the panel reaches it by over SSH — often the public one, while the store must
+     * answer on the private network, or by a DNS name. Published on that address alone, never on
+     * every interface: it holds every in-flight source and chunk, behind the same credentials as
+     * the primary bucket.
+     */
     private function chunkStoreVars(Node $node): array
     {
-        if (! $node->is_storage_server) {
-            return ['STORAGE_RUN_ARGS' => ''];
-        }
-
         $disk = config('filesystems.disks.chunks');
-        $port = (int) (parse_url((string) $node->storage_endpoint, PHP_URL_PORT) ?: 9000);
-        $storeName = $node->storageContainerName();
 
-        $runArgs = $this->buildDockerRunArgs($storeName, 'rustfs/rustfs:latest', [
+        $options = [
             'env' => [
                 'RUSTFS_ACCESS_KEY='.$disk['key'],
                 'RUSTFS_SECRET_KEY='.$disk['secret'],
@@ -403,23 +445,39 @@ class NodeService
                 'RUSTFS_CONSOLE_ENABLE=false',
             ],
             'labels' => ['vector.enable='.Node::containerPrefix()],
-            'ports' => ["{$port}:9000"],
             // Prefixed like the containers: a development store must never be handed the volume
             // holding the fleet's mirrored sources and chunks.
             'volumes' => [Node::containerPrefix().'_chunks:/data'],
+            // $CHUNK_STORE_IP is resolved by worker.sh, on the node.
+            'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"'],
             'command' => '/data',
-        ]);
+        ];
+
+        // worker.sh keeps a running store whose label matches, as proxy.sh does Traefik: recreating
+        // it on every deploy of its worker cut the other workers' transfers mid fleet deploy. The
+        // hash covers the arguments and the address; the IP the node resolves is appended there,
+        // since a DNS name can move without the address changing.
+        [$host, $port] = app(NodeSettings::class)->chunkStore();
+        $config = substr(md5($this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options)."|{$host}:{$port}"), 0, 12);
+        $options['raw'][] = '-l "nukevideo.config='.$config.'-$CHUNK_STORE_IP"';
+        $runArgs = $this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options);
 
         // Readiness and the bucket in one probe, run with the s5cmd the worker image already carries
         // — minio/mc used to do it, and its image is gone from Docker Hub. `mb` alone is not
         // idempotent (a redeploy finds the bucket and errors), so it only runs when the bucket
         // list lacks it; while the store is still booting both fail and the deploy retries.
-        $s5cmd = sprintf('s5cmd --endpoint-url http://127.0.0.1:%d', $port);
+        // Single-quoted in the header and expanded inside the probe container, which is handed
+        // CHUNK_STORE_IP: the store answers on that address only.
+        $s5cmd = 's5cmd --endpoint-url http://$CHUNK_STORE_IP:'.$port;
         $bucket = escapeshellarg('s3://'.$disk['bucket']);
 
         return [
-            'STORAGE_CONTAINER' => $storeName,
+            'CHUNK_STORE_HOST' => $host,
+            'CHUNK_STORE_PORT' => $port,
+            'STORAGE_CONTAINER' => $node->storageContainerName(),
             'STORAGE_RUN_ARGS' => $runArgs,
+            'STORAGE_CONFIG' => $config,
+            'STORAGE_IMAGE' => self::CHUNK_STORE_IMAGE,
             'STORAGE_ACCESS_KEY' => 'AWS_ACCESS_KEY_ID='.$disk['key'],
             'STORAGE_SECRET_KEY' => 'AWS_SECRET_ACCESS_KEY='.$disk['secret'],
             'STORAGE_BUCKET_CMD' => "{$s5cmd} ls | grep -qxE '.*[[:space:]]'{$bucket} || {$s5cmd} mb {$bucket}",
@@ -475,6 +533,9 @@ class NodeService
                 '${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}',
             ],
             'log_opts' => self::PROXY_LOG_OPTS,
+            // nginx is PID 1, and SIGTERM is its fast shutdown: open connections are dropped.
+            // SIGQUIT finishes the requests in flight, which is what a `docker stop` means here.
+            'stop_signal' => 'SIGQUIT',
         ]);
 
         return [
@@ -484,7 +545,7 @@ class NodeService
             'CACHE_FALLBACK_MAX_SIZE' => ProxyCacheService::FALLBACK_MAX_SIZE,
             // Unset means every spare disk; a list (possibly empty) means exactly those.
             'CHOSEN_DISKS' => $disks === null ? null : implode(' ', $disks),
-            'TRAEFIK_RUN_ARGS' => $this->traefikRunArgs($isProduction),
+            ...$this->traefikVars($isProduction),
         ];
     }
 
@@ -493,8 +554,13 @@ class NodeService
      * another container already holds port 80, which is a host with its own reverse proxy (the
      * development machine, say). Development terminates no TLS: the edge is plain HTTP behind a
      * hostname; production adds the ACME resolver the proxy's router labels name.
+     *
+     * Returned with a hash of everything it is run with. proxy.sh keeps a running
+     * Traefik whose label carries the same hash — replacing it drops TLS on the host for a few
+     * seconds — and replaces it otherwise. The image alone would not do: a development panel's
+     * Traefik has no TLS and runs under the same name, and a flag change keeps the image tag.
      */
-    private function traefikRunArgs(bool $tls): string
+    private function traefikVars(bool $tls): array
     {
         $command = '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
             .' --entrypoints.web.address=:80';
@@ -505,7 +571,7 @@ class NodeService
                 .' --certificatesresolvers.le.acme.storage=/certs/acme.json';
         }
 
-        return $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
+        $options = [
             'ports' => $tls ? ['80:80', '443:443', '8080:8080'] : ['80:80', '8080:8080'],
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
@@ -513,7 +579,17 @@ class NodeService
             ],
             'command' => $command,
             'network' => 'nukevideo_default',
-        ]);
+        ];
+        $config = substr(md5($this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, $options)), 0, 12);
+
+        return [
+            'TRAEFIK_RUN_ARGS' => $this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, [
+                ...$options,
+                'labels' => ["nukevideo.config={$config}"],
+            ]),
+            'TRAEFIK_CONFIG' => $config,
+            'TRAEFIK_IMAGE' => self::TRAEFIK_IMAGE,
+        ];
     }
 
     /**
@@ -774,6 +850,10 @@ class NodeService
         if (! empty($options['group_add'])) {
             // Raw on purpose: the value may be a shell expansion resolved on the node.
             $cmd .= " --group-add {$options['group_add']}";
+        }
+
+        if (! empty($options['stop_signal'])) {
+            $cmd .= ' --stop-signal '.$options['stop_signal'];
         }
 
         if (! empty($options['stop_timeout'])) {

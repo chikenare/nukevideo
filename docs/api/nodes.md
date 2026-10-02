@@ -10,11 +10,42 @@ See the [Nodes guide](/guide/nodes) for architecture details.
 GET /api/nodes
 ```
 
+**Response:** `{ "data": { "nodes": [/* Node objects */] } }` — the whole fleet, unpaginated.
+
 ## Get Node
 
 ```
 GET /api/nodes/{id}
 ```
+
+**Response:**
+
+```json
+{
+  "data": {
+    "id": 1,
+    "uuid": "9b2f…",
+    "name": "edge-1",
+    "user": "root",
+    "ipAddress": "203.0.113.10",
+    "type": "proxy",
+    "accel": null,
+    "hostname": "edge-1.example.com",
+    "isActive": true,
+    "isDraining": false,
+    "isHealthy": true,
+    "healthFailures": 0,
+    "lastHealthyAt": "2026-09-30T12:00:00+00:00",
+    "services": [{ "name": "nukevideo_proxy_1", "running": 1, "desired": 1, "state": "running" }],
+    "log": null,
+    "env": null,
+    "lastSeenAt": "5 minutes ago"
+  }
+}
+```
+
+`isActive` is only changed by deploy, start and stop (see [Operations](#operations)).
+`lastSeenAt` is human-readable ("5 minutes ago"), not a timestamp.
 
 ## Create Node
 
@@ -27,27 +58,39 @@ POST /api/nodes
 ```json
 {
   "name": "worker-us-east-1",
-  "ip_address": "203.0.113.10",
-  "user": "deploy",
-  "type": "worker",
-  "hostname": "worker-1.example.com"
+  "ipAddress": "203.0.113.10",
+  "user": "root",
+  "type": "worker"
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | Yes | Display name |
-| `ip_address` | string | Yes | Server IP address |
-| `user` | string | Yes | SSH username |
+| `name` | string | Yes | Display name, unique |
+| `ipAddress` | string | Yes | Server IP address, used for SSH |
 | `type` | string | Yes | `worker` or `proxy` |
-| `hostname` | string | No | Server hostname (required for proxy nodes) |
-| `workers` | integer | No | Number of parallel workers (1–20 for workers, 1 for proxy) |
+| `user` | string | No | SSH username, a POSIX login name. Defaults to `root` |
+| `hostname` | string | No | DNS name the edge is served at. Needed for a proxy to receive playback links |
+| `accel` | string | No | `intel` or `nvidia` for a GPU worker; omit (or `null`) for CPU |
+
+**Response:** `{ "data": { /* Node */ } }`. Creating a node does not deploy it: that is a
+separate [deploy](#deploy-a-node).
 
 ## Update Node
 
 ```
 PUT /api/nodes/{id}
 ```
+
+`PATCH` works too. Every field is optional: `name`, `user`, `ipAddress`, `hostname`, `accel`,
+plus:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `isDraining` | boolean | Stop sending new playback links to this proxy (see [Scaling delivery](/guide/nodes#scaling-delivery)) |
+| `env` | string | `KEY=value` lines for this node alone, applied at its next deploy on top of the [node environment](#node-environment) |
+
+**Response:** `{ "data": { /* Node */ }, "message": "Node updated successfully" }`.
 
 ## Delete Node
 
@@ -57,55 +100,191 @@ Deletes the node and removes its Docker containers from the remote server.
 DELETE /api/nodes/{id}
 ```
 
-## List Containers
+Answers `409` while the node has an operation queued or running: a deploy finishing after the
+delete would recreate the container.
 
-Get Docker containers running on a node.
-
-```
-GET /api/nodes/{id}/containers
-```
-
-## Pending Jobs
-
-Get queue statistics for a node.
+## Validate a Node
 
 ```
-GET /api/nodes/{id}/pending-jobs
+POST /api/nodes/{id}/validate
+```
+
+Runs its checks over SSH: `docker`, `network`, `containers` and `disk`, plus `gpu` (a test encode)
+on a node with `accel` and `cache` (the cache pool) on a proxy.
+
+**Response:**
+
+```json
+{
+  "checks": [
+    { "key": "docker", "label": "Docker", "status": "ok", "output": "Docker version 27.3.1 …" },
+    { "key": "disk", "label": "Disk Space", "status": "error", "output": "Connection refused" }
+  ]
+}
+```
+
+## Cache Disks
+
+What a deploy would do to a proxy's disks, so they can be picked before deploying (see
+[Cache disks](/guide/nodes#cache-disks)).
+
+```
+GET /api/nodes/{id}/cache-disks
 ```
 
 **Response:**
 
 ```json
 {
-  "pending": 5,
-  "reserved": 2,
-  "total": 7
+  "data": {
+    "preselect": true,
+    "disks": [
+      { "device": "/dev/sdb", "size": 4000787030016, "model": "…", "state": "empty", "detail": "" }
+    ]
+  }
 }
 ```
 
-## Deployment
+`state` is `system` (never touched), `nukevideo` (already the cache, mounted as is), or `empty` /
+`foreign` (formatted into the pool if listed in the deploy's `disks`). `preselect` is `false` on a
+development panel. A worker answers `{ "preselect": false, "disks": [] }`.
 
-### Get Deploy Steps
+## Bootstrap Command
+
+For a worker the panel cannot reach over SSH (behind NAT, say): a one-line command that installs the
+worker when run on the machine itself.
 
 ```
-GET /api/nodes/{id}/deploy/steps
+POST /api/nodes/{id}/bootstrap-token
 ```
 
-Returns the list of available deployment steps for the node.
+**Response:** `{ "command": "curl -fsSL \"https://…/api/nodes/1/bootstrap?…\" | bash" }`. Workers
+only (`422` for a proxy).
 
-### Execute Deploy Step
+The URL (`GET /api/nodes/{id}/bootstrap`, no auth — it is a signed URL) serves the deploy script.
+It is valid for **15 minutes** and **once**: a second fetch answers `410`. The script carries the
+instance's credentials in cleartext, so treat the command like a password.
+
+## Node Environment
+
+`KEY=value` lines injected into every node's containers at deploy time. A node's own `env` is
+applied on top; variables the deploy owns cannot be overridden by either.
+
+```
+GET   /api/node-environment
+PATCH /api/node-environment
+```
+
+Both answer `{ "data": { "environment": "…", "chunkStoreAddress": "10.0.0.20" } }`. `PATCH` takes
+`environment` (required, empty allowed, up to 10000 characters) and, optionally,
+`chunkStoreAddress`: the [chunk store](/guide/nodes#chunk-store)'s private `host` or `host:port`,
+or empty. Both take effect at each worker's next deploy.
+
+## Operations
+
+Deploy, start and stop run in the background: each call answers `202` at once with the operation
+it queued, and `409` when the node already has one queued or running. An operation is an
+activity-log entry (`logName: "node"`) whose `properties.status` goes `queued` → `running` →
+`succeeded`, `failed` or `cancelled`.
+
+### Deploy a Node
 
 ```
 POST /api/nodes/{id}/deploy
 ```
 
-**Request Body:**
+```json
+{
+  "force": false,
+  "disks": ["/dev/sdb"]
+}
+```
+
+`force` skips the drain: a worker's running jobs are killed instead of finished, and redeliver
+about 31 minutes later. It does nothing on a proxy. `disks` is required for a production proxy,
+`[]` included (see [Cache disks](/guide/nodes#cache-disks)). A successful deploy activates the node.
+
+**Response** `202`:
 
 ```json
 {
-  "step": "step_name"
+  "data": {
+    "id": 42,
+    "logName": "node",
+    "description": "Deploy worker-01",
+    "subjectType": "App\\Models\\Node",
+    "subjectId": 1,
+    "causerType": "App\\Models\\User",
+    "causerId": 1,
+    "event": "node_deploy",
+    "properties": { "action": "deploy", "force": false, "disks": null, "batch": null, "status": "queued" },
+    "createdAt": "2026-09-30T12:00:00+00:00",
+    "updatedAt": "2026-09-30T12:00:00+00:00"
+  }
 }
 ```
+
+### Deploy Several Nodes
+
+```
+POST /api/nodes/deploy
+```
+
+```json
+{
+  "nodes": [1, 2, 3],
+  "force": false
+}
+```
+
+Workers deploy in parallel. Proxies deploy one at a time, and the first one that fails cancels the
+rest. A fleet deploy never formats a disk. Busy and stopped nodes are skipped: a stopped node stays
+stopped until it is started or deployed on its own. **Response** `202`:
+`{ "data": [/* one operation per node */], "skipped": [3] }`. The operations share a
+`properties.batch`.
+
+### Start a Node
+
+```
+POST /api/nodes/{id}/start
+```
+
+Starts the containers of a node that was deployed and stopped, and activates it.
+
+### Stop a Node
+
+```
+POST /api/nodes/{id}/stop
+```
+
+```json
+{ "force": false }
+```
+
+Deactivates the node first, so it takes no new work, then stops its containers. A worker's running
+jobs are finished first (up to 11 minutes) unless `force` is set.
+
+### List Operations
+
+```
+GET /api/node-operations?node={id}
+```
+
+Newest first, 20 per page, `node` optional. Admins also see these in the activity log
+(`GET /api/activity-log`), as `node_deploy`, `node_start` and `node_stop` events.
+
+### Read an Operation's Output
+
+```
+GET /api/node-operations/{operation}/lines?after={n}
+```
+
+```json
+{ "lines": ["=== Worker image ===", "..."], "next": 57, "status": "running" }
+```
+
+Poll with `after` set to the previous `next` until `status` is no longer `queued` or `running`.
+Output is kept for seven days.
 
 ## SSH Key
 

@@ -6,8 +6,9 @@ import NodeService from '@/services/NodeService'
 type Node = App.Data.NodeData
 import CreateNodeDialog from './CreateNodeDialog.vue'
 import NodeTable from './NodeTable.vue'
+import NodeOperationsDialog from './NodeOperationsDialog.vue'
 import NodeEnvironmentDialog from './NodeEnvironmentDialog.vue'
-import { Settings } from '@lucide/vue'
+import { Settings, ScrollText } from '@lucide/vue'
 
 const nodesData = ref<{ nodes: Node[] }>({ nodes: [] })
 const loading = ref(true)
@@ -25,13 +26,14 @@ const fetchNodes = async () => {
 }
 
 const envDialogRef = ref<InstanceType<typeof NodeEnvironmentDialog>>()
+const logsDialog = ref<InstanceType<typeof NodeOperationsDialog>>()
 
 const openEnvDialog = () => {
   envDialogRef.value?.show()
 }
 
 const onNodeUpdated = (updated: Node) => {
-  const idx = nodesData.value.nodes.findIndex(n => n.id === updated.id)
+  const idx = nodesData.value.nodes.findIndex((n) => n.id === updated.id)
   if (idx !== -1) {
     nodesData.value.nodes[idx] = updated
   }
@@ -59,6 +61,10 @@ onUnmounted(() => {
           <Settings class="h-4 w-4 mr-1" />
           Environment
         </Button>
+        <Button variant="outline" size="sm" @click="logsDialog?.show()">
+          <ScrollText class="h-4 w-4 mr-1" />
+          Logs
+        </Button>
         <CreateNodeDialog @created="fetchNodes" />
       </div>
     </div>
@@ -71,8 +77,16 @@ onUnmounted(() => {
       No nodes found. Click "Add Node" to get started.
     </div>
 
-    <NodeTable v-else :nodes="nodesData.nodes" @updated="onNodeUpdated" @deleted="fetchNodes" />
+    <NodeTable
+      v-else
+      :nodes="nodesData.nodes"
+      @updated="onNodeUpdated"
+      @deleted="fetchNodes"
+      @operation="fetchNodes"
+      @logs="(nodeId) => logsDialog?.show(nodeId)"
+    />
 
     <NodeEnvironmentDialog ref="envDialogRef" />
+    <NodeOperationsDialog ref="logsDialog" :nodes="nodesData.nodes" />
   </div>
 </template>

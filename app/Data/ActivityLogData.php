@@ -33,7 +33,8 @@ class ActivityLogData extends Data
             causerType: $activity->causer_type,
             causerId: $activity->causer_id,
             event: $activity->event,
-            properties: $activity->properties?->toArray() ?? [],
+            // `lock` is a node operation's lock owner: whoever holds it can release the lock.
+            properties: $activity->properties?->except('lock')->toArray() ?? [],
             createdAt: $activity->created_at->toIso8601String(),
             updatedAt: $activity->updated_at?->toIso8601String(),
         );

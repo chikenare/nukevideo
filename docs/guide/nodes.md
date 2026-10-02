@@ -11,11 +11,41 @@ Nodes are remote servers that handle video encoding (workers) or content deliver
 
 ## Worker Nodes
 
-Worker nodes run FFmpeg-based containers that process video encoding jobs from Redis queues. Sources are split into chunks and encoded in parallel across containers (SVT-AV1, x264/x265), then packaged into static CMAF.
+Each worker node runs one container (Horizon) that pulls encoding jobs from Redis queues. Sources are split into keyframe-aligned chunks and encoded in parallel across every worker of the fleet (x264, x265, SVT-AV1 on CPU; QSV or NVENC on a node whose `accel` is `intel` or `nvidia`), then packaged into static CMAF.
+
+### Chunk store
+
+The workers share a scratch S3 store on their private network — RustFS, the `chunks` disk — for
+everything between the primary bucket and the final package: the mirrored source, every encoded
+chunk and the staged audio and subtitles. It runs on one worker, and all of them must reach it
+over a private network: that traffic is the bulk of an encode, so put the store and the workers
+in the same network (with a VPN such as WireGuard or Tailscale if they span providers) rather than
+paying egress between them.
+
+Its address is one setting for the whole fleet, under **Nodes → Environment → Chunk store**: an IP
+or a DNS name, with `:port` when 9000 is taken on that host. The first worker you create fills it
+in with its own IP. At each worker's deploy the node checks whether the address resolves to one of
+its own interfaces; the one where it does runs the store, published on that address only — never
+on every interface — and every worker is pointed at it. A redeploy of that worker leaves a running
+store as it is, unless its address, credentials or image changed, so the other workers' transfers
+are not cut.
+
+The images the hosts share — the chunk store, Traefik and Vector — are pinned to a release in
+`NodeService` and pulled at deploy. Updating one is a version bump there: each host picks it up at
+its next deploy, recreating the container once. To recreate one without a new version (a container
+in a bad state), remove it on the host (`docker rm -f <name>`) and redeploy the node. A worker's deploy fails when no address is
+set, and when the store does not answer there within two minutes (so an address that is no
+worker's own is caught at deploy time, not on the first chunk). Proxies never use it. The API host does,
+to clear and check the mirror when a video is retried: set `CHUNKS_S3_ENDPOINT=http://<address>`
+in its `.env` (with the store's port), since it is not deployed by the panel.
+
+The store holds the videos in flight, so it is not meant to move: change the address only with no
+video processing, then redeploy every worker. Deleting the node that runs it clears the address;
+the next worker created claims it, or set it by hand.
 
 ### Job Distribution
 
-The system automatically assigns videos to the **least busy** worker with available slots. Each worker node can run 1–20 parallel encoding containers.
+Workers are not assigned videos: they pull. `videos:dispatch` (every five seconds on the API host) admits pending videos while each hardware family — CPU, Intel, NVIDIA — has fewer videos in flight than it has active worker nodes plus one, and a video's chunk jobs then go to its family's queue, drained by every worker of that family. GPU nodes do not drain the CPU queue. How many chunks a node encodes at once is sized from its CPU cores and RAM when the container starts; `VIDEO_WORKER_PROCESSES` (CPU) or `GPU_WORKER_PROCESSES` in the node's environment overrides it.
 
 ## Proxy Nodes
 
@@ -42,7 +72,7 @@ What a deploy does with the host's disks:
 
 The panel lists those disks, with whatever it found on them, and asks before the deploy runs; untick one to leave it alone (a slow or small disk only drags a stripe down). A host without a single spare disk caches into a docker volume on the OS disk, capped at 10 GB, and the deploy says so.
 
-The edge then sizes its cache to the pool when it starts: everything but a reserve of 3 % (at least 20 GB) becomes `max_size`, the reserve becomes `min_free`, and the keys zone is sized for the number of segments the pool can hold. Nothing about the cache is configured by hand, and nothing expires by the calendar — eviction is the LRU's job.
+The edge then sizes its cache to the pool when it starts: everything but a reserve of 3 % (at least 20 GB) becomes `max_size`, the reserve becomes `min_free`, and the keys zone is sized for the number of segments the pool can hold. Nothing about the cache is configured by hand, and beyond dropping a segment nobody has played for 30 days, nothing expires by the calendar — eviction is the LRU's job.
 
 **Reading the numbers.** The nodes page shows, per proxy and for the last week, the cache hit ratio by bytes, what the node served and what it fetched from S3 to do so (`GET /api/analytics/edges?from&to`, admin only). Downloads and manifests never enter the cache and are left out of the ratio. A ratio that holds while the pool fills is the cache doing its job; a ratio that falls with a full pool means the working set outgrew the disk — add disk, or add a node so each one holds less of the catalogue. A low ratio with an empty pool is a cold cache: a fresh deploy, a rebuilt pool, or a node that just joined the ring.
 
@@ -67,9 +97,9 @@ Every proxy node shares the token secret, so any of them can serve any video. Wh
 
 A proxy is **routable** when it is active, has a hostname, is not draining and is answering the health probe.
 
-**Draining.** Toggle it on a node before maintenance or before taking it out for good. New playback links go to its ring neighbours; the node goes on serving the sessions it has. Deactivating a node, by contrast, stops its containers at once. Playback links stay valid for the token window (an hour by default) plus the segment query-token window (another hour): wait that long after draining before deactivating, and nobody notices.
+**Draining.** Toggle it on a node before maintenance or before taking it out for good. New playback links go to its ring neighbours; the node goes on serving the sessions it has. Stopping a node, by contrast, takes its containers down. Playback links stay valid for the token window (an hour by default), and the segments a session fetches expire with its link: wait that long after draining before stopping it, and nobody notices.
 
-**Health.** `nodes:probe` runs every minute on the API host and fetches `/healthz` on every active proxy The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or reactivation. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
+**Health.** `nodes:probe` runs every minute on the API host (when the self-hosted CDN is the provider) and fetches `/healthz` on every active proxy with a hostname. The edge answers with a header carrying its own node id, and only that counts as alive — a 404 from Traefik, a 403 from Cloudflare or somebody else's site at the hostname all count as silence. After three consecutive failures the node is taken out of new links and marked **unhealthy** in the panel; the first good probe puts it back, as does a successful deploy or start. Failures in the first 10 minutes after a deploy or an edit of the node are not counted, which covers a certificate still being issued or DNS still settling. Sessions already on a node that dies are lost; this is for the next ones. Should every proxy look dead at once, the resolver assumes the probe is wrong rather than the fleet and keeps linking to all active nodes.
 
 An edge from before `/healthz` existed fails the probe and drops out of rotation: redeploy it.
 
@@ -113,32 +143,48 @@ one before switching, so the panel never loses access — see [Rotate the SSH Ke
 POST /api/nodes
 {
   "name": "worker-us-east-1",
-  "ip_address": "203.0.113.10",
+  "ipAddress": "203.0.113.10",
   "user": "root",
-  "type": "worker",
-  "hostname": "worker-1.nukevideo.com"
+  "type": "worker"
 }
 ```
 
-### Deploying
+A proxy also needs a `hostname`: it is the address playback links point at. See [Create Node](/api/nodes#create-node) for every field.
 
-Deployment runs a series of steps on the remote server via SSH:
+A worker that cannot be reached over SSH (behind NAT, say) can install itself instead: **Setup → Install**
+in the node's menu generates a one-time `curl … | bash` command to run on the machine — see
+[Bootstrap Command](/api/nodes#bootstrap-command).
 
-1. Check the deployment steps available:
-   ```
-   GET /api/nodes/{id}/deploy/steps
-   ```
+### Deploying, starting and stopping
 
-2. Execute a specific step:
-   ```
-   POST /api/nodes/{id}/deploy
-   { "step": "step_name" }
-   ```
+A node has three actions, in its menu on the nodes page: **Deploy**, **Start** and **Stop**. They
+run in the background — close the tab and nothing stops. **Logs** (next to Add Node, or in a
+node's menu) shows the output of the latest operation, of any node or of the one picked; the
+history of every operation is in the **Activity Log**. A node runs one operation
+at a time.
 
-### Monitoring
+- **Deploy** installs what the node needs, pulls the image and recreates the containers. It is also
+  how a node is updated. On a production worker it waits for the running jobs to finish (up to 11
+  minutes; development and staging do not wait); **force** kills them instead, and they are picked
+  up again about 31 minutes later. On a proxy the gap is the edge's own startup, a second or two
+  that players ride out on their buffer; the deploy fails if the new edge does not answer
+  `/healthz`, and Traefik is only replaced when it is not running or its image or flags changed.
+  Deploying a stopped node starts it.
+- **Stop** takes the node out first — no new videos, no new playback links — then stops its
+  containers, gracefully or, with force, at once. The containers stay stopped across reboots.
+- **Start** brings a stopped node back.
 
-- **Containers** — `GET /api/nodes/{id}/containers` lists Docker containers on the node.
-- **Pending Jobs** — `GET /api/nodes/{id}/pending-jobs` returns queue statistics.
+To update the fleet, select the nodes and **Deploy selected**. Stopped nodes are left out. Workers deploy all at once (encoding
+waits meanwhile); proxies deploy one at a time, and the first one that fails cancels the rest, so a
+broken image never takes more than one edge down. A fleet deploy never formats a disk: adding one to
+a proxy's cache pool is a deploy of that node alone.
+
+### Checking a node
+
+**Setup → Validate** (`POST /api/nodes/{id}/validate`) runs a set of checks over SSH — Docker, the Docker
+network, the node's running containers, free disk, plus a test encode on a GPU node and the cache
+pool on a proxy — and reports each one as `ok` or `error` with its output. How many videos are
+waiting, running or failed is `GET /api/analytics/queue`.
 
 ## API Endpoints
 
@@ -147,9 +193,14 @@ Deployment runs a series of steps on the remote server via SSH:
 | `GET` | `/api/nodes` | List all nodes | Admin |
 | `POST` | `/api/nodes` | Create a node | Admin |
 | `GET` | `/api/nodes/{id}` | Get a node | Admin |
-| `PUT` | `/api/nodes/{id}` | Update a node | Admin |
+| `PUT`/`PATCH` | `/api/nodes/{id}` | Update a node | Admin |
 | `DELETE` | `/api/nodes/{id}` | Delete a node and its containers | Admin |
-| `GET` | `/api/nodes/{id}/containers` | List containers | Admin |
-| `GET` | `/api/nodes/{id}/pending-jobs` | Queue statistics | Admin |
-| `GET` | `/api/nodes/{id}/deploy/steps` | Get deploy steps | Admin |
-| `POST` | `/api/nodes/{id}/deploy` | Execute deploy step | Admin |
+| `POST` | `/api/nodes/{id}/validate` | Run the health checks | Admin |
+| `GET` | `/api/nodes/{id}/cache-disks` | What a deploy would do to a proxy's disks | Admin |
+| `POST` | `/api/nodes/{id}/bootstrap-token` | One-time install command (workers) | Admin |
+| `POST` | `/api/nodes/{id}/deploy` | Deploy a node | Admin |
+| `POST` | `/api/nodes/{id}/start` | Start a node | Admin |
+| `POST` | `/api/nodes/{id}/stop` | Stop a node | Admin |
+| `POST` | `/api/nodes/deploy` | Deploy several nodes | Admin |
+| `GET` | `/api/node-operations` | List operations | Admin |
+| `GET` | `/api/node-operations/{id}/lines` | An operation's output | Admin |

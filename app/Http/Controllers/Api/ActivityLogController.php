@@ -20,6 +20,9 @@ class ActivityLogController extends Controller
             [Video::class],
             fn ($query) => $query->where('project_id', $project->id),
         )
+            // Node operations belong to no project; the operator sees them in every one. A
+            // project key authenticates as the Project, which has no `is_admin` at all.
+            ->when($request->user()?->is_admin, fn ($query) => $query->orWhere('log_name', 'node'))
             ->latest()
             ->paginate(20);
 

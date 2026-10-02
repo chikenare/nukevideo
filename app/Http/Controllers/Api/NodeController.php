@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Api;
 
 use App\Data\CacheDiskData;
-use App\Data\Node\DeployNodeData;
 use App\Data\Node\StoreNodeData;
 use App\Data\Node\UpdateNodeData;
 use App\Data\NodeData;
@@ -12,6 +11,7 @@ use App\Enums\NodeType;
 use App\Http\Controllers\Controller;
 use App\Models\Node;
 use App\Services\DockerService;
+use App\Services\NodeOperationService;
 use App\Services\NodeService;
 use App\Services\ProxyCacheService;
 use Illuminate\Http\Request;
@@ -19,7 +19,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\Str;
-use Spatie\LaravelData\Optional;
 
 class NodeController extends Controller
 {
@@ -56,56 +55,6 @@ class NodeController extends Controller
         ]);
     }
 
-    public function deploy(DeployNodeData $data, Node $node)
-    {
-        // Skip waiting for in-flight jobs (they redeliver ~31 min later instead): ?drain=0.
-        $drain = request()->boolean('drain', true);
-
-        // Which spare disks to format into the cache pool, as the panel listed them. An empty
-        // list means none — keep the cache off the disks and in a volume. The list is mandatory
-        // for a production proxy ({@see DeployNodeData}): the service reads a missing one as
-        // "every spare disk", and a missing list must never mean that by accident. A development
-        // panel's deploy target is often the developer's own machine, where "every spare disk"
-        // is a backup drive, so there an absent list means none.
-        $disks = $data->disks instanceof Optional ? null : $data->disks;
-
-        if ($disks === null && app()->isLocal()) {
-            $disks = [];
-        }
-
-        // Belt and braces over the validation: null past this point is "all", and only a
-        // worker (whose deploy ignores the list) may get there without having chosen.
-        abort_if($disks === null && $node->type === NodeType::PROXY, 422, 'A proxy deploy needs the list of disks to format (an empty list formats none).');
-
-        return response()->stream(function () use ($node, $drain, $disks) {
-            $send = function (string $type, string $data = '') {
-                echo 'data: '.json_encode(['type' => $type, 'data' => $data])."\n\n";
-                if (ob_get_level()) {
-                    ob_flush();
-                }
-                flush();
-            };
-
-            try {
-                if (! $node->is_active) {
-                    throw new \RuntimeException('Node is not active');
-                }
-
-                $this->nodeService->runFullDeploy($node, function ($output) use ($send) {
-                    $send('output', $output);
-                }, $drain, $disks);
-                $send('done');
-            } catch (\Throwable $e) {
-                $send('error', $e->getMessage());
-            }
-        }, 200, [
-            'Content-Type' => 'text/event-stream',
-            'Cache-Control' => 'no-cache',
-            'Connection' => 'keep-alive',
-            'X-Accel-Buffering' => 'no',
-        ]);
-    }
-
     public function validateNode(Node $node)
     {
         $checks = $this->nodeService->runValidation($node);
@@ -134,6 +83,10 @@ class NodeController extends Controller
     public function destroy(string $id)
     {
         $node = Node::findOrFail($id);
+
+        // A deploy still running would recreate the container this removes: a worker draining the
+        // queues under a node id that no longer exists, with nothing in the panel to show it.
+        abort_if(app(NodeOperationService::class)->busy($node), 409, 'This node has an operation running; wait for it to finish.');
 
         try {
             $docker = app(DockerService::class);

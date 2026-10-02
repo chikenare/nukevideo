@@ -73,6 +73,20 @@ return [
             'after_commit' => false,
         ],
 
+        // Node operations (RunNodeOperationJob) run on the API host for up to 1500s. The redis
+        // connection there redelivers after 90s, which suits its short jobs and would run a slow
+        // deploy twice on one host; this one waits them out. Its own connection rather than a
+        // longer retry_after for everyone: a timed-out job is only picked up again after it.
+        'node-ops' => [
+            // `sync` in the tests (phpunit.xml), like the default connection there.
+            'driver' => env('NODE_OPS_QUEUE_DRIVER', 'redis'),
+            'connection' => env('REDIS_QUEUE_CONNECTION', 'default'),
+            'queue' => 'node-ops',
+            'retry_after' => 1600,
+            'block_for' => null,
+            'after_commit' => false,
+        ],
+
         'deferred' => [
             'driver' => 'deferred',
         ],

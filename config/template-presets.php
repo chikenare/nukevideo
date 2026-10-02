@@ -16,8 +16,8 @@ return [
     */
 
     'hls-h264-multi' => [
-        'name' => 'HLS (H.264)',
-        'description' => 'Multi-bitrate HLS with H.264. Maximum device compatibility.',
+        'name' => 'H.264 (HLS + DASH)',
+        'description' => 'Multi-bitrate H.264 for HLS and DASH. Maximum device compatibility.',
         'category' => 'streaming',
         'query' => [
             'outputs' => [
@@ -73,7 +73,7 @@ return [
     ],
 
     'hls-hevc-4k' => [
-        'name' => 'HLS 4K Premium (H.265)',
+        'name' => '4K Premium H.265 (HLS + DASH)',
         'description' => '4K HEVC streaming with multiple quality levels and 5.1 surround audio.',
         'category' => 'streaming',
         'query' => [
@@ -227,7 +227,7 @@ return [
     ],
 
     'hls-h264-mobile' => [
-        'name' => 'HLS Mobile-First (H.264)',
+        'name' => 'Mobile-First H.264 (HLS + DASH)',
         'description' => 'Optimized for mobile devices with lower resolutions and bandwidth.',
         'category' => 'streaming',
         'query' => [

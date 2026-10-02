@@ -79,9 +79,28 @@ $supervisor1 = [
     'nice' => 0,
 ];
 
-// GPU nodes (NODE_ACCEL=intel|nvidia) run one extra supervisor for their hardware queue, on top
-// of the CPU supervisors — the cores are still there. Concurrency is GPU encode sessions, not
-// cores ({@see \App\Support\Gpu}); override per node with GPU_WORKER_PROCESSES.
+// Deploys, starts and stops (RunNodeOperationJob). Its own supervisor because `default` kills at
+// 60s, and a draining deploy runs for minutes. Several processes so a fleet's workers deploy in
+// parallel; proxies are chained and only ever take one.
+$nodeOpsSupervisor = [
+    'connection' => 'node-ops',
+    'queue' => ['node-ops'],
+    // Idle almost always: one process, scaled up only while a fleet deploy is queued.
+    'balance' => 'auto',
+    'autoScalingStrategy' => 'size',
+    'minProcesses' => 1,
+    'maxProcesses' => 10,
+    'maxTime' => 0,
+    'maxJobs' => 0,
+    'memory' => 128,
+    'tries' => 1,
+    'timeout' => 1500, // RunNodeOperationJob::$timeout; must stay < the node-ops retry_after (1600)
+    'nice' => 0,
+];
+
+// GPU nodes (NODE_ACCEL=intel|nvidia) run a supervisor for their hardware queue in place of the
+// CPU transcode one (orchestration and packaging still run beside it). Concurrency is GPU encode
+// sessions, not cores ({@see \App\Support\Gpu}); override per node with GPU_WORKER_PROCESSES.
 $accel = env('NODE_ACCEL');
 
 $gpuWorker = [
@@ -119,7 +138,7 @@ if ($runsPackaging) {
 
 $defaults = $isWorker
     ? $workerDefaults
-    : ['supervisor-1' => $supervisor1];
+    : ['supervisor-1' => $supervisor1, 'node-ops' => $nodeOpsSupervisor];
 
 $environments = $isWorker
     ? [
@@ -128,21 +147,28 @@ $environments = $isWorker
         'local' => $workerEnv,
     ]
     : [
-        'production' => ['supervisor-1' => [
-            'maxProcesses' => 10,
-            'balanceMaxShift' => 1,
-            'balanceCooldown' => 3,
-        ]],
+        'production' => [
+            'supervisor-1' => [
+                'maxProcesses' => 10,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
+            ],
+            'node-ops' => [],
+        ],
         'staging' => [
             'supervisor-1' => [
                 'maxProcesses' => 10,
                 'balanceMaxShift' => 1,
                 'balanceCooldown' => 3,
             ],
+            'node-ops' => [],
         ],
-        'local' => ['supervisor-1' => [
-            'maxProcesses' => 3,
-        ]],
+        'local' => [
+            'supervisor-1' => [
+                'maxProcesses' => 3,
+            ],
+            'node-ops' => [],
+        ],
     ];
 
 return [

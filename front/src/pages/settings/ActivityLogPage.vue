@@ -28,6 +28,7 @@ import {
   Upload,
   Image,
   Subtitles,
+  Server,
 } from '@lucide/vue'
 
 const logs = ref<ResPagination<ActivityLog>>({ currentPage: 1, data: [], perPage: 0, total: 0 })
@@ -59,8 +60,17 @@ const eventConfig: Record<string, { label: string; variant: 'default' | 'seconda
   video_upload_processing_failed: { label: 'Upload Processing Failed', variant: 'destructive', icon: AlertCircle },
 }
 
-const getEventConfig = (event: string | null) => {
-  return eventConfig[event ?? ''] ?? { label: event ?? 'Unknown', variant: 'outline' as const, icon: AlertCircle }
+// Node operations (admins only): deploy, start and stop, badged by how they ended.
+const nodeActions: Record<string, string> = { node_deploy: 'Node Deploy', node_start: 'Node Start', node_stop: 'Node Stop' }
+const nodeVariant = (status: unknown): 'default' | 'secondary' | 'destructive' =>
+  status === 'failed' ? 'destructive' : status === 'succeeded' ? 'default' : 'secondary'
+
+const getEventConfig = (log: ActivityLog) => {
+  const node = nodeActions[log.event ?? '']
+  if (node) {
+    return { label: `${node} · ${log.properties?.status}`, variant: nodeVariant(log.properties?.status), icon: Server }
+  }
+  return eventConfig[log.event ?? ''] ?? { label: log.event ?? 'Unknown', variant: 'outline' as const, icon: AlertCircle }
 }
 
 const formatDate = (dateString: string): string => {
@@ -103,9 +113,9 @@ onMounted(() => {
           <TableRow v-else v-for="log in logs.data" :key="log.id">
             <TableCell>
               <div class="flex items-center gap-2">
-                <component :is="getEventConfig(log.event).icon" :size="16" class="text-muted-foreground" />
-                <Badge :variant="getEventConfig(log.event).variant">
-                  {{ getEventConfig(log.event).label }}
+                <component :is="getEventConfig(log).icon" :size="16" class="text-muted-foreground" />
+                <Badge :variant="getEventConfig(log).variant">
+                  {{ getEventConfig(log).label }}
                 </Badge>
               </div>
             </TableCell>

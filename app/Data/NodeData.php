@@ -23,8 +23,6 @@ class NodeData extends Data
         public bool $isHealthy,
         public int $healthFailures,
         public ?string $lastHealthyAt,
-        public bool $isStorageServer,
-        public ?string $storageEndpoint,
         /** @var ServiceStatusData[] */
         public array $services,
         public ?string $log,
@@ -48,8 +46,6 @@ class NodeData extends Data
             isHealthy: $node->isHealthy(),
             healthFailures: (int) $node->health_failures,
             lastHealthyAt: $node->last_healthy_at?->toIso8601String(),
-            isStorageServer: (bool) $node->is_storage_server,
-            storageEndpoint: $node->storage_endpoint,
             services: ServiceStatusData::collect($node->services ?? []),
             log: $node->log,
             env: $node->env,

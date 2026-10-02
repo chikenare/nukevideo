@@ -1,11 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\NodeController;
-use App\Jobs\StartNodeServicesJob;
-use App\Jobs\StopNodeServicesJob;
 use App\Models\Node;
 use App\Services\DockerService;
-use App\Services\SSHService;
 use App\Settings\AppSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 
@@ -22,72 +19,9 @@ function lifecycleNode(array $attributes = []): Node
         'name' => 'node-test',
         'type' => 'worker',
         'is_active' => true,
-        'is_storage_server' => true,
-        'storage_endpoint' => 'http://10.0.0.99:9000',
         ...$attributes,
     ]);
 }
-
-/** Runs the job against a fake SSH and hands back the command it would have run. */
-function sshCommandOf(object $job): string
-{
-    $captured = '';
-
-    $ssh = Mockery::mock(SSHService::class);
-    $ssh->shouldReceive('run')
-        ->once()
-        ->andReturnUsing(function (...$args) use (&$captured) {
-            $captured = $args[3];   // ip, user, privateKey, command, ...
-
-            return '';
-        });
-
-    app()->instance(SSHService::class, $ssh);
-    $job->handle($ssh);
-
-    return $captured;
-}
-
-describe('deactivating a node', function () {
-    it('stops its own container but not the services the host shares', function () {
-        // Traefik and Vector serve every proxy on the host, not the one being deactivated: Traefik
-        // owns ports 80 and 443 so a second instance could not exist, and Vector reads the Docker
-        // socket rather than any single container. Stopping them here took TLS and bandwidth
-        // accounting away from the neighbours — and `--restart unless-stopped` means the stop
-        // outlives a reboot, so they stayed down until someone redeployed by hand.
-        $node = lifecycleNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false]);
-
-        $command = sshCommandOf(new StopNodeServicesJob($node));
-
-        expect($command)->toContain("nukevideo_proxy_{$node->id}")
-            ->and($command)->not->toContain('traefik')
-            ->and($command)->not->toContain('vector')
-            ->and($command)->toStartWith('docker stop ');
-    });
-
-    it('never stops the chunk store the whole fleet reads through', function () {
-        // Every node's `chunks` disk points at this one container. Taking a single worker out of
-        // rotation must not take the fleet's storage with it — and `--restart unless-stopped`
-        // means a stop here survives reboots, so it would stay down until a manual redeploy.
-        $node = lifecycleNode();
-
-        $command = sshCommandOf(new StopNodeServicesJob($node));
-
-        expect($command)->toContain("nukevideo_worker_{$node->id}")
-            ->and($command)->not->toContain('nukevideo_storage_');
-    });
-
-    it('starts back exactly what it stopped', function () {
-        $node = lifecycleNode(['type' => 'proxy', 'hostname' => 'edge.example.com', 'is_storage_server' => false]);
-
-        $stop = sshCommandOf(new StopNodeServicesJob($node));
-        $start = sshCommandOf(new StartNodeServicesJob($node));
-
-        // Asymmetry here means a reactivated proxy comes back with no Traefik in front of it.
-        expect(str_replace('docker start ', '', explode(' 2>', $start)[0]))
-            ->toBe(str_replace('docker stop ', '', explode(' 2>', $stop)[0]));
-    });
-});
 
 describe('deleting a node', function () {
     it('removes its own containers and its chunk store, but nothing else', function () {

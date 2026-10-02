@@ -9,6 +9,7 @@ use App\Settings\AppSettings;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
+use Spatie\Activitylog\Models\Activity;
 
 uses(RefreshDatabase::class);
 
@@ -64,6 +65,33 @@ describe('a production proxy deploy', function () {
             ->and($script)->toContain('-v "$CACHE_MOUNT:'.ProxyCacheService::CONTAINER_PATH.'"');
     });
 
+    it('stops the old edge gracefully and fails the deploy when the new one never answers', function () {
+        // A proxy that does not come up must fail its operation, or a fleet deploy's chain would
+        // move on and take the next edge down with the same broken image.
+        $script = app(NodeService::class)->buildDeployScript(cacheNode(), []);
+
+        // SIGTERM is nginx's fast shutdown, which drops open connections: only SIGQUIT drains.
+        expect($script)->toContain('--stop-signal SIGQUIT')
+            ->and($script)->toContain('docker stop "$SERVICE_CONTAINER"')
+            ->and($script)->toContain('http://127.0.0.1/healthz')
+            ->and($script)->toContain('Edge did not come up');
+    });
+
+    it('leaves Traefik alone only when it already runs exactly what it would be replaced with', function () {
+        // Replacing it drops TLS for every site on the host: the longest gap of a proxy deploy.
+        // But the image alone is not enough: a development panel's Traefik has no TLS, runs under
+        // the same name, and a production deploy that kept it would serve no HTTPS at all.
+        $node = cacheNode();
+        preg_match("/^TRAEFIK_CONFIG='([0-9a-f]+)'$/m", app(NodeService::class)->buildDeployScript($node, []), $production);
+        inDevelopment();
+        preg_match("/^TRAEFIK_CONFIG='([0-9a-f]+)'$/m", $script = app(NodeService::class)->buildDeployScript($node, []), $development);
+
+        expect($production[1] ?? null)->not->toBeNull()
+            ->and($development[1] ?? null)->not->toBe($production[1] ?? null)
+            ->and($script)->toContain("nukevideo.config={$development[1]}")
+            ->and($script)->toContain('= "true $TRAEFIK_CONFIG"');
+    });
+
     it('keeps the shell and the application agreeing on the pool\'s names', function () {
         // The constants live twice: in cache-disks.sh, which does the work, and in PHP, which
         // validates the pool and builds the directory. A drift between them is a pool the panel
@@ -103,7 +131,7 @@ describe('a production proxy deploy', function () {
     });
 
     it('leaves a worker\'s disks alone', function () {
-        $node = cacheNode(['type' => 'worker', 'is_storage_server' => true, 'storage_endpoint' => 'http://10.0.0.99:9000']);
+        $node = cacheNode(['type' => 'worker']);
         $script = app(NodeService::class)->buildDeployScript($node);
 
         expect($script)->not->toContain('cache_disk_inventory')
@@ -164,9 +192,8 @@ describe('a development proxy deploy', function () {
         app()->instance(SSHService::class, $ssh);
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
-        // The deploy streams: nothing runs until the body is read.
-        $body = $this->post("/api/nodes/{$node->id}/deploy")->assertOk()->streamedContent();
-        expect($body)->not->toContain('"type":"error"', $body);
+        $this->postJson("/api/nodes/{$node->id}/deploy")->assertStatus(202);
+        expect(Activity::inLog('node')->latest('id')->first()->properties['status'])->toBe('succeeded');
 
         expect($captured)->toContain("CHOSEN_DISKS=''")
             ->and($captured)->toContain("CACHE_VOLUME='nukevideo_dev_proxy_cache_{$node->id}'");
@@ -259,20 +286,20 @@ describe('choosing the disks', function () {
         app()->instance(SSHService::class, $ssh);
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
-        $body = $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => []])->assertOk()->streamedContent();
-        expect($body)->not->toContain('"type":"error"');
+        $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => []])->assertStatus(202);
+        expect(Activity::inLog('node')->latest('id')->first()->properties['status'])->toBe('succeeded');
         expect($captured)->toContain("CHOSEN_DISKS=''");
     });
 
     it('still deploys a worker without a list', function () {
-        $node = cacheNode(['type' => 'worker', 'is_storage_server' => true, 'storage_endpoint' => 'http://10.0.0.99:9000']);
+        $node = cacheNode(['type' => 'worker']);
         $ssh = Mockery::mock(SSHService::class);
         $ssh->shouldReceive('run')->once()->andReturn('');
         app()->instance(SSHService::class, $ssh);
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
-        expect($this->postJson("/api/nodes/{$node->id}/deploy")->assertOk()->streamedContent())
-            ->not->toContain('"type":"error"');
+        $this->postJson("/api/nodes/{$node->id}/deploy")->assertStatus(202);
+        expect(Activity::inLog('node')->latest('id')->first()->properties['status'])->toBe('succeeded');
     });
 });
 

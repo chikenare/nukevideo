@@ -8,6 +8,7 @@ use App\Http\Controllers\Api\CdnSettingsController;
 use App\Http\Controllers\Api\MetricsController;
 use App\Http\Controllers\Api\NodeController;
 use App\Http\Controllers\Api\NodeEnvironmentController;
+use App\Http\Controllers\Api\NodeOperationController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\SettingsController;
 use App\Http\Controllers\Api\UsageController;
@@ -147,8 +148,13 @@ Route::middleware(['auth:sanctum'])->group(function () {
 
     // Admin
     Route::middleware(['no-project-key', EnsureAdmin::class])->group(function () {
+        Route::post('nodes/deploy', [NodeOperationController::class, 'deployMany']);
         Route::apiResource('nodes', NodeController::class);
-        Route::post('nodes/{node}/deploy', [NodeController::class, 'deploy']);
+        Route::post('nodes/{node}/deploy', [NodeOperationController::class, 'deploy']);
+        Route::post('nodes/{node}/start', [NodeOperationController::class, 'start']);
+        Route::post('nodes/{node}/stop', [NodeOperationController::class, 'stop']);
+        Route::get('node-operations', [NodeOperationController::class, 'index']);
+        Route::get('node-operations/{operation}/lines', [NodeOperationController::class, 'lines']);
         Route::post('nodes/{node}/validate', [NodeController::class, 'validateNode']);
         Route::get('nodes/{node}/cache-disks', [NodeController::class, 'cacheDisks']);
         Route::get('analytics/edges', [AnalyticsController::class, 'edges']);

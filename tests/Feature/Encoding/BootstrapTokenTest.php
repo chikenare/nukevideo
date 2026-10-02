@@ -17,13 +17,11 @@ uses(RefreshDatabase::class);
 beforeEach(function () {
     Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
-    // The deploy script refuses to build without somewhere to put the chunk store.
+    // The first worker claims the chunk store, without which the deploy script refuses to build.
     $this->node = Node::create([
         'name' => 'worker-01',
         'ip_address' => '10.0.0.20',
         'type' => 'worker',
-        'is_storage_server' => true,
-        'storage_endpoint' => 'http://10.0.0.20:9000',
     ]);
 });
 
