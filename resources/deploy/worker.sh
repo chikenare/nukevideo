@@ -67,11 +67,16 @@ if ! hostname -I | tr ' ' '\n' | grep -qxF "$CHUNK_STORE_IP"; then
         sleep 2
     done
     echo "Chunk store reachable"
+# Kept when it already runs exactly this (the hash the API puts in its label, plus the IP): it
+# holds the fleet's in-flight transfers, and recreating it for nothing cut them mid deploy.
+elif [ "$(docker inspect -f '{{.State.Running}} {{index .Config.Labels "nukevideo.config"}}' "$STORAGE_CONTAINER" 2>/dev/null)" = "true $STORAGE_CONFIG-$CHUNK_STORE_IP" ]; then
+    echo "Chunk store already running this configuration on $CHUNK_STORE_IP:$CHUNK_STORE_PORT — kept"
 # Two workers on one host would both claim it, and the second store could not bind the port.
 elif docker ps --format '{{.Names}} {{.Ports}}' | grep -v "^$STORAGE_CONTAINER " | grep -qF "$CHUNK_STORE_IP:$CHUNK_STORE_PORT->"; then
     echo "Chunk store already served on $CHUNK_STORE_IP:$CHUNK_STORE_PORT by another container on this host"
 else
     echo "=== Deploying chunk store on $CHUNK_STORE_IP:$CHUNK_STORE_PORT ==="
+    pull_image "$STORAGE_IMAGE"
     docker rm -f "$STORAGE_CONTAINER" 2>/dev/null || true
     run_container "$STORAGE_RUN_ARGS"
     echo "Waiting for chunk store..."

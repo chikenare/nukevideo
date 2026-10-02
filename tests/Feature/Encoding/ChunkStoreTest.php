@@ -140,4 +140,41 @@ describe('the deploy', function () {
             ->and($script)->not->toContain("-p '9000:9000'")
             ->and($script)->not->toContain('-p 9000:9000');
     });
+
+    it('leaves a running store alone unless what it runs with changed', function () {
+        // Recreating it on every deploy of its worker cut every other worker's transfers for a
+        // few seconds, mid fleet deploy, for nothing.
+        app(NodeSettings::class)->fill(['chunk_store_address' => '10.0.0.20'])->save();
+        $worker = storeNode();
+        $config = fn () => preg_match("/^STORAGE_CONFIG='([0-9a-f]+)'$/m", app(NodeService::class)->buildDeployScript($worker), $m) ? $m[1] : null;
+
+        $before = $config();
+        $script = app(NodeService::class)->buildDeployScript($worker);
+        app(NodeSettings::class)->fill(['chunk_store_address' => '10.0.0.20:9009'])->save();
+
+        expect($before)->not->toBeNull()
+            ->and($config())->not->toBe($before)
+            ->and($script)->toContain("nukevideo.config={$before}")
+            // The resolved IP too: a DNS name can move without the address changing.
+            ->and($script)->toContain('"true $STORAGE_CONFIG-$CHUNK_STORE_IP"');
+    });
+});
+
+describe('shared service versions', function () {
+    it('pins the chunk store image and pulls it, so a version bump is what updates it', function () {
+        // `latest` was never pulled again after a host's first deploy, and its tag never changed
+        // the config hash: every host kept whatever version it had happened to download.
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toMatch("/^STORAGE_IMAGE='rustfs\\/rustfs:\\d+\\.\\d+\\.\\d+'$/m")
+            ->and($script)->toContain('pull_image "$STORAGE_IMAGE"')
+            ->and($script)->not->toContain('rustfs/rustfs:latest');
+    });
+
+    it('pins Traefik to a patch release and pulls it before recreating it', function () {
+        $script = app(NodeService::class)->buildDeployScript(storeNode(['type' => 'proxy', 'hostname' => 'edge.example.com']));
+
+        expect($script)->toMatch("/^TRAEFIK_IMAGE='traefik:v\\d+\\.\\d+\\.\\d+'$/m")
+            ->and($script)->toContain('pull_image "$TRAEFIK_IMAGE"');
+    });
 });

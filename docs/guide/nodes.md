@@ -26,7 +26,14 @@ Its address is one setting for the whole fleet, under **Nodes → Environment �
 or a DNS name, with `:port` when 9000 is taken on that host. The first worker you create fills it
 in with its own IP. At each worker's deploy the node checks whether the address resolves to one of
 its own interfaces; the one where it does runs the store, published on that address only — never
-on every interface — and every worker is pointed at it. A worker's deploy fails when no address is
+on every interface — and every worker is pointed at it. A redeploy of that worker leaves a running
+store as it is, unless its address, credentials or image changed, so the other workers' transfers
+are not cut.
+
+The images the hosts share — the chunk store, Traefik and Vector — are pinned to a release in
+`NodeService` and pulled at deploy. Updating one is a version bump there: each host picks it up at
+its next deploy, recreating the container once. To recreate one without a new version (a container
+in a bad state), remove it on the host (`docker rm -f <name>`) and redeploy the node. A worker's deploy fails when no address is
 set, and when the store does not answer there within two minutes (so an address that is no
 worker's own is caught at deploy time, not on the first chunk). Proxies never use it. The API host does,
 to clear and check the mirror when a video is retried: set `CHUNKS_S3_ENDPOINT=http://<address>`

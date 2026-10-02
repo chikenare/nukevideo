@@ -48,6 +48,7 @@ if docker ps --format '{{.Names}} {{.Ports}}' | grep -v '^nukevideo_traefik ' | 
 elif [ "$(docker inspect -f '{{.State.Running}} {{index .Config.Labels "nukevideo.config"}}' nukevideo_traefik 2>/dev/null)" = "true $TRAEFIK_CONFIG" ]; then
     echo "Traefik already running this configuration — kept"
 else
+    pull_image "$TRAEFIK_IMAGE"
     docker rm -f nukevideo_traefik 2>/dev/null || true
     run_container "$TRAEFIK_RUN_ARGS"
     echo "Traefik deployed"

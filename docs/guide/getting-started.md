@@ -19,7 +19,7 @@ cd nukevideo
 docker network create traefik
 docker run -d --name traefik --restart unless-stopped --network traefik \
   -p 80:80 -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock:ro \
-  traefik:v3.6 --api.insecure=true --providers.docker=true \
+  traefik:v3.6.25 --api.insecure=true --providers.docker=true \
   --providers.docker.exposedbydefault=false --entrypoints.web.address=:80
 
 cp .env.example .env   # then see "Local .env" below

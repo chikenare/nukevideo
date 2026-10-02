@@ -54,6 +54,14 @@ class NodeService
     // Environments whose in-flight work is disposable, so a deploy kills instead of draining.
     private const UNDRAINED_ENVIRONMENTS = ['local', 'staging'];
 
+    // The images of the containers a host shares, pinned to a release and pulled at deploy. Their
+    // tag is part of the config hash that decides whether a running one is kept, so bumping a
+    // version here is what updates the fleet — once, at each host's next deploy. A floating tag
+    // was only ever downloaded once per host and never changed the hash.
+    private const TRAEFIK_IMAGE = 'traefik:v3.6.25';
+
+    private const CHUNK_STORE_IMAGE = 'rustfs/rustfs:1.0.0';
+
     // Keeps the worker's idle Redis connection alive through ISP CGNAT during long ffmpeg
     // encodes; without outgoing traffic the NAT mapping is dropped and the next command read-errors.
     private const WORKER_SYSCTLS = [
@@ -429,7 +437,7 @@ class NodeService
     {
         $disk = config('filesystems.disks.chunks');
 
-        $runArgs = $this->buildDockerRunArgs($node->storageContainerName(), 'rustfs/rustfs:latest', [
+        $options = [
             'env' => [
                 'RUSTFS_ACCESS_KEY='.$disk['key'],
                 'RUSTFS_SECRET_KEY='.$disk['secret'],
@@ -443,7 +451,16 @@ class NodeService
             // $CHUNK_STORE_IP is resolved by worker.sh, on the node.
             'raw' => ['-p "$CHUNK_STORE_IP:$CHUNK_STORE_PORT:9000"'],
             'command' => '/data',
-        ]);
+        ];
+
+        // worker.sh keeps a running store whose label matches, as proxy.sh does Traefik: recreating
+        // it on every deploy of its worker cut the other workers' transfers mid fleet deploy. The
+        // hash covers the arguments and the address; the IP the node resolves is appended there,
+        // since a DNS name can move without the address changing.
+        [$host, $port] = app(NodeSettings::class)->chunkStore();
+        $config = substr(md5($this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options)."|{$host}:{$port}"), 0, 12);
+        $options['raw'][] = '-l "nukevideo.config='.$config.'-$CHUNK_STORE_IP"';
+        $runArgs = $this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options);
 
         // Readiness and the bucket in one probe, run with the s5cmd the worker image already carries
         // — minio/mc used to do it, and its image is gone from Docker Hub. `mb` alone is not
@@ -451,7 +468,6 @@ class NodeService
         // list lacks it; while the store is still booting both fail and the deploy retries.
         // Single-quoted in the header and expanded inside the probe container, which is handed
         // CHUNK_STORE_IP: the store answers on that address only.
-        [$host, $port] = app(NodeSettings::class)->chunkStore();
         $s5cmd = 's5cmd --endpoint-url http://$CHUNK_STORE_IP:'.$port;
         $bucket = escapeshellarg('s3://'.$disk['bucket']);
 
@@ -460,6 +476,8 @@ class NodeService
             'CHUNK_STORE_PORT' => $port,
             'STORAGE_CONTAINER' => $node->storageContainerName(),
             'STORAGE_RUN_ARGS' => $runArgs,
+            'STORAGE_CONFIG' => $config,
+            'STORAGE_IMAGE' => self::CHUNK_STORE_IMAGE,
             'STORAGE_ACCESS_KEY' => 'AWS_ACCESS_KEY_ID='.$disk['key'],
             'STORAGE_SECRET_KEY' => 'AWS_SECRET_ACCESS_KEY='.$disk['secret'],
             'STORAGE_BUCKET_CMD' => "{$s5cmd} ls | grep -qxE '.*[[:space:]]'{$bucket} || {$s5cmd} mb {$bucket}",
@@ -562,14 +580,15 @@ class NodeService
             'command' => $command,
             'network' => 'nukevideo_default',
         ];
-        $config = substr(md5($this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', $options)), 0, 12);
+        $config = substr(md5($this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, $options)), 0, 12);
 
         return [
-            'TRAEFIK_RUN_ARGS' => $this->buildDockerRunArgs('nukevideo_traefik', 'traefik:v3.6', [
+            'TRAEFIK_RUN_ARGS' => $this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, [
                 ...$options,
                 'labels' => ["nukevideo.config={$config}"],
             ]),
             'TRAEFIK_CONFIG' => $config,
+            'TRAEFIK_IMAGE' => self::TRAEFIK_IMAGE,
         ];
     }
 
