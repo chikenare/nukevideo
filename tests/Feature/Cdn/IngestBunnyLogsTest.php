@@ -162,17 +162,55 @@ it('keeps the cursor and fails when the API errors, so the window is retried', f
     expect(Cache::get('bunny-ingest-logs:cursor'))->toBeNull();
 });
 
+it('walks a backlog in bounded slices, committing the cursor after each one', function () {
+    fakeBunnySettings();
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([]))]);
+
+    // A cursor 25 minutes behind `to` (now - 120s): one request for the whole gap is what timed
+    // out in production, so it is read as 10 + 10 + 5 minutes instead.
+    Cache::forever('bunny-ingest-logs:cursor', '2026-01-01T00:33:00Z');
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    $windows = Http::recorded()->map(fn ($pair) => [$pair[0]['from'], $pair[0]['to']])->all();
+    expect($windows)->toBe([
+        ['2026-01-01T00:33:00Z', '2026-01-01T00:43:00Z'],
+        ['2026-01-01T00:43:00Z', '2026-01-01T00:53:00Z'],
+        ['2026-01-01T00:53:00Z', '2026-01-01T00:58:00Z'],
+    ]);
+    expect(Cache::get('bunny-ingest-logs:cursor'))->toBe('2026-01-01T00:58:00Z');
+});
+
+it('keeps the slices that made it when a later one times out', function () {
+    fakeBunnySettings();
+    Http::fake([BUNNY_LOGS_URL => Http::sequence()
+        ->push(bunnyLogsPage([bunnyLogLine(ULID_A, '1.2.3.4', 100)]))
+        ->pushFailedConnection('cURL error 28: Operation timed out')]);
+
+    Cache::forever('bunny-ingest-logs:cursor', '2026-01-01T00:33:00Z');
+
+    // A timeout is a failed window, not an uncaught exception: the first slice is shipped and
+    // committed, and the next run resumes from the one that failed.
+    $this->artisan('bunny:ingest-logs')->assertExitCode(1);
+
+    Queue::assertPushed(IngestBandwidthJob::class, 1);
+    expect(Cache::get('bunny-ingest-logs:cursor'))->toBe('2026-01-01T00:43:00Z');
+});
+
 it('dates every event by its own log line, so a window that straddles midnight splits', function () {
     fakeBunnySettings();
 
     // A window can span a midnight: `--from`, or a cursor recovered after an outage. `date` is the
     // partition key of a SummingMergeTree, so stamping the whole window with its start would book
     // post-midnight traffic to the previous day with no way back.
-    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
-        bunnyLogLine(ULID_A, '1.2.3.4', 100, '2026-01-01T23:59:59+00:00'),
-        bunnyLogLine(ULID_A, '1.2.3.4', 40, '2026-01-02T00:00:01+00:00'),
-        bunnyLogLine(ULID_A, '1.2.3.4', 60, '2026-01-02T00:30:00+00:00'),
-    ]))]);
+    // The two-hour window is walked in slices; only the first answers, the rest are empty.
+    Http::fake([BUNNY_LOGS_URL => Http::sequence()
+        ->push(bunnyLogsPage([
+            bunnyLogLine(ULID_A, '1.2.3.4', 100, '2026-01-01T23:59:59+00:00'),
+            bunnyLogLine(ULID_A, '1.2.3.4', 40, '2026-01-02T00:00:01+00:00'),
+            bunnyLogLine(ULID_A, '1.2.3.4', 60, '2026-01-02T00:30:00+00:00'),
+        ]))
+        ->whenEmpty(Http::response(bunnyLogsPage([])))]);
 
     Carbon::setTestNow('2026-01-02 01:00:00');
 

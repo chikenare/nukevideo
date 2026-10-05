@@ -8,6 +8,7 @@ use App\Jobs\IngestBandwidthJob;
 use App\Services\Cdn\BunnyProvider;
 use App\Settings\CdnSettings;
 use Illuminate\Console\Command;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -36,6 +37,23 @@ class IngestBunnyLogs extends Command
 
     private const PAGE_SIZE = 1000;
 
+    // The widest window one request covers. A run that has fallen behind (an outage, a cursor
+    // stuck behind a failing window) walks the backlog in slices of this size and commits the
+    // cursor after each one, instead of asking for the whole gap at once: the API gets slower the
+    // wider the range and the deeper the offset — a 90-minute window timed out on its second page
+    // with 0 bytes received — and a window that always fails keeps the cursor pinned, so the next
+    // run asks for an even wider one and never catches up until the retention floor eats the gap.
+    private const MAX_WINDOW_SECONDS = 600;
+
+    // Bunny has been seen not to answer within Laravel's default 30s. Generous, because a slow
+    // page costs a few seconds, while a timed-out one throws away its whole slice for this run.
+    private const TIMEOUT_SECONDS = 60;
+
+    // Stop opening new slices past this point of a run: the scheduler's overlap lock expires after
+    // 10 minutes, and a second run reading the same cursor would count the same traffic twice into
+    // a SummingMergeTree. Whatever is left is the next run's (five minutes later) to pick up.
+    private const RUN_BUDGET_SECONDS = 240;
+
     public function handle(CdnSettings $settings): int
     {
         if ($settings->provider !== CdnDriver::Bunny->value) {
@@ -57,18 +75,27 @@ class IngestBunnyLogs extends Command
             return self::SUCCESS;
         }
 
-        $events = $this->fetch($config, $from, $to);
+        $deadline = now()->addSeconds(self::RUN_BUDGET_SECONDS);
 
-        if ($events === null) {
-            return self::FAILURE;
+        while ($from->lt($to) && now()->lt($deadline)) {
+            $sliceEnd = $from->copy()->addSeconds(self::MAX_WINDOW_SECONDS)->min($to);
+            $events = $this->fetch($config, $from, $sliceEnd);
+
+            // The cursor stays at the end of the last slice that made it: the failed one is
+            // retried next run, and the slices before it are never read twice.
+            if ($events === null) {
+                return self::FAILURE;
+            }
+
+            if ($events !== []) {
+                IngestBandwidthJob::dispatch(array_values($events));
+            }
+
+            Cache::forever(self::CURSOR_KEY, $sliceEnd->toIso8601ZuluString());
+            $this->info(sprintf('Ingested %d aggregated event(s) from %s to %s.', count($events), $from->toIso8601ZuluString(), $sliceEnd->toIso8601ZuluString()));
+
+            $from = $sliceEnd;
         }
-
-        if ($events !== []) {
-            IngestBandwidthJob::dispatch(array_values($events));
-        }
-
-        Cache::forever(self::CURSOR_KEY, $to->toIso8601ZuluString());
-        $this->info(sprintf('Ingested %d aggregated event(s) from %s to %s.', count($events), $from->toIso8601ZuluString(), $to->toIso8601ZuluString()));
 
         return self::SUCCESS;
     }
@@ -102,16 +129,25 @@ class IngestBunnyLogs extends Command
         $offset = 0;
 
         do {
-            $response = Http::withHeaders(['AccessKey' => $config->apiKey])
-                ->acceptJson()
-                ->get("https://logging.bunnycdn.com/v2/pullzones/{$config->pullZoneId}/logs", [
-                    'from' => $from->toIso8601ZuluString(),
-                    'to' => $to->toIso8601ZuluString(),
-                    'status' => '2xx',
-                    'order' => 'asc',
-                    'limit' => self::PAGE_SIZE,
-                    'offset' => $offset,
-                ]);
+            try {
+                $response = Http::withHeaders(['AccessKey' => $config->apiKey])
+                    ->acceptJson()
+                    ->timeout(self::TIMEOUT_SECONDS)
+                    ->get("https://logging.bunnycdn.com/v2/pullzones/{$config->pullZoneId}/logs", [
+                        'from' => $from->toIso8601ZuluString(),
+                        'to' => $to->toIso8601ZuluString(),
+                        'status' => '2xx',
+                        'order' => 'asc',
+                        'limit' => self::PAGE_SIZE,
+                        'offset' => $offset,
+                    ]);
+            } catch (ConnectionException $e) {
+                // A timeout is a failed window like any 5xx, not a crash: without this it escaped
+                // as an uncaught exception, and every run died the same way on the same window.
+                $this->error("Bunny logging API unreachable ({$e->getMessage()}) — keeping the cursor to retry the window.");
+
+                return null;
+            }
 
             if ($response->failed()) {
                 $this->error("Bunny logging API answered {$response->status()} — keeping the cursor to retry the window.");
