@@ -32,9 +32,16 @@ class Video extends Model
         'aspect_ratio',
         'chunk_count',
         'status',
+        'priority',
         'external_user_id',
         'external_resource_id',
         'last_heartbeat_at',
+    ];
+
+    // The column default alone leaves a just-created model without `priority` in memory, and the
+    // upload webhook and API responses are built from that instance.
+    protected $attributes = [
+        'priority' => 'normal',
     ];
 
     /** Non-terminal statuses: the video is still being processed. */

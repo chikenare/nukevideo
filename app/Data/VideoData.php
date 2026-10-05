@@ -2,6 +2,7 @@
 
 namespace App\Data;
 
+use App\Enums\VideoPriority;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\Video;
@@ -16,6 +17,7 @@ class VideoData extends Data
         public float $duration,
         public string $aspectRatio,
         public VideoStatus $status,
+        public VideoPriority $priority,
         public string $createdAt,
         public ?string $externalUserId,
         public ?string $externalResourceId,
@@ -41,6 +43,7 @@ class VideoData extends Data
             duration: $video->duration,
             aspectRatio: $video->aspect_ratio,
             status: VideoStatus::from($video->status),
+            priority: VideoPriority::from($video->priority),
             createdAt: $video->created_at->toIso8601String(),
             externalUserId: $video->external_user_id,
             externalResourceId: $video->external_resource_id,

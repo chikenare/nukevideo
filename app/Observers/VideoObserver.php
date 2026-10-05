@@ -14,7 +14,7 @@ class VideoObserver
      * writes them, so guarding on them is what separates a real edit from the status, duration and
      * aspect-ratio writes a run performs — those already have their own events.
      */
-    private const ANNOUNCED_COLUMNS = ['name', 'external_user_id', 'external_resource_id'];
+    private const ANNOUNCED_COLUMNS = ['name', 'priority', 'external_user_id', 'external_resource_id'];
 
     public function updated(Video $video): void
     {

@@ -67,8 +67,9 @@ with the same 720p rendition encode it once.
 
 ### 1. Dispatch
 
-The `videos:dispatch` scheduler (every five seconds) picks up `pending` videos oldest first and
-dispatches a `PrepareVideoJob` for each one its hardware can take (see
+The `videos:dispatch` scheduler (every five seconds) picks up `pending` videos by
+[priority](/api/videos#priority) — `high`, then `normal`, then `low`, oldest first within each
+level — and dispatches a `PrepareVideoJob` for each one its hardware can take (see
 [Dispatch and Hardware](#dispatch-and-hardware)).
 
 ### 2. Download Original

@@ -52,7 +52,7 @@ only the side effects.
 | Event | When |
 |-------|------|
 | `video.created` | The upload was ingested and the video row exists. Fires **before the source is probed**: `duration` is `0`, `aspectRatio` is empty, `outputs` is empty and `streams` holds only the `original`. |
-| `video.updated` | The video's own fields (`name`, `externalUserId`, `externalResourceId` through `PUT\|PATCH /api/videos/{ulid}`) changed — at any point — or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished (`completed` or `failed`), including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
+| `video.updated` | The video's own fields (`name`, `priority`, `externalUserId`, `externalResourceId` through `PUT\|PATCH /api/videos/{ulid}`) changed — at any point — or one of its tracks (`PUT\|PATCH /api/streams/{ulid}`, `DELETE /api/streams/{ulid}`) changed after the run finished (`completed` or `failed`), including the `original` being reclaimed. A track change sends the **whole video**, like every other event. Never sent for the writes a run performs on its own — those end in `video.completed` or `video.error`. |
 | `video.completed` | Every output reached a terminal state and at least one succeeded. |
 | `video.error` | The video failed — either every output failed, or a pipeline failure (a stalled worker, an unreachable source) ended the run. |
 | `video.deleted` | The video was deleted. Only sent for videos that carry an `externalResourceId`. The payload is the video as it was just before deletion. |

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\DTOs\UploadMeta;
+use App\Enums\VideoPriority;
 use App\Enums\VideoStatus;
 use App\Models\Stream;
 use App\Models\User;
@@ -71,6 +72,9 @@ class OnVideoUploadedService
                     'template_id' => $template->id,
                     'name' => $this->meta->filename,
                     'status' => VideoStatus::PENDING->value,
+                    // `??`, not a plain read: metadata cached before this field existed unserializes
+                    // with the property uninitialized, and an upload may sit on it for days.
+                    'priority' => $this->meta->priority ?? VideoPriority::NORMAL->value,
                     'duration' => 0,
                     'aspect_ratio' => '',
                     'external_user_id' => $this->meta->externalUserId,

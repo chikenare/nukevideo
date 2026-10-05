@@ -28,7 +28,13 @@ import TemplateService from '@/services/TemplateService'
 import type { AcceptableValue } from 'reka-ui'
 
 const uploadStore = useUploadStore()
-const { files, selectedTemplate, isUploading, isStarting } = storeToRefs(uploadStore)
+const { files, selectedTemplate, selectedPriority, isUploading, isStarting } = storeToRefs(uploadStore)
+
+const priorities: { value: App.Enums.VideoPriority; label: string }[] = [
+  { value: 'high', label: 'High priority' },
+  { value: 'normal', label: 'Normal priority' },
+  { value: 'low', label: 'Low priority' },
+]
 
 const templates = ref<Template[]>([])
 const dialogOpen = ref(false)
@@ -79,8 +85,8 @@ onMounted(getTemplates)
 
       <UploadFiles v-model="files" />
 
-      <div class="mt-5">
-        <Select v-if="pendingCount > 0" v-model="selectedTemplate" @update:model-value="handleTemplateChange">
+      <div v-if="pendingCount > 0" class="mt-5 grid grid-cols-[1fr_auto] gap-2">
+        <Select v-model="selectedTemplate" @update:model-value="handleTemplateChange">
           <SelectTrigger>
             <SelectValue placeholder="Select template" />
           </SelectTrigger>
@@ -89,6 +95,20 @@ onMounted(getTemplates)
               <SelectLabel>Template</SelectLabel>
               <SelectItem v-for="template in templates" :key="template.ulid" :value="template.ulid">
                 {{ template.name }}
+              </SelectItem>
+            </SelectGroup>
+          </SelectContent>
+        </Select>
+        <!-- Only reorders the processing queue: high goes before videos already waiting. -->
+        <Select v-model="selectedPriority">
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectGroup>
+              <SelectLabel>Priority</SelectLabel>
+              <SelectItem v-for="priority in priorities" :key="priority.value" :value="priority.value">
+                {{ priority.label }}
               </SelectItem>
             </SelectGroup>
           </SelectContent>

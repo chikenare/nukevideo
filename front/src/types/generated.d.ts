@@ -163,6 +163,7 @@ name: string,
 duration: number,
 aspectRatio: string,
 status: App.Enums.VideoStatus,
+priority: App.Enums.VideoPriority,
 createdAt: string,
 externalUserId: string | null,
 externalResourceId: string | null,
@@ -439,6 +440,7 @@ export type UpdateVideoData = {
 name: string,
 externalUserId?: string | null,
 externalResourceId?: string | null,
+priority?: App.Enums.VideoPriority,
 };
 }
 }
@@ -453,6 +455,7 @@ export type NodeAction = 'deploy' | 'start' | 'stop';
 export type NodeType = 'worker' | 'proxy';
 export type UsageGranularity = 'total' | 'daily';
 export type UsageMetric = 'upload_bytes' | 'encoding_cpu' | 'streaming_bytes' | 'download_bytes' | 'asset_bytes' | 'bandwidth_bytes' | 'origin_bytes';
+export type VideoPriority = 'low' | 'normal' | 'high';
 export type VideoStatus = 'pending' | 'failed' | 'running' | 'completed' | 'uploading' | 'downloading';
 }
 }

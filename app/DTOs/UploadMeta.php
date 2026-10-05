@@ -14,6 +14,7 @@ class UploadMeta
         public readonly string $filename,
         public readonly ?string $externalUserId = null,
         public readonly ?string $externalResourceId = null,
+        public readonly ?string $priority = null,
     ) {}
 
     public static function fromRequest(User $user, Project $project, array $input): self
@@ -25,6 +26,7 @@ class UploadMeta
             filename: $input['filename'],
             externalUserId: $input['metadata']['externalUserId'] ?? null,
             externalResourceId: $input['metadata']['externalResourceId'] ?? null,
+            priority: $input['metadata']['priority'] ?? null,
         );
     }
 }
