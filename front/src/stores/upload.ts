@@ -17,6 +17,9 @@ function getXsrfToken(): Record<string, string> {
 export const useUploadStore = defineStore('upload', () => {
   const files = ref<FileUpload[]>([])
   const selectedTemplate = ref<string>('')
+  // Applies to the whole batch, like the template: it is where the videos land in the encode
+  // queue, which is a per-upload decision rather than a per-file detail.
+  const selectedPriority = ref<App.Enums.VideoPriority>('normal')
 
   // True from the moment "Upload" is pressed until Uppy reports the first byte (or the first
   // failure) of that batch. `isUploading` below keys off progress, so it stays false during the
@@ -156,6 +159,7 @@ export const useUploadStore = defineStore('upload', () => {
               project: projectsStore.currentProject?.ulid,
               externalUserId: file.externalUserId,
               externalResourceId: file.externalResourceId,
+              priority: selectedPriority.value,
             }
           })
           file.uppyFileId = uppyFileId
@@ -255,6 +259,7 @@ export const useUploadStore = defineStore('upload', () => {
     // State
     files,
     selectedTemplate,
+    selectedPriority,
     uppy,
 
     // Computed

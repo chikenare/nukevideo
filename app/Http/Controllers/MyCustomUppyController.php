@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Enums\VideoPriority;
 use App\Models\Project;
 use App\Services\UppyS3Service;
 use Aws\S3\S3Client;
@@ -235,6 +236,7 @@ class MyCustomUppyController extends Controller
             ],
             'metadata.externalUserId' => 'nullable|string|max:255',
             'metadata.externalResourceId' => 'nullable|string|max:255',
+            'metadata.priority' => ['nullable', Rule::enum(VideoPriority::class)],
         ]);
     }
 }

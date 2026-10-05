@@ -119,9 +119,9 @@ it('dispatches nothing at all while no worker node is active', function () {
 it('takes the oldest waiting video first', function () {
     ($this->makeVideo)('running');   // fills the family's first slot, leaving exactly one
 
-    $newer = ($this->makeVideo)();
+    // Arrival is insertion order: the dispatcher walks by id, and nothing ever re-inserts a video.
     $older = ($this->makeVideo)();
-    $older->forceFill(['created_at' => now()->subDay()])->save();
+    $newer = ($this->makeVideo)();
 
     $this->artisan('videos:dispatch')->assertSuccessful();
 

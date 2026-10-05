@@ -37,6 +37,7 @@ field [Get Video](#get-video) returns. That is why `perPage` is capped at 100.
       "ulid": "01HX...",
       "name": "my-video.mp4",
       "status": "completed",
+      "priority": "normal",
       "duration": 120.5,
       "aspectRatio": "16:9",
       "createdAt": "2025-01-15T10:30:00+00:00",
@@ -73,6 +74,7 @@ returns for each row, and the one a [webhook](/api/webhooks#event-payload) carri
     "ulid": "01HX...",
     "name": "my-video.mp4",
     "status": "completed",
+    "priority": "normal",
     "duration": 120.5,
     "aspectRatio": "16:9",
     "createdAt": "2025-01-15T10:30:00+00:00",
@@ -117,6 +119,7 @@ returns for each row, and the one a [webhook](/api/webhooks#event-payload) carri
 
 | Field | Type | Notes |
 |-------|------|-------|
+| `priority` | string | `low`, `normal` or `high`: where the video sat in the dispatch queue. See [Priority](#priority). |
 | `duration` | number | Seconds. `0` until the source has been probed. |
 | `aspectRatio` | string | Empty until the source has been probed. |
 | `thumbnailUrl` / `storyboardUrl` | string | Served unsigned from the CDN when a delivery node is available, and from `GET /api/videos/{ulid}/{filename}` otherwise. The URL is stable, but the object only exists once the video has been processed. |
@@ -143,7 +146,8 @@ PUT|PATCH /api/videos/{ulid}
 {
   "name": "Updated Video Name",
   "externalUserId": "user-123",
-  "externalResourceId": "post-456"
+  "externalResourceId": "post-456",
+  "priority": "high"
 }
 ```
 
@@ -152,6 +156,7 @@ PUT|PATCH /api/videos/{ulid}
 | `name` | string | Required. |
 | `externalUserId` | string\|null | Optional. Send `null` to clear it. |
 | `externalResourceId` | string\|null | Optional. Send `null` to clear it. |
+| `priority` | string | Optional. `low`, `normal` or `high`. Only reorders a video that is still `pending` (see [Priority](#priority)). |
 
 Responds with `message` and the full updated video under `data`, in the same shape as
 [Get Video](#get-video).
@@ -365,6 +370,21 @@ conditions of the whole video, so they fail the request rather than appearing in
 | `completed` | All outputs have reached a terminal state (at least one completed) |
 | `failed` | No output could be produced |
 
+## Priority
+
+Every video carries a `priority` — `low`, `normal` (the default) or `high` — chosen at upload
+through `metadata.priority`. It decides the order in which `pending` videos are dispatched: every
+`high` video ahead of every `normal` one, and every `normal` ahead of every `low`, oldest first
+within each level.
+
+It only ever reorders the **queue**. A video already dispatched keeps its worker slot, and its
+chunks share the same encode queue as everyone else's, so raising the priority of a `running` video
+does not speed it up, and a `high` upload does not preempt work in progress — it takes the next
+free slot. A `high` video waiting on hardware no active node provides (a GPU template with no GPU
+node up) does not hold back the videos behind it that other hardware can take.
+
+The priority is kept for good, so a [retry](#retry-video) requeues the video at the level it had.
+
 ## Output Statuses
 
 Each output carries its own status, which is what [Playback URLs](#playback-urls) reads: only a
@@ -410,7 +430,8 @@ including optional ids that associate the video with external systems:
     "project": "01ABD...",
     "template": "01ABC...",
     "externalUserId": "user-123",
-    "externalResourceId": "post-456"
+    "externalResourceId": "post-456",
+    "priority": "high"
   }
 }
 ```
@@ -422,6 +443,7 @@ including optional ids that associate the video with external systems:
 | `metadata.template` | string | **Required.** ULID of an **enabled** template of that project, used for processing |
 | `metadata.externalUserId` | string | Optional, up to 255 characters. ID of the user in your external system |
 | `metadata.externalResourceId` | string | Optional, up to 255 characters. ID of the resource (post, product, etc.) in your external system |
+| `metadata.priority` | string | Optional. `low`, `normal` or `high`; `normal` when omitted. Any other value is a `422`. See [Priority](#priority). |
 
 The other multipart endpoints take the upload's `key` and refuse (`403`) an upload that was not
 started by the same caller.
