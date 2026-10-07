@@ -127,12 +127,187 @@ class ChunkTranscodeService
         };
     }
 
+    /**
+     * Tone mapping runs in software (zscale has no GPU twin in this build), so a rendition that
+     * tone-maps decodes in software too: hardware frames would only be downloaded again to reach it.
+     * `force_software_decode` is the probes' switch ({@see PerTitleCrfService}): their command sets
+     * up no hardware device, but must otherwise build exactly what the chunk encode will.
+     */
     private function hardwareDecodes(): bool
     {
         $meta = $this->stream->meta ?? [];
 
-        return in_array($meta['source_codec'] ?? '', self::HW_DECODABLE_CODECS, true)
+        return empty($meta['force_software_decode'])
+            && ! $this->tonesMap()
+            && in_array($meta['source_codec'] ?? '', self::HW_DECODABLE_CODECS, true)
             && in_array($meta['source_pix_fmt'] ?? '', self::HW_DECODABLE_FORMATS, true);
+    }
+
+    /**
+     * Transfer functions ffprobe reports for an HDR picture: PQ (HDR10, HDR10+, and the HDR10 base
+     * layer of Dolby Vision 8.1) and HLG. Anything else is graded for SDR and encodes as it is.
+     */
+    public const HDR_TRANSFERS = ['smpte2084', 'arib-std-b67'];
+
+    /** Whether a source stream (ffprobe's `color_transfer`) carries an HDR picture. */
+    public static function isHdrTransfer(?string $transfer): bool
+    {
+        return in_array($transfer, self::HDR_TRANSFERS, true);
+    }
+
+    /**
+     * Whether a rendition with these resolved parameters keeps an HDR source's picture as it is.
+     * That takes 10-bit HEVC or AV1: H.264 as browsers decode it is 8-bit, and eight bits spread
+     * over PQ's 10,000-nit range band visibly. Mirrors what the encode will actually produce — a
+     * CPU encoder follows the source's depth unless the template pins an 8-bit `pixel_format` or
+     * x265 profile, GPU HEVC follows the source ({@see gpuEncodeFormat}) and GPU AV1 is always
+     * 10-bit. An 8-bit "HDR" source has already lost what PQ needs, so it tone-maps.
+     */
+    public static function carriesHdr(array $params, ?string $sourcePixFmt): bool
+    {
+        if (self::bitDepth($sourcePixFmt) < 10) {
+            return false;
+        }
+
+        $codec = $params['video_codec'] ?? null;
+        $family = collect(config('ffmpeg.codecs'))->firstWhere('codec', $codec)['family'] ?? null;
+
+        if (! in_array($family, ['hevc', 'av1'], true)) {
+            return false;
+        }
+
+        if (self::accelForCodec($codec) !== null) {
+            return true;
+        }
+
+        $format = ($params['pixel_format'] ?? null) ?: null;
+
+        if ($format !== null && self::bitDepth($format) < 10) {
+            return false;
+        }
+
+        return ! ($codec === 'libx265' && in_array($params['x265_profile'] ?? null, ['main', 'main444-8'], true));
+    }
+
+    /**
+     * Bits per component of an ffprobe pixel format: the trailing `10le`/`12be` of the planar
+     * names, the `010` of p010. Anything without one (yuv420p, nv12, gbrp, unknown) reads as 8.
+     */
+    private static function bitDepth(?string $pixFmt): int
+    {
+        return preg_match('/(\d{2})(le|be)$/', (string) $pixFmt, $match) ? (int) $match[1] : 8;
+    }
+
+    /**
+     * Whether this rendition maps an HDR source down to SDR, decided once per output when the
+     * streams are created ({@see CreateVideoStreamsService}): an output keeps HDR only when every
+     * one of its renditions can carry it, so its ladder never switches dynamic range mid-playback.
+     */
+    public function tonesMap(): bool
+    {
+        return ! empty($this->stream->meta['tone_map']);
+    }
+
+    /**
+     * PQ/HLG → BT.709 SDR. Linearised at 100 nits (SDR reference white), gamut-mapped in float,
+     * Hable's curve rolls the highlights off instead of clipping them, then back to limited-range
+     * BT.709. The HDR10 static metadata is dropped on the way out: it rides the frames as side data,
+     * and x265 would otherwise write mastering-display and MaxCLL SEI into a stream that is no
+     * longer HDR. Ends at `$format` explicitly — left to negotiation, the float frames would
+     * reach libx264 as 4:4:4.
+     */
+    private const TONE_MAP_FILTER = 'zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,'
+        .'tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,'
+        .'sidedata=mode=delete:type=MASTERING_DISPLAY_METADATA,sidedata=mode=delete:type=CONTENT_LIGHT_LEVEL';
+
+    /**
+     * The tone-mapping filter chain for this rendition, ending in the pixel format its encoder
+     * gets, or null when it does not tone-map. Public for the per-title VMAF reference, which has
+     * to look like what the viewer is shown — scored against the PQ source, every sample is "bad".
+     */
+    public function toneMapFilter(): ?string
+    {
+        if (! $this->tonesMap()) {
+            return null;
+        }
+
+        $params = $this->stream->input_params ?? [];
+        $codec = $params['video_codec'] ?? '';
+        $format = self::accelForCodec($codec) ? $this->gpuEncodeFormat($codec) : $this->cpuPixelFormat($params);
+
+        return self::TONE_MAP_FILTER.',format='.$this->assertSafeArgValue($format ?? 'yuv420p');
+    }
+
+    /**
+     * The pixel format a CPU encoder is handed: the template's, or 4:2:0 at the source's depth —
+     * 8-bit for H.264, which browsers decode at nothing else. Left to ffmpeg, a ProRes or DNxHR
+     * master (4:2:2 10-bit) went straight through to a High 4:2:2 or Main 4:2:2 10 stream no browser
+     * plays. Null when the source format is unknown: there is nothing to decide against.
+     *
+     * An x265 profile the template pins wins over the source: `main` is 8-bit 4:2:0, so a 10-bit
+     * master gets 8-bit frames — handed 10-bit ones, x265 refuses the profile outright, and
+     * {@see carriesHdr} already counts `main` as 8-bit. The 4:4:4 profiles get nothing at all, so
+     * ffmpeg negotiates the source's own chroma as it always has.
+     */
+    private function cpuPixelFormat(array $params): ?string
+    {
+        if (! empty($params['pixel_format'])) {
+            return (string) $params['pixel_format'];
+        }
+
+        if (($params['video_codec'] ?? null) === 'libx265') {
+            $profile = $params['x265_profile'] ?? null;
+
+            if ($profile === 'main') {
+                return 'yuv420p';
+            }
+
+            if (in_array($profile, ['main444-8', 'main444-10'], true)) {
+                return null;
+            }
+        }
+
+        $sourceFormat = $this->stream->meta['source_pix_fmt'] ?? null;
+
+        if ($sourceFormat === null) {
+            return null;
+        }
+
+        if (($params['video_codec'] ?? null) === 'libx264') {
+            return 'yuv420p';
+        }
+
+        return self::bitDepth($sourceFormat) >= 10 ? 'yuv420p10le' : 'yuv420p';
+    }
+
+    /**
+     * The colour description written into the stream, so it never rests on what survives the
+     * filter chain: BT.709 for a tone-mapped rendition, the source's own for an HDR one kept as it
+     * is. Explicit for the GPU encoders above all — what the software path showed carrying through
+     * on its own, nothing guarantees for frames that never leave VRAM. SDR sources write nothing,
+     * as before.
+     */
+    private function colorArguments(): array
+    {
+        if ($this->tonesMap()) {
+            return ['-color_primaries bt709', '-color_trc bt709', '-colorspace bt709'];
+        }
+
+        $meta = $this->stream->meta ?? [];
+
+        if (! self::isHdrTransfer($meta['source_color_transfer'] ?? null)) {
+            return [];
+        }
+
+        return collect([
+            '-color_primaries' => $meta['source_color_primaries'] ?? null,
+            '-color_trc' => $meta['source_color_transfer'],
+            '-colorspace' => $meta['source_color_space'] ?? null,
+        ])
+            ->filter()
+            ->map(fn ($value, $flag) => $flag.' '.$this->assertSafeArgValue($value))
+            ->values()
+            ->all();
     }
 
     /** Scale on the GPU so hardware-decoded frames never round-trip to system memory. */
@@ -150,12 +325,10 @@ class ChunkTranscodeService
         };
     }
 
-    /** 10-bit 4:2:0 source formats, as ffprobe reports them. */
-    private const TEN_BIT_FORMATS = ['yuv420p10le', 'p010le'];
-
     /**
      * AV1 always encodes 10-bit, even from 8-bit sources: same speed and weight on the media engine,
-     * and the extra precision kills dark-gradient banding. H.264 is 8-bit only; HEVC follows the source.
+     * and the extra precision kills dark-gradient banding. H.264 is 8-bit only; HEVC follows the
+     * source's depth — any 10-bit one, 4:2:2 masters included, since the encode is 4:2:0 either way.
      */
     private function gpuEncodeFormat(string $codec): string
     {
@@ -163,7 +336,7 @@ class ChunkTranscodeService
             return 'nv12';
         }
 
-        $tenBitSource = in_array($this->stream->meta['source_pix_fmt'] ?? '', self::TEN_BIT_FORMATS, true);
+        $tenBitSource = self::bitDepth($this->stream->meta['source_pix_fmt'] ?? null) >= 10;
 
         return str_starts_with($codec, 'av1') || $tenBitSource ? 'p010le' : 'nv12';
     }
@@ -204,8 +377,12 @@ class ChunkTranscodeService
         } else {
             $scale = $this->buildScaleFilter((int) $this->stream->width, (int) $this->stream->height);
 
-            // Software fallback/probe path of a GPU encoder: match the hardware path's depth.
-            if ($accel && $this->gpuEncodeFormat($params['video_codec']) === 'p010le') {
+            // Scaled first: tone mapping runs in float, so it costs per OUTPUT pixel — 4x less on
+            // a 1080p rung of a 4K master than ahead of the scale.
+            if ($toneMap = $this->toneMapFilter()) {
+                $scale = $scale ? "{$scale},{$toneMap}" : "-vf {$toneMap}";
+            } elseif ($accel && $this->gpuEncodeFormat($params['video_codec']) === 'p010le') {
+                // Software fallback/probe path of a GPU encoder: match the hardware path's depth.
                 $scale = $scale ? "{$scale},format=p010le" : '-vf format=p010le';
             }
 
@@ -225,6 +402,13 @@ class ChunkTranscodeService
         }
 
         $args = array_merge($args, $this->buildParamsArguments($params, 'video'));
+
+        // The template's own `pixel_format` is already among the params above.
+        if (! $accel && empty($params['pixel_format']) && ($format = $this->cpuPixelFormat($params))) {
+            $args[] = '-pix_fmt '.$this->assertSafeArgValue($format);
+        }
+
+        $args = array_merge($args, $this->colorArguments());
 
         if ($gapFill !== null && ! ($accel && $this->hardwareDecodes())) {
             $args[] = '-video_track_timescale '.(int) $gapFill['timescale'];
@@ -248,7 +432,7 @@ class ChunkTranscodeService
         $threads = $this->perEncoderThreads();
 
         return match ($params['video_codec'] ?? null) {
-            'libx265' => '-x265-params scenecut=0:open-gop=0'.($threads > 0 ? ":pools={$threads}" : ''),
+            'libx265' => $this->x265Params($params, $threads),
             'libsvtav1' => $this->svtAv1Params($params, $threads),
             // QSV: pin I-frames to the -g grid; -mbbrc = adaptive per-block quant (h264/hevc only).
             // AV1's BRC lever is -extbrc + lookahead instead, and only in quality mode — under VBR
@@ -266,13 +450,33 @@ class ChunkTranscodeService
      */
     private function svtAv1Params(array $params, int $threads): string
     {
+        $forced = ['scd' => '0'] + ($threads > 0 ? ['lp' => (string) $threads] : []);
+
+        return '-svtav1-params '.$this->joinEncoderParams($params, 'svtav1_param', $forced);
+    }
+
+    /** Single -x265-params flag, for the same reason: the `x265_param` fields join the forced pairs. */
+    private function x265Params(array $params, int $threads): string
+    {
+        $forced = ['scenecut' => '0', 'open-gop' => '0'] + ($threads > 0 ? ['pools' => (string) $threads] : []);
+
+        return '-x265-params '.$this->joinEncoderParams($params, 'x265_param', $forced);
+    }
+
+    /**
+     * `key=value:key=value` from the template fields that declare `$marker` (their key inside the
+     * encoder's own *-params string), followed by `$forced`, which wins over any template value
+     * for the same key — the keyframe grid is not the template's to undo.
+     */
+    private function joinEncoderParams(array $params, string $marker, array $forced): string
+    {
         $pairs = [];
 
         foreach (config('ffmpeg.parameters') as $key => $config) {
-            $svtKey = $config['svtav1_param'] ?? null;
+            $encoderKey = $config[$marker] ?? null;
             $value = $params[$key] ?? null;
 
-            if (! $svtKey || $value === null || $value === '') {
+            if (! $encoderKey || $value === null || $value === '') {
                 continue;
             }
 
@@ -283,12 +487,10 @@ class ChunkTranscodeService
                 $value = 1;
             }
 
-            $pairs[$svtKey] = $this->assertSafeArgValue($value);
+            $pairs[$encoderKey] = $this->assertSafeArgValue($value);
         }
 
-        $forced = ['scd' => '0'] + ($threads > 0 ? ['lp' => (string) $threads] : []);
-
-        return '-svtav1-params '.collect(array_merge($pairs, $forced))
+        return collect(array_merge($pairs, $forced))
             ->map(fn ($value, $key) => "{$key}={$value}")
             ->implode(':');
     }

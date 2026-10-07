@@ -518,10 +518,11 @@ class PerTitleCrfService
         // at 5.9 Mbps, sending renditions to CRF 43-46 at 0.84x their source. The real encode's VBV
         // only ever trims what these samples spend, so the cap errs on the lean side. One more
         // thing differs: the GPU scale filter. vpp_qsv needs a hw device this command never sets
-        // up, so blinding the replica's pix_fmt meta drops it to the software decode+scale path.
+        // up, so the replica is forced onto the software decode+scale path — by its own flag, not
+        // by blinding its pix_fmt meta, which also decides the encode's bit depth.
         $probe = $this->stream->replicate();
         $probe->input_params = [$crfKey => $crf] + array_diff_key($probe->input_params ?? [], ['maxrate' => true, 'bufsize' => true]);
-        $probe->meta = array_diff_key($probe->meta ?? [], ['source_pix_fmt' => true]);
+        $probe->meta = ['force_software_decode' => true] + ($probe->meta ?? []);
         $service = new ChunkTranscodeService($probe);
 
         return sprintf(
@@ -541,12 +542,18 @@ class PerTitleCrfService
         // same one the sample encode used; a sharper kernel here would bias every score low.
         // Pair frames by index (settb=AVTB,setpts=N), not by timestamp: the source and the .mp4
         // sample carry different timebases (1/fps vs 1/1000), so libvmaf's default PTS framesync
-        // mispairs them and every score reads ~35 points low.
+        // mispairs them and every score reads ~35 points low. A tone-mapped rendition is scored
+        // against the source tone-mapped the same way: against the PQ picture itself, VMAF would
+        // read the change of dynamic range as distortion and send the CRF to the floor.
+        $service = new ChunkTranscodeService($this->stream);
+        $toneMap = $service->toneMapFilter();
+
         $filter = sprintf(
-            '[%s]scale=%d:%d,settb=AVTB,setpts=N[ref];[1:v:0]settb=AVTB,setpts=N[dist];[dist][ref]libvmaf=n_threads=2',
-            (new ChunkTranscodeService($this->stream))->mapTarget(),
+            '[%s]scale=%d:%d%s,settb=AVTB,setpts=N[ref];[1:v:0]settb=AVTB,setpts=N[dist];[dist][ref]libvmaf=n_threads=2',
+            $service->mapTarget(),
             (int) $this->stream->width,
             (int) $this->stream->height,
+            $toneMap ? ','.$toneMap : '',
         );
 
         return sprintf(

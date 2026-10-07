@@ -30,10 +30,10 @@ function resolvedDimensions(FFStream $source, array $variant): array
 }
 
 it('sizes a rendition against the picture as displayed, not as coded', function () {
-    // The 1080p rung of a portrait source is 1080 tall and 608 wide — it fits inside the rung's
-    // box instead of being stretched across it.
+    // The 1080p rung of a portrait source is 1080x1920: its box turns with the picture instead of
+    // squashing it across a landscape frame or shrinking it to 608x1080 inside one.
     expect(resolvedDimensions(portraitSource(), ['width' => 1920, 'height' => 1080]))
-        ->toBe([608, 1080]);
+        ->toBe([1080, 1920]);
 });
 
 it('leaves an unrotated source exactly as it was', function () {
@@ -51,7 +51,7 @@ it('reads the rotation a pre-5.0 ffmpeg wrote as a container tag', function () {
         'tags' => ['rotate' => '270'],
     ]);
 
-    expect(resolvedDimensions($tagged, ['width' => 1920, 'height' => 1080]))->toBe([608, 1080]);
+    expect(resolvedDimensions($tagged, ['width' => 1920, 'height' => 1080]))->toBe([1080, 1920]);
 });
 
 it('treats a half turn as landscape, since the picture is not turned on its side', function () {
@@ -61,7 +61,7 @@ it('treats a half turn as landscape, since the picture is not turned on its side
         ->toBe([1920, 1080]);
 });
 
-it('builds a portrait ladder, every rung fitting inside its box', function () {
+it('builds a portrait ladder, every rung fitting inside its turned box', function () {
     $source = portraitSource();
 
     $ladder = [
@@ -74,9 +74,10 @@ it('builds a portrait ladder, every rung fitting inside its box', function () {
 
     $resolved = array_map(fn (array $variant) => resolvedDimensions($source, $variant), $kept);
 
-    // Three distinct rungs, all taller than wide, none upscaled past the 1080x1920 source. The
-    // 4K rung lands exactly on the source: there is nothing above it to scale down from.
-    expect($resolved)->toBe([[608, 1080], [404, 720], [1080, 1920]]);
+    // All taller than wide, none upscaled past the 1080x1920 source. The 4K rung lands on the
+    // source like the 1080p one does, so it is dropped: the 1080p rung's knobs are the ones tuned
+    // for those pixels.
+    expect($resolved)->toBe([[1080, 1920], [720, 1280]]);
 
     foreach ($resolved as [$width, $height]) {
         expect($height)->toBeGreaterThan($width)

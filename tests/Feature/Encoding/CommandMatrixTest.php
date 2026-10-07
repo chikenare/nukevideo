@@ -177,6 +177,25 @@ describe('command assembly', function () {
             ->toContain('-vf scale=1280:720,format=p010le');
     });
 
+    it('hands x265 the depth its pinned profile allows, not the source\'s', function (string $profile, ?string $expected) {
+        $stream = matrixStream(
+            ['video_codec' => 'libx265', 'crf' => 26, 'x265_profile' => $profile],
+            meta: ['index' => 0, 'source_codec' => 'hevc', 'source_pix_fmt' => 'yuv420p10le'],
+        );
+
+        $command = EncodeCommandBuilder::build(new Collection([$stream]), 'src.mkv', [1 => 'out.part'], 0.0, 10.0);
+
+        // `main` on 10-bit frames is a hard x265 error; the 4:4:4 profiles negotiate as they always did.
+        $expected === null
+            ? expect($command)->not->toContain('-pix_fmt')
+            : expect($command)->toContain("-pix_fmt {$expected}");
+    })->with([
+        'main' => ['main', 'yuv420p'],
+        'main10' => ['main10', 'yuv420p10le'],
+        'main444-8' => ['main444-8', null],
+        'main444-10' => ['main444-10', null],
+    ]);
+
     it('builds one sidecar pass for every audio track', function () {
         $spanish = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 1]);
         $english = matrixStream(['audio_codec' => 'libopus', 'channels' => '2', 'audio_bitrate' => '128k'], type: 'audio', meta: ['index' => 2]);
@@ -223,4 +242,13 @@ describe('command assembly', function () {
         ['libx264', 'mp4'], ['libx265', 'mp4'], ['libsvtav1', 'mp4'],
         ['av1_qsv', 'mp4'], ['libopus', 'mp4'], ['aac', 'mp4'],
     ]);
+});
+
+it('pins an x265 level inside the one -x265-params flag', function () {
+    $args = (new ChunkTranscodeService(matrixStream(['video_codec' => 'libx265', 'crf' => 22, 'x265_level' => '5.1'])))
+        ->buildVideoArguments(windowed: true);
+
+    // ffmpeg keeps only the last -x265-params, so a second flag would drop the keyframe grid.
+    expect(substr_count($args, '-x265-params'))->toBe(1)
+        ->and($args)->toMatch('/-x265-params level-idc=5\\.1:scenecut=0:open-gop=0(:pools=\\d+)? /');
 });
