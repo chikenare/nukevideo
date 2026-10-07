@@ -102,7 +102,10 @@ const formatChannels = (ch: number): string => {
 }
 
 const label = computed(() => {
-  if (stream.type === 'video') return stream.height ? `${stream.height}p` : 'Video'
+  // The short edge: a vertical 1080x1920 rendition is 1080p, not 1920p.
+  if (stream.type === 'video') {
+    return stream.height ? `${Math.min(stream.height, stream.width ?? stream.height)}p` : 'Video'
+  }
   return stream.name
 })
 

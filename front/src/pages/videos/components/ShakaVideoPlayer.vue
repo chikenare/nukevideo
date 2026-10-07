@@ -64,6 +64,10 @@ const handlePlayVideo = async () => {
     await nextTick() // the <video> + container must be in the DOM before shaka attaches
 
     player = new shaka.Player()
+    // ABR picks among the renditions that fit the element: a 4K rung on a fast link would
+    // otherwise stream into a preview a few hundred pixels wide. Fullscreen lifts the cap with
+    // the element's size.
+    player.configure({ abr: { restrictToElementSize: true } })
     await player.attach(videoEl.value!)
     ui = new shaka.ui.Overlay(player, containerEl.value!, videoEl.value!)
 

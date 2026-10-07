@@ -49,12 +49,35 @@ The `query` field is a JSON object with an `outputs` array. Each output becomes 
 ```
 
 The template is a ceiling, not a promise: renditions are never upscaled past the source, and audio
-is never upmixed past the source track's channels. Whether an output is served as HLS, DASH or both
+is never upmixed past the source track's channels. A rendition's `width` × `height` is a size, not
+an orientation: on a vertical source the box turns, so a `3840`×`2160` rung gives a 2160x3840
+master its 4K rendition and a `1920`×`1080` rung gives a phone video 1080x1920. A rendition that
+sets only `width` or only `height` still means that edge. Whether an output is served as HLS, DASH or both
 follows from its codecs — H.264, H.265, AV1 and AAC package for both, Opus for DASH only.
 
 The parameters each codec accepts, with their validation rules, come from
 [`GET /api/templates-config`](#template-configuration). Keys in `query` are snake_case, since they
 are stored as written.
+
+## HDR Sources
+
+A source whose transfer function is PQ (HDR10, HDR10+, the HDR10 base layer of Dolby Vision 8.1)
+or HLG is HDR. For each output, NukeVideo decides once whether the whole ladder keeps HDR or is
+tone-mapped to SDR:
+
+- **Kept HDR** when every rendition of the output can carry it: 10-bit HEVC or AV1. That covers
+  `libx265` and `libsvtav1` unless a rendition pins an 8-bit `pixel_format` (or `x265_profile:
+  main`), plus `hevc_qsv`, `hevc_nvenc`, `av1_qsv` and `av1_nvenc`. The renditions keep the
+  source's colour description and its HDR10 metadata (mastering display, MaxCLL). The manifests
+  advertise them as such: `VIDEO-RANGE=PQ` or `HLG` in HLS, and the CICP properties in DASH.
+- **Tone-mapped to SDR** otherwise, which always includes H.264. Every rendition of the output
+  becomes BT.709, so players never switch dynamic range when they change quality.
+
+To serve HDR screens and everything else from the same video, use two outputs: one 10-bit HEVC or
+AV1 output (kept HDR) and one H.264 output (tone-mapped). The `hls-hevc-4k` preset keeps HDR.
+
+Tone mapping runs on the CPU, after scaling, so it costs more the larger the rendition. A
+tone-mapped 4K rendition is noticeably slower to encode than the same rendition from an SDR source.
 
 ## Presets
 

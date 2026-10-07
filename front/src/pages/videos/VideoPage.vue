@@ -216,7 +216,8 @@ const outputStreams = (output: Output): Stream[] => [
 const getOutputSummary = (output: Output): string => {
   const resolutions = output.streams
     .filter(s => s.type === 'video' && s.height)
-    .map(s => s.height!)
+    // The short edge, as StreamItem labels it: a vertical 1080x1920 rendition is 1080p.
+    .map(s => Math.min(s.height!, s.width ?? s.height!))
     .sort((a, b) => b - a)
     .map(r => `${r}p`)
 

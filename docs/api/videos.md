@@ -224,7 +224,7 @@ POST /api/videos/{ulid}/play
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `resolution` | integer | Caps every output's ladder at this height. Each output resolves it against its own renditions: you get the tallest packaged rendition at or below your ceiling, or the full ladder when the ceiling is already at or above the tallest one. |
+| `resolution` | integer | Caps every output's ladder at this resolution, read as the short edge of the picture: `1080` is 1080p for a landscape 1920x1080 rendition and for a vertical 1080x1920 one alike. Each output resolves it against its own renditions: you get the largest packaged rendition at or below your ceiling, or the full ladder when the ceiling is already at or above the largest one. |
 | `ip` | string | The viewer's address, when the link is minted from your backend. |
 | `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
 

@@ -306,8 +306,9 @@ class ProcessChunkJob implements ShouldQueue
 
         $stream->update(['error_log' => Video::trimReason($e->getMessage())]);
 
-        // Video renditions carry no name (only sidecar tracks do); label them by height.
-        $label = $stream->name ?? "{$stream->height}p";
+        // Video renditions carry no name (only sidecar tracks do); label them by their short edge,
+        // which is the "1080p" of a vertical 1080x1920 rendition as much as of a landscape one.
+        $label = $stream->name ?? min((int) $stream->height, (int) ($stream->width ?: $stream->height)).'p';
         $video->markAsFailed("Rendition {$label} failed on chunk {$this->chunkIndex}: {$e->getMessage()}");
     }
 

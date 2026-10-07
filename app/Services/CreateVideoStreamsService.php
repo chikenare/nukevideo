@@ -328,14 +328,22 @@ class CreateVideoStreamsService
 
         $derivedGop = $this->deriveGopSize($this->sourceFrameRate($sourceVideo));
 
-        foreach ($this->filterVariants($sourceVideo, $variants) as $variantConfig) {
+        $ladder = array_map(function (array $variantConfig) use ($videoCodec, $derivedGop) {
             $variantConfig = array_merge(['video_codec' => $videoCodec], $variantConfig);
 
             if (empty($variantConfig['gop_size']) && $derivedGop) {
                 $variantConfig['gop_size'] = $derivedGop;
             }
 
-            $key = $this->streamSignature($variantConfig);
+            return $variantConfig;
+        }, $this->filterVariants($sourceVideo, $variants));
+
+        $toneMap = $this->tonesMapOutput($sourceVideo, $ladder);
+
+        foreach ($ladder as $variantConfig) {
+            // Part of the identity: the same parameters tone-mapped in one output and kept HDR in
+            // another are two different encodes, and must not be shared.
+            $key = $this->streamSignature($variantConfig).($toneMap ? ':tone-map' : '');
 
             if (! isset($this->videoStreamCache[$key])) {
                 $stream = $this->createStream(
@@ -343,6 +351,7 @@ class CreateVideoStreamsService
                     stream: $sourceVideo,
                     codecType: 'video',
                     inputParams: $variantConfig,
+                    toneMap: $toneMap,
                 );
                 $this->videoStreamCache[$key] = $stream->id;
             }
@@ -351,6 +360,26 @@ class CreateVideoStreamsService
         }
 
         return $streamIds;
+    }
+
+    /**
+     * Whether an output maps an HDR source down to SDR: all of its renditions or none. HLS and
+     * DASH both let a ladder mix dynamic ranges, but a player switching between them does it
+     * mid-playback — the picture visibly jumps in brightness on every quality change, and shaka
+     * does not filter by range the way AVPlayer does. So an output stays HDR only when every rung
+     * can carry it ({@see ChunkTranscodeService::carriesHdr}); one 8-bit or H.264 rung tone-maps
+     * the whole ladder. An output that wants both is two outputs: a 10-bit HEVC/AV1 one for HDR
+     * screens, an H.264 one for everything else.
+     */
+    private function tonesMapOutput(FFStream $sourceVideo, array $ladder): bool
+    {
+        if (! ChunkTranscodeService::isHdrTransfer($sourceVideo->get('color_transfer'))) {
+            return false;
+        }
+
+        $sourceFormat = $sourceVideo->get('pix_fmt');
+
+        return ! collect($ladder)->every(fn (array $params) => ChunkTranscodeService::carriesHdr($params, $sourceFormat));
     }
 
     /**
@@ -720,6 +749,7 @@ class CreateVideoStreamsService
         string $codecType,
         ?array $inputParams = null,
         string $nameSuffix = '',
+        bool $toneMap = false,
     ) {
         $ulid = Str::ulid();
         $extension = $this->getStreamExtension($codecType, $inputParams);
@@ -747,6 +777,12 @@ class CreateVideoStreamsService
                     // original), and with it the only way to compare what shipped against what came in.
                     'source_file_size' => @filesize($this->localPath) ?: null,
                     'source_fps' => $this->sourceFrameRate($stream),
+                    // The colour description, so the encode can tell an HDR picture from an SDR
+                    // one and write it back out ({@see ChunkTranscodeService::colorArguments}).
+                    'source_color_transfer' => $stream->get('color_transfer'),
+                    'source_color_primaries' => $stream->get('color_primaries'),
+                    'source_color_space' => $stream->get('color_space'),
+                    'tone_map' => $toneMap,
                 ] : []),
                 // Accessibility dispositions; packaging turns them into DASH Role/Accessibility and
                 // HLS CHARACTERISTICS ({@see PackagerCommandBuilder}), and the source track's own

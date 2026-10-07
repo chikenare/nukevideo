@@ -417,6 +417,20 @@ return [
             'template' => '-tag:v hvc1',
             'available_for' => ['libx265'],
         ],
+        // `template` is null for the same reason as the `svtav1_param` fields below: ffmpeg keeps
+        // only the last -x265-params flag, and the keyframe grid already needs one, so
+        // ChunkTranscodeService::x265Params() joins each `x265_param` key into it.
+        'x265_level' => [
+            'type' => 'video',
+            'input_type' => 'select',
+            'label' => 'HEVC Level',
+            'options' => ['4', '4.1', '5', '5.1', '5.2', '6', '6.1', '6.2'],
+            'help' => 'Pins the level a decoder must support. 5.1 covers 4K up to 60fps; empty = x265 picks the lowest that fits.',
+            'rules' => ['in:4,4.1,5,5.1,5.2,6,6.1,6.2'],
+            'template' => null,
+            'x265_param' => 'level-idc',
+            'available_for' => ['libx265'],
+        ],
 
         // --- AV1 (SVT-AV1) specific ---
         'svtav1_crf' => [

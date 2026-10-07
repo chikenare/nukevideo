@@ -72,9 +72,12 @@ return [
         ],
     ],
 
+    // The lower rungs pin no pixel format or profile: they follow the source's depth, so an HDR
+    // master keeps HDR across the whole ladder instead of tone-mapping all of it for want of one
+    // 10-bit rung ({@see \App\Services\CreateVideoStreamsService::tonesMapOutput}).
     'hls-hevc-4k' => [
         'name' => '4K Premium H.265 (HLS + DASH)',
-        'description' => '4K HEVC streaming with multiple quality levels and 5.1 surround audio.',
+        'description' => '4K HEVC streaming with multiple quality levels and 5.1 surround audio. Keeps HDR from an HDR source.',
         'category' => 'streaming',
         'query' => [
             'outputs' => [
@@ -98,8 +101,6 @@ return [
                             'height' => 1080,
                             'crf' => 23,
                             'preset' => 'medium',
-                            'x265_profile' => 'main',
-                            'pixel_format' => 'yuv420p',
                             'maxrate' => '4500k',
                             'bufsize' => '9000k',
                             'hevc_tag' => true,
@@ -110,8 +111,6 @@ return [
                             'height' => 720,
                             'crf' => 25,
                             'preset' => 'medium',
-                            'x265_profile' => 'main',
-                            'pixel_format' => 'yuv420p',
                             'maxrate' => '2000k',
                             'bufsize' => '4000k',
                             'hevc_tag' => true,

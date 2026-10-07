@@ -81,32 +81,44 @@ class Output extends Model
         return "{$this->packagePrefix()}/".$this->manifestFile($format, $cap);
     }
 
-    /** Manifest cap for the max resolution a client can play: tallest packaged height <= $resolution
-     *  (shortest if below all of them). Null (full master) when unset, >= max, or the tallest is max. */
+    /**
+     * Manifest cap for the max resolution a client can play: the largest rendition whose SHORT
+     * edge is <= $resolution (the smallest if every one is above it). Null (full master) when
+     * unset, at or above the top rung, or when the top rung is the one that fits.
+     *
+     * Compared on the short edge because that is what "1080p" means in either orientation — on
+     * height, a vertical 1080x1920 ladder answered `resolution=1080` with its 480x854 rung. The
+     * returned cap is still the rung's HEIGHT: that is what the capped manifests are named after
+     * ({@see manifestFile}), and within one ladder heights and short edges sort the same way. It
+     * also keeps portrait videos packaged before rungs turned with the source playable: their
+     * capped files are named after the heights they have.
+     */
     public function resolveCap(?int $resolution): ?int
     {
         if ($resolution === null) {
             return null;
         }
 
-        $heights = $this->streams
+        $rungs = $this->streams
             ->where('type', 'video')
-            ->pluck('height')
-            ->filter()
-            ->map(fn ($height) => (int) $height)
-            ->unique()
-            ->sort()
+            ->filter(fn (Stream $stream) => $stream->height)
+            ->map(fn (Stream $stream) => [
+                'height' => (int) $stream->height,
+                'short' => min((int) $stream->height, (int) ($stream->width ?: $stream->height)),
+            ])
+            ->unique('height')
+            ->sortBy('height')
             ->values();
 
-        if ($heights->isEmpty() || $resolution >= $heights->last()) {
+        if ($rungs->isEmpty() || $resolution >= $rungs->last()['short']) {
             return null;
         }
 
-        $target = $heights->filter(fn (int $height) => $height <= $resolution)->last()
-            ?? $heights->first();
+        $target = ($rungs->filter(fn (array $rung) => $rung['short'] <= $resolution)->last()
+            ?? $rungs->first())['height'];
 
         // The max height's manifest is the uncapped master (no `.{height}.` file exists for it).
-        return $target === $heights->last() ? null : $target;
+        return $target === $rungs->last()['height'] ? null : $target;
     }
 
     /**
