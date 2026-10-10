@@ -139,15 +139,20 @@ GET /api/nodes/{id}/cache-disks
   "data": {
     "preselect": true,
     "disks": [
-      { "device": "/dev/sdb", "size": 4000787030016, "model": "…", "state": "empty", "detail": "" }
+      { "device": "/dev/sda", "size": 4000787030016, "model": "…", "state": "shared", "detail": "mounted at /, with unpartitioned space", "free": 3946026762240 },
+      { "device": "/dev/sdb", "size": 4000787030016, "model": "…", "state": "empty", "detail": "", "free": 0 }
     ]
   }
 }
 ```
 
-`state` is `system` (never touched), `nukevideo` (already the cache, mounted as is), or `empty` /
-`foreign` (formatted into the pool if listed in the deploy's `disks`). `preselect` is `false` on a
-development panel. A worker answers `{ "preselect": false, "disks": [] }`.
+`state` is `system` (never touched), `nukevideo` (already the cache, mounted as is), `empty` /
+`foreign` (formatted into the pool if listed in the deploy's `disks`), or `shared`: a system disk
+with `free` bytes still unpartitioned, which gets one partition over that space if listed in
+`sharedDisks` and is
+otherwise as untouched as `system`. `free` is `0` for every other state. `preselect` is `false` on
+a development panel, and never covers a `shared` disk: those go in the deploy's `sharedDisks`,
+not in `disks`. A worker answers `{ "preselect": false, "disks": [] }`.
 
 ## Bootstrap Command
 
@@ -196,13 +201,17 @@ POST /api/nodes/{id}/deploy
 ```json
 {
   "force": false,
-  "disks": ["/dev/sdb"]
+  "disks": ["/dev/sdb"],
+  "sharedDisks": ["/dev/sda"]
 }
 ```
 
 `force` skips the drain: a worker's running jobs are killed instead of finished, and redeliver
 about 31 minutes later. It does nothing on a proxy. `disks` is required for a production proxy,
-`[]` included (see [Cache disks](/guide/nodes#cache-disks)). A successful deploy activates the node.
+`[]` included (see [Cache disks](/guide/nodes#cache-disks)): the spare disks to format whole.
+`sharedDisks` is optional and names the `shared` disks that give the pool a partition over their
+unpartitioned space; a disk may be in one list only, and the deploy fails without changing
+anything if one named there is no longer `shared` when it runs. A successful deploy activates the node.
 
 **Response** `202`:
 
@@ -217,7 +226,7 @@ about 31 minutes later. It does nothing on a proxy. `disks` is required for a pr
     "causerType": "App\\Models\\User",
     "causerId": 1,
     "event": "node_deploy",
-    "properties": { "action": "deploy", "force": false, "disks": null, "batch": null, "status": "queued" },
+    "properties": { "action": "deploy", "force": false, "disks": null, "shared_disks": [], "batch": null, "status": "queued" },
     "createdAt": "2026-09-30T12:00:00+00:00",
     "updatedAt": "2026-09-30T12:00:00+00:00"
   }

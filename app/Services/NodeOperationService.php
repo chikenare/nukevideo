@@ -28,7 +28,7 @@ class NodeOperationService
     public function __construct(private NodeService $nodes) {}
 
     /** Null when the node already has an operation queued or running: one SSH session per host. */
-    public function begin(Node $node, NodeAction $action, bool $force = false, ?array $disks = null, ?string $batch = null): ?Activity
+    public function begin(Node $node, NodeAction $action, bool $force = false, ?array $disks = null, ?string $batch = null, array $sharedDisks = []): ?Activity
     {
         $lock = Cache::lock(self::lockName($node->id), self::LOCK_TTL);
 
@@ -44,6 +44,7 @@ class NodeOperationService
                 'action' => $action->value,
                 'force' => $force,
                 'disks' => $disks,
+                'shared_disks' => $sharedDisks,
                 'batch' => $batch,
                 'status' => 'queued',
                 'lock' => $lock->owner(),
@@ -97,7 +98,14 @@ class NodeOperationService
 
         try {
             match ($action) {
-                NodeAction::Deploy => $this->nodes->runFullDeploy($node, $out, drain: ! $force, disks: $op->properties['disks']),
+                NodeAction::Deploy => $this->nodes->runFullDeploy(
+                    $node,
+                    $out,
+                    drain: ! $force,
+                    disks: $op->properties['disks'],
+                    // Absent on an operation queued before the list existed.
+                    sharedDisks: $op->properties['shared_disks'] ?? [],
+                ),
                 NodeAction::Start => $this->nodes->startServices($node, $out),
                 NodeAction::Stop => $this->stop($node, $force, $out),
             };

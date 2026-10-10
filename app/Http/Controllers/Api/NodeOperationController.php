@@ -52,14 +52,15 @@ class NodeOperationController extends Controller
     public function deploy(DeployNodeData $data, Node $node): JsonResponse
     {
         // The disk rules and the local-panel default are unchanged from the old SSE endpoint:
-        // null past this point means "every spare disk", which only a worker may reach.
+        // null past this point means "every spare disk", which only a worker may reach. The
+        // shared list has no such reading: absent is empty, and empty shares nothing.
         $disks = $data->disks instanceof Optional ? null : $data->disks;
         if ($disks === null && app()->isLocal()) {
             $disks = [];
         }
         abort_if($disks === null && $node->type === NodeType::PROXY, 422, 'A proxy deploy needs the list of disks to format (an empty list formats none).');
 
-        return $this->queue($this->operations->begin($node, NodeAction::Deploy, $data->force, $disks));
+        return $this->queue($this->operations->begin($node, NodeAction::Deploy, $data->force, $disks, sharedDisks: $data->sharedDisks));
     }
 
     public function start(Node $node): JsonResponse

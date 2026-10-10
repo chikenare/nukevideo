@@ -8,6 +8,7 @@ use App\Services\SSHService;
 use App\Settings\AppSettings;
 use App\Settings\CdnSettings;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Process;
 use Laravel\Sanctum\Sanctum;
 use Spatie\Activitylog\Models\Activity;
 
@@ -27,6 +28,33 @@ function cacheNode(array $attributes = []): Node
         'is_active' => true,
         ...$attributes,
     ]);
+}
+
+/**
+ * Runs the deploy's own `cache_select_disks` against an inventory, the way the node would: the
+ * selection is pure string work, so it can be executed here rather than read for keywords.
+ *
+ * @param  array<string, string>  $inventory  device => state
+ * @param  array<string, string>  $chosen  CHOSEN_DISKS / CHOSEN_SHARED, when the panel sent them
+ * @return array{ok: bool, output: string, format: array<int, string>, share: array<int, string>}
+ */
+function selectDisks(array $inventory, array $chosen = []): array
+{
+    $lines = collect($inventory)->map(fn (string $state, string $device) => "{$device}\t1000\tDISK\t{$state}\t\t0")->implode("\n");
+    $script = 'SUDO=""; . "$SCRIPT"; POOL_DISKS=$(echo "$INVENTORY" | awk -F"\t" \'$4 == "nukevideo" { print $1 }\');'
+        .' cache_select_disks; echo "FORMAT=$(echo $FREE_DISKS)"; echo "SHARE=$(echo $SHARED_DISKS)"';
+
+    $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'INVENTORY' => $lines, ...$chosen])
+        ->run(['bash', '-c', $script]);
+    preg_match('/^FORMAT=(.*)$/m', $result->output(), $format);
+    preg_match('/^SHARE=(.*)$/m', $result->output(), $share);
+
+    return [
+        'ok' => $result->successful(),
+        'output' => $result->output(),
+        'format' => array_values(array_filter(explode(' ', $format[1] ?? ''))),
+        'share' => array_values(array_filter(explode(' ', $share[1] ?? ''))),
+    ];
 }
 
 function inProduction(): void
@@ -100,7 +128,14 @@ describe('a production proxy deploy', function () {
 
         expect($shell)->toContain('CACHE_POOL_MOUNT='.ProxyCacheService::MOUNT)
             ->and($shell)->toContain('CACHE_POOL_LABEL='.ProxyCacheService::FS_LABEL)
-            ->and($shell)->toContain('CACHE_POOL_MD='.ProxyCacheService::MD_DEVICE);
+            ->and($shell)->toContain('CACHE_POOL_MD='.ProxyCacheService::MD_DEVICE)
+            ->and($shell)->toContain('CACHE_POOL_NAME=${CACHE_POOL_MD##*/}');
+    });
+
+    it('labels the pool with something XFS accepts', function () {
+        // mkfs.xfs refuses a label over twelve characters, and the array's name was once used
+        // for both: every deploy that had a disk to format died on that line.
+        expect(strlen(ProxyCacheService::FS_LABEL))->toBeLessThanOrEqual(12);
     });
 
     it('keeps an existing pool rather than rebuilding it', function () {
@@ -170,7 +205,7 @@ describe('a development proxy deploy', function () {
     it('lists the disks but ticks none of them', function () {
         $node = cacheNode();
         $ssh = Mockery::mock(SSHService::class);
-        $ssh->shouldReceive('run')->once()->andReturn("/dev/sdb\t4000000000000\tDISK\tempty\t");
+        $ssh->shouldReceive('run')->once()->andReturn("/dev/sdb\t4000000000000\tDISK\tempty\t\t0");
         app()->instance(SSHService::class, $ssh);
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
@@ -201,15 +236,35 @@ describe('a development proxy deploy', function () {
 });
 
 describe('the disk inventory', function () {
+    it('ticks the spare disks for a production panel', function () {
+        inProduction();
+        $node = cacheNode();
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->once()->andReturn("/dev/sdb\t4000000000000\tDISK\tempty\t\t0");
+        app()->instance(SSHService::class, $ssh);
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.preselect', true);
+    });
+
+    it('is written by the script in the six fields the parser reads', function () {
+        // The two sides only meet on a node. A field added to one and not the other drops every
+        // disk from the listing, and the panel then has nothing to show.
+        $shell = NodeService::deployScript('cache-disks');
+
+        expect($shell)->toContain("printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"\$dev\"");
+    });
+
     it('parses what the host reports, one disk per line', function () {
         inProduction();
         $node = cacheNode();
 
         $ssh = Mockery::mock(SSHService::class);
         $ssh->shouldReceive('run')->once()->andReturn(implode("\n", [
-            "/dev/nvme0n1\t512110190592\tSAMSUNG MZVL2512\tsystem\tmounted at /",
-            "/dev/sda\t10000831348736\tST10000NM0016\tempty\t",
-            "/dev/sdb\t10000831348736\tST10000NM0016\tforeign\text4 \"backup\"",
+            "/dev/nvme0n1\t512110190592\tSAMSUNG MZVL2512\tsystem\tmounted at /\t0",
+            "/dev/sda\t10000831348736\tST10000NM0016\tempty\t\t0",
+            "/dev/sdb\t10000831348736\tST10000NM0016\tforeign\text4 \"backup\"\t0",
+            "/dev/sdc\t10000831348736\tST10000NM0016\tshared\tmounted at /, with unpartitioned space\t9946070941696",
             'not a disk line',
         ]));
         app()->instance(SSHService::class, $ssh);
@@ -218,10 +273,13 @@ describe('the disk inventory', function () {
 
         $this->getJson("/api/nodes/{$node->id}/cache-disks")
             ->assertOk()
-            ->assertJsonCount(3, 'data.disks')
+            ->assertJsonCount(4, 'data.disks')
             ->assertJsonPath('data.disks.0.state', 'system')
             ->assertJsonPath('data.disks.1.size', 10000831348736)
-            ->assertJsonPath('data.disks.2.detail', 'ext4 "backup"');
+            ->assertJsonPath('data.disks.1.free', 0)
+            ->assertJsonPath('data.disks.2.detail', 'ext4 "backup"')
+            ->assertJsonPath('data.disks.3.state', 'shared')
+            ->assertJsonPath('data.disks.3.free', 9946070941696);
     });
 });
 
@@ -253,6 +311,96 @@ describe('choosing the disks', function () {
 
         expect($script)->toContain("CHOSEN_DISKS='/dev/sdb /dev/sdc'")
             ->and($script)->toContain('Left untouched, not selected');
+    });
+
+    it('hands the node one list of disks to format and another of disks to share', function () {
+        // A name alone does not say which fate was agreed to, and the node reads the state again.
+        $script = app(NodeService::class)->buildDeployScript(cacheNode(), ['/dev/sdb'], ['/dev/sda']);
+
+        expect($script)->toContain("CHOSEN_DISKS='/dev/sdb'")
+            ->and($script)->toContain("CHOSEN_SHARED='/dev/sda'");
+    });
+
+    it('never shares a disk nobody named, even when it formats every spare one', function () {
+        $none = app(NodeService::class)->buildDeployScript(cacheNode());
+        expect($none)->toContain("CHOSEN_SHARED=''");
+
+        $picked = selectDisks(['/dev/sda' => 'shared', '/dev/sdb' => 'empty', '/dev/sdc' => 'foreign', '/dev/nvme0n1' => 'system']);
+
+        expect($picked['ok'])->toBeTrue()
+            ->and($picked['format'])->toBe(['/dev/sdb', '/dev/sdc'])
+            ->and($picked['share'])->toBe([]);
+    });
+
+    it('gives each ticked disk the fate it was ticked for', function () {
+        $picked = selectDisks(
+            ['/dev/sda' => 'shared', '/dev/sdb' => 'empty', '/dev/sdc' => 'foreign'],
+            ['CHOSEN_DISKS' => '/dev/sdb', 'CHOSEN_SHARED' => '/dev/sda'],
+        );
+
+        expect($picked['ok'])->toBeTrue()
+            ->and($picked['format'])->toBe(['/dev/sdb'])
+            ->and($picked['share'])->toBe(['/dev/sda'])
+            ->and($picked['output'])->toContain('Left untouched, not selected: /dev/sdc');
+    });
+
+    it('refuses to deploy when a disk ticked as shared no longer is one', function () {
+        // Its filesystem got unmounted between the panel and the deploy: the disk reads as
+        // `foreign` now, and a single list would have sent it, whole, to the wipe.
+        $picked = selectDisks(
+            ['/dev/sda' => 'foreign', '/dev/sdb' => 'empty'],
+            ['CHOSEN_DISKS' => '/dev/sdb', 'CHOSEN_SHARED' => '/dev/sda'],
+        );
+
+        expect($picked['ok'])->toBeFalse()
+            ->and($picked['output'])->toContain('ERROR: /dev/sda was to be shared')
+            ->and($picked['format'])->toBe([]);
+    });
+
+    it('never selects a system disk, whichever list names it', function () {
+        $format = selectDisks(['/dev/sda' => 'system', '/dev/sdb' => 'shared'], ['CHOSEN_DISKS' => '/dev/sda /dev/sdb', 'CHOSEN_SHARED' => '']);
+        $share = selectDisks(['/dev/sda' => 'system'], ['CHOSEN_DISKS' => '', 'CHOSEN_SHARED' => '/dev/sda']);
+
+        // Ticked to be formatted, a system or shared disk is simply not among the spare ones.
+        expect($format['ok'])->toBeTrue()
+            ->and($format['format'])->toBe([])
+            ->and($format['share'])->toBe([])
+            ->and($share['ok'])->toBeFalse();
+    });
+
+    it('accepts the same lists again once the disk carries the pool', function () {
+        // An API client redeploying with the body of its first deploy is asking for what it has.
+        $picked = selectDisks(['/dev/sda' => 'nukevideo', '/dev/sdb' => 'nukevideo'], ['CHOSEN_DISKS' => '/dev/sdb', 'CHOSEN_SHARED' => '/dev/sda']);
+
+        expect($picked['ok'])->toBeTrue()
+            ->and($picked['format'])->toBe([])
+            ->and($picked['share'])->toBe([]);
+    });
+
+    it('carries the shared list from the request to the node', function () {
+        $node = cacheNode();
+        $captured = '';
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->once()->andReturnUsing(function (...$args) use (&$captured) {
+            $captured = $args['input'] ?? $args[5] ?? $captured;
+
+            return '';
+        });
+        app()->instance(SSHService::class, $ssh);
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => ['/dev/sdb'], 'sharedDisks' => ['/dev/sda']])->assertStatus(202);
+
+        expect($captured)->toContain("CHOSEN_DISKS='/dev/sdb'")
+            ->and($captured)->toContain("CHOSEN_SHARED='/dev/sda'");
+    });
+
+    it('refuses a disk named in both lists, and a shared path that is not one', function () {
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+        $node = cacheNode();
+
+        $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => ['/dev/sda'], 'sharedDisks' => ['/dev/sda']])->assertUnprocessable();
+        $this->postJson("/api/nodes/{$node->id}/deploy", ['disks' => [], 'sharedDisks' => ['/dev/sda; reboot']])->assertUnprocessable();
     });
 
     it('formats nothing when the list is empty, and everything when there is none', function () {

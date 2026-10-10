@@ -39,7 +39,7 @@ class NodeService {
         return res.data.data
     }
 
-    async deploy(id: number, body: { force?: boolean; disks?: string[] } = {}): Promise<App.Data.ActivityLogData> {
+    async deploy(id: number, body: { force?: boolean; disks?: string[]; sharedDisks?: string[] } = {}): Promise<App.Data.ActivityLogData> {
         const res = await this.api.post(`${this.BASE_PATH}/${id}/deploy`, body)
         return res.data.data
     }
