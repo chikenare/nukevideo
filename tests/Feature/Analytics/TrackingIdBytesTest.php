@@ -7,26 +7,23 @@
  *
  * Two things are pinned here, in two halves.
  *
- * The endpoint half stubs the service — the suite has no ClickHouse fixture and CI does not run
- * one — and covers who gets through the door, what the request may contain and what comes back.
+ * The endpoint half stubs the service and covers who gets through the door, what the request may
+ * contain and what comes back.
  *
- * The query half stubs the ClickHouse client instead and reads the statement the service builds.
- * That is not a fake standing in for the database: it asserts the two properties that would fail
- * silently and expensively if they regressed — that the id list is a bound `Array(String)`
- * parameter and never text in the SQL, and that the metric constraint is still there, without
- * which the sum would add encoding seconds and upload volume to delivered bytes and invoice the
- * result.
+ * The query half runs the service against the table, for the two properties that would fail
+ * silently and expensively if they regressed — that an id is matched as a value whatever
+ * characters it carries, and that the metric constraint is still there, without which the sum
+ * would add encoding seconds and upload volume to delivered bytes and invoice the result.
  */
 
 use App\Data\Analytics\TrackingIdBytesQueryData;
-use App\Enums\UsageMetric;
 use App\Models\Project;
 use App\Models\User;
 use App\Services\AnalyticsService;
 use App\Services\ApiTokenService;
-use ClickHouseDB\Client;
-use ClickHouseDB\Statement;
+use App\Services\UsageService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Laravel\Sanctum\Sanctum;
 use Mockery\MockInterface;
 
@@ -199,88 +196,71 @@ it('asks for the unattributed bucket only when the flag says so', function () {
     expect($seen['args'][2])->toBe(['a']);
 });
 
-/**
- * Stubs the ClickHouse client and hands back what the service asked it to run. `select()` is
- * declared and forbidden: it routes bindings through the Bindings degeneration, whose URL
- * parameters go through `http_build_query`, so a list would arrive as `param_in_tracking_id[0]=…`
- * and ClickHouse would never see the parameter at all.
- */
-function captureBatchQuery(): ArrayObject
+/** Rows for the query half, which runs against the real table. */
+function usageRows(array ...$rows): void
 {
-    $captured = new ArrayObject(['calls' => 0]);
-
-    $statement = Mockery::mock(Statement::class);
-    $statement->shouldReceive('rows')->andReturn([]);
-
-    app()->instance(Client::class, Mockery::mock(Client::class, function (MockInterface $mock) use ($captured, $statement) {
-        $mock->shouldReceive('selectWithParams')->andReturnUsing(function (string $sql, array $params) use ($captured, $statement) {
-            $captured['sql'] = $sql;
-            $captured['params'] = $params;
-            $captured['calls'] = $captured['calls'] + 1;
-
-            return $statement;
-        });
-
-        $mock->shouldReceive('select')->never();
-    }));
-
-    return $captured;
+    UsageService::add(array_map(fn (array $row) => $row + [
+        'date' => '2026-04-10', 'metric' => 'streaming_bytes', 'ip' => '1.2.3.4', 'value' => 100,
+    ], $rows));
 }
 
-it('binds the id list as a ClickHouse array parameter, never as SQL text', function () {
-    $captured = captureBatchQuery();
+it('matches the ids as values, whatever they contain', function () {
+    usageRows(['tracking_id' => "o'brien"], ['tracking_id' => 'customer-42', 'value' => 50], ['tracking_id' => 'someone-else']);
 
-    app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ["o'brien", 'customer-42']);
+    // These ids are the integrator's own labels, but they arrive over HTTP like anything else: a
+    // quote in one is a character to match, never the end of a string.
+    $rows = app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ["o'brien", 'customer-42']);
 
-    expect($captured['params']['in_tracking_id'])->toBe(["o'brien", 'customer-42'])
-        ->and($captured['sql'])->toContain('tracking_id IN {in_tracking_id:Array(String)}')
-        // These ids are the integrator's own labels, but they arrive over HTTP like anything else.
-        ->and($captured['sql'])->not->toContain("o'brien")
-        ->and($captured['params'])->toMatchArray(['from' => '2026-04-01', 'to' => '2026-04-30']);
+    expect(array_column($rows, 'bytes', 'tracking_id'))->toEqual(['customer-42' => 50, "o'brien" => 100]);
 });
 
-it('constrains the batch to the delivery metrics and groups by both dimensions', function () {
-    $captured = captureBatchQuery();
-
-    app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42']);
-
-    expect($captured['sql'])
-        // Without this the sum would add `encoding_cpu` seconds and `upload_bytes` to delivered
+it('constrains the batch to the delivery metrics and splits it by them', function () {
+    usageRows(
+        ['tracking_id' => 'customer-42'],
+        ['tracking_id' => 'customer-42', 'metric' => 'download_bytes', 'value' => 30],
+        // Without the constraint the sum would add encoding seconds and upload volume to delivered
         // bytes and return a number that means nothing — one that would then be invoiced.
-        ->toContain("metric IN ('".implode("', '", UsageMetric::delivery())."')")
-        ->toContain('GROUP BY tracking_id, metric')
-        // The batch IS the filter; the single-id predicate as well would AND them into one id.
-        ->not->toContain('tracking_id = {tracking_id:String}');
+        ['tracking_id' => 'customer-42', 'metric' => 'encoding_cpu', 'value' => 9],
+        ['tracking_id' => 'customer-42', 'metric' => 'upload_bytes', 'value' => 7],
+    );
+
+    $rows = app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42']);
+
+    expect(array_column($rows, 'bytes', 'metric'))->toEqual(['download_bytes' => 30, 'streaming_bytes' => 100]);
 });
 
 it('narrows the batch to one metric when asked', function () {
-    $captured = captureBatchQuery();
+    usageRows(['tracking_id' => 'customer-42'], ['tracking_id' => 'customer-42', 'metric' => 'download_bytes', 'value' => 30]);
 
-    app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42'], 'download_bytes');
+    $rows = app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42'], 'download_bytes');
 
-    expect($captured['params']['metrics'])->toBe(['download_bytes'])
-        ->and($captured['sql'])->toContain('metric IN {metrics:Array(String)}');
+    expect($rows)->toHaveCount(1)
+        ->and($rows[0]['metric'])->toBe('download_bytes');
 });
 
-it('folds duplicate ids and never asks ClickHouse about an empty list', function () {
-    $captured = captureBatchQuery();
+it('folds duplicate ids and never queries for an empty list', function () {
+    usageRows(['tracking_id' => 'a'], ['tracking_id' => 'b']);
     $service = app(AnalyticsService::class);
 
-    $service->bytesByTrackingIds('2026-04-01', '2026-04-30', ['a', 'b', 'a']);
+    // Duplicates are the caller's list, not a query concern, so they are dropped rather than
+    // turned into a 422 over something harmless — and must not count the id twice.
+    expect(array_column($service->bytesByTrackingIds('2026-04-01', '2026-04-30', ['a', 'b', 'a']), 'bytes', 'tracking_id'))
+        ->toEqual(['a' => 100, 'b' => 100]);
 
-    // Duplicates are the caller's list, not a query concern — `IN` folds them anyway — so they are
-    // dropped rather than turned into a 422 over something harmless. Keys stay a list, or the
-    // binding would serialise as an object.
-    expect($captured['params']['in_tracking_id'])->toBe(['a', 'b']);
+    DB::enableQueryLog();
 
     expect($service->bytesByTrackingIds('2026-04-01', '2026-04-30', []))->toBe([])
-        ->and($captured['calls'])->toBe(1);
+        ->and(DB::getQueryLog())->toBe([]);
 });
 
-it('groups by the day as well on a daily read', function () {
-    $captured = captureBatchQuery();
+it('splits by the day as well on a daily read, and stays inside the range', function () {
+    usageRows(
+        ['tracking_id' => 'customer-42'],
+        ['tracking_id' => 'customer-42', 'date' => '2026-04-11', 'value' => 5],
+        ['tracking_id' => 'customer-42', 'date' => '2026-05-01', 'value' => 999],
+    );
 
-    app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42'], daily: true);
+    $rows = app(AnalyticsService::class)->bytesByTrackingIds('2026-04-01', '2026-04-30', ['customer-42'], daily: true);
 
-    expect($captured['sql'])->toContain('GROUP BY tracking_id, metric, date');
+    expect(array_column($rows, 'bytes', 'date'))->toEqual(['2026-04-10' => 100, '2026-04-11' => 5]);
 });

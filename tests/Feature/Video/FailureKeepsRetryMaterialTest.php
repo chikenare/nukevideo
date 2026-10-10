@@ -50,7 +50,7 @@ describe('cleanup after a failure', function () {
         // and made in-flight chunk jobs die on a 404 against the file it had just removed.
         $video = stagedVideo('failed');
 
-        (new CleanupVideoResourcesJob($video->ulid))->handle();
+        CleanupVideoResourcesJob::dispatchSync($video->ulid);
 
         expect(Storage::disk('chunks')->exists($video->sourceMirrorPath('mkv')))->toBeTrue()
             ->and(Storage::disk('chunks')->exists($video->chunksDir().'/stream/chunk_000.mp4'))->toBeTrue()
@@ -60,7 +60,7 @@ describe('cleanup after a failure', function () {
     it('reclaims everything once the video completed', function () {
         $video = stagedVideo('completed');
 
-        (new CleanupVideoResourcesJob($video->ulid))->handle();
+        CleanupVideoResourcesJob::dispatchSync($video->ulid);
 
         expect(Storage::disk('chunks')->exists($video->sourceMirrorPath('mkv')))->toBeFalse()
             ->and(Storage::disk('chunks')->exists($video->chunksDir().'/stream/chunk_000.mp4'))->toBeFalse()
@@ -73,7 +73,7 @@ describe('cleanup after a failure', function () {
         $ulid = $video->ulid;
         $video->forceDelete();
 
-        (new CleanupVideoResourcesJob($ulid))->handle();
+        CleanupVideoResourcesJob::dispatchSync($ulid);
 
         expect(Storage::disk('chunks')->exists($mirror))->toBeFalse();
     });
@@ -81,7 +81,7 @@ describe('cleanup after a failure', function () {
     it('leaves an active video alone entirely', function () {
         $video = stagedVideo('running');
 
-        (new CleanupVideoResourcesJob($video->ulid))->handle();
+        CleanupVideoResourcesJob::dispatchSync($video->ulid);
 
         expect(Storage::disk('chunks')->exists($video->sourceMirrorPath('mkv')))->toBeTrue();
     });

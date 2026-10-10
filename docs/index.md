@@ -31,5 +31,5 @@ features:
     details: Store originals and packaged output in any S3-compatible service — AWS S3, MinIO, RustFS, iDrive e2 — with s5cmd for fast transfers.
   - icon: 📊
     title: Analytics & API
-    details: MariaDB for application data, ClickHouse for bandwidth and usage analytics, plus a full REST API with Sanctum auth and Uppy multipart uploads.
+    details: MariaDB for application data and for bandwidth and usage analytics, plus a full REST API with Sanctum auth and Uppy multipart uploads.
 ---

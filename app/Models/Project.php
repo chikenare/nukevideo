@@ -59,7 +59,7 @@ class Project extends Model
     }
 
     /**
-     * A project key reads the account that owns the project, never the project itself: `usage` is
+     * A project key reads the account that owns the project, never the project itself: `usage_daily` is
      * keyed by `user_id`, and a project id comes from a different sequence entirely.
      */
     public function accountId(): int

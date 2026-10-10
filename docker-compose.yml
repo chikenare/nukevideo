@@ -10,8 +10,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
 
   nukevideo-schedule:
     image: chikenare/nukevideo-api:${TAG:-latest}
@@ -27,8 +25,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
 
   nukevideo-horizon:
     image: chikenare/nukevideo-api:${TAG:-latest}
@@ -44,8 +40,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      clickhouse:
-        condition: service_started
 
   db:
     image: mariadb:11
@@ -75,21 +69,6 @@ services:
       timeout: 3s
       retries: 5
 
-  clickhouse:
-    image: clickhouse/clickhouse-server
-    restart: unless-stopped
-    volumes:
-      - clickhouse-data:/var/lib/clickhouse/
-    environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-
 volumes:
   mariadb-data:
   redis-data:
-  clickhouse-data:

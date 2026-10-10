@@ -14,9 +14,6 @@ else
 
     echo "[entrypoint] Running Laravel migrations..."
     php /var/www/html/artisan migrate --isolated $FORCE_FLAG
-
-    echo "[entrypoint] Running ClickHouse migrations..."
-    php /var/www/html/artisan clickhouse:migrate $FORCE_FLAG
 fi
 
 echo "[entrypoint] Optimizing application..."

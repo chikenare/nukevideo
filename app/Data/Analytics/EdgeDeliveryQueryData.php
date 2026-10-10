@@ -7,7 +7,7 @@ use App\Http\Controllers\Api\AnalyticsController;
 
 /**
  * The date range of the per-node delivery report ({@see AnalyticsController::edges()}).
- * Both bounds are required, as ISO dates: they are bound into ClickHouse `Date` parameters, and
+ * Both bounds are required, as ISO dates: they are compared against a `date` column, and
  * an open-ended range over a table kept indefinitely is a full scan nobody asked for.
  */
 class EdgeDeliveryQueryData extends RequestData

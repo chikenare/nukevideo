@@ -63,7 +63,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
     Route::get('usage', [UsageController::class, 'index']);
 
     // Account-wide: these span every project, so a project API key has no business here — usage is
-    // keyed by user in ClickHouse, not by project. No resolve.project either: a stale
+    // keyed by the owning user there, not by project. No resolve.project either: a stale
     // X-Project-Ulid header must not 404 account endpoints.
     Route::middleware('no-project-key')->group(function () {
         Route::get('me', MeController::class);
@@ -120,7 +120,7 @@ Route::middleware(['auth:sanctum'])->group(function () {
         // to a project they are the caller's own, and unnarrowed they are everyone's.
         Route::get('analytics', [AnalyticsController::class, 'index']);
 
-        // The general read over `usage`: any breakdown the allowlist permits, rather than a new
+        // The general read over `usage_daily`: any breakdown the allowlist permits, rather than a new
         // endpoint per question. Inside this group so that a project resolves when the caller has
         // one — `ResolveProject` never aborts, it only makes the project available — which lets the
         // controller demand project context for exactly the dimensions that need it (`video`,
@@ -184,7 +184,7 @@ Route::get('nodes/{node}/bootstrap', [NodeController::class, 'bootstrapScript'])
 Route::post('webhooks/video-uploaded', [VideoWebhookController::class, 'handle'])
     ->middleware(VerifyWebhookSignature::class);
 
-// Bandwidth ingest (Vector -> queue -> ClickHouse)
+// Bandwidth ingest (Vector -> queue -> usage_daily)
 Route::post('internal/bandwidth', [BandwidthController::class, 'ingest'])
     ->middleware(VerifyInternalSecret::class);
 

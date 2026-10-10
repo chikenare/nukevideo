@@ -17,7 +17,12 @@ use Illuminate\Support\Facades\Log;
 
 class NodeService
 {
-    public function __construct(private SshKeyService $sshKeys) {}
+    public function __construct(
+        private SshKeyService $sshKeys,
+        private SSHService $ssh,
+        private NodeSettings $nodeSettings,
+        private CdnSettings $cdnSettings,
+    ) {}
 
     public function index(): array
     {
@@ -89,16 +94,6 @@ class NodeService
         'AWS_ENDPOINT',
         'AWS_USE_PATH_STYLE_ENDPOINT',
 
-        'CLICKHOUSE_HOST',
-        'CLICKHOUSE_PORT',
-        'CLICKHOUSE_DATABASE',
-        'CLICKHOUSE_USER',
-        'CLICKHOUSE_PASSWORD',
-        'CLICKHOUSE_ENDPOINT',
-        // The workers are the ones writing usage rows, so a longer budget set here has to reach them.
-        'CLICKHOUSE_TIMEOUT',
-        'CLICKHOUSE_CONNECT_TIMEOUT',
-
         'WEBHOOK_SECRET',
         'INTERNAL_API_SECRET',
 
@@ -126,7 +121,7 @@ class NodeService
         ];
 
         // Workers only: a proxy reads the primary bucket and never the chunk store.
-        $chunkStore = app(NodeSettings::class)->chunkStore();
+        $chunkStore = $this->nodeSettings->chunkStore();
         if ($node->type === NodeType::WORKER && $chunkStore) {
             [$host, $port] = $chunkStore;
             $base['CHUNKS_S3_ENDPOINT'] = "CHUNKS_S3_ENDPOINT=http://{$host}:{$port}";
@@ -148,7 +143,7 @@ class NodeService
         // entrypoint defaults apply. Cache sizing is deliberately not among them: the edge sizes
         // its cache to the filesystem it is given ({@see vod/entrypoint.sh}), and the one case
         // that needs a cap — no pool, caching on the OS disk — is set by the deploy script.
-        $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
+        $cdn = SelfHostedConfigData::from($this->cdnSettings->providers['self_hosted'] ?? []);
         $cdnEnv = [
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
             'VOD_TOKEN_NAME' => $cdn->tokenName,
@@ -161,7 +156,7 @@ class NodeService
             }
         }
 
-        $settings = $this->parseEnvText(app(NodeSettings::class)->environment);
+        $settings = $this->parseEnvText($this->nodeSettings->environment);
         $nodeOverrides = $this->parseEnvText($node->env ?? '');
 
         // Overrides still win — for everything but the deploy-owned keys, which are stripped
@@ -220,7 +215,7 @@ class NodeService
     private function extractDockerFlags(Node $node): array
     {
         $merged = array_merge(
-            $this->parseEnvText(app(NodeSettings::class)->environment),
+            $this->parseEnvText($this->nodeSettings->environment),
             $this->parseEnvText($node->env ?? ''),
         );
 
@@ -397,7 +392,7 @@ class NodeService
 
     private function workerVars(Node $node): array
     {
-        if (! app(NodeSettings::class)->chunkStore()) {
+        if (! $this->nodeSettings->chunkStore()) {
             throw new \RuntimeException('No chunk store configured. Set its address under Nodes → Environment before deploying a worker.');
         }
 
@@ -459,7 +454,7 @@ class NodeService
         // it on every deploy of its worker cut the other workers' transfers mid fleet deploy. The
         // hash covers the arguments and the address; the IP the node resolves is appended there,
         // since a DNS name can move without the address changing.
-        [$host, $port] = app(NodeSettings::class)->chunkStore();
+        [$host, $port] = $this->nodeSettings->chunkStore();
         $config = substr(md5($this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options)."|{$host}:{$port}"), 0, 12);
         $options['raw'][] = '-l "nukevideo.config='.$config.'-$CHUNK_STORE_IP"';
         $runArgs = $this->buildDockerRunArgs($node->storageContainerName(), self::CHUNK_STORE_IMAGE, $options);
@@ -490,7 +485,7 @@ class NodeService
     {
         // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
         // container crashloops on an emerg. Fail here with a message that names the fix instead.
-        $cdn = SelfHostedConfigData::from(app(CdnSettings::class)->providers['self_hosted'] ?? []);
+        $cdn = SelfHostedConfigData::from($this->cdnSettings->providers['self_hosted'] ?? []);
 
         if ($cdn->tokenSecret === '') {
             throw new \RuntimeException('CDN token secret is empty. Set it in CDN Settings before deploying a proxy node.');
@@ -615,7 +610,7 @@ class NodeService
         $name = Node::containerPrefix().'_vector';
 
         $collectsEdgeLogs = $node->type === NodeType::PROXY
-            && app(CdnSettings::class)->provider === CdnDriver::SelfHosted->value;
+            && $this->cdnSettings->provider === CdnDriver::SelfHosted->value;
 
         if (! $collectsEdgeLogs) {
             return ['VECTOR_CONTAINER' => $name, 'VECTOR_RUN_ARGS' => ''];
@@ -786,9 +781,7 @@ class NodeService
 
     private function ssh(Node $node, string $command, int $timeout = 30, ?string $input = null, ?\Closure $onOutput = null): string
     {
-        $sshService = app(SSHService::class);
-
-        return $sshService->run(
+        return $this->ssh->run(
             ip: $node->ip_address,
             user: $node->user,
             privateKey: $this->sshKeys->privateKey(),
@@ -820,8 +813,7 @@ class NodeService
      * How every container resolves names. glibc sends a lookup's A and AAAA queries at once from
      * one socket, and a home router's NAT dropped one of the pair often enough that 1 in 10-30
      * lookups stalled for glibc's default 5s before the retry — on the same hosts, their own
-     * systemd-resolved never did. The workers write usage to a remote ClickHouse with a short
-     * timeout, and every stall lost that row ("Resolving timed out after 1000 milliseconds").
+     * systemd-resolved never did, and every stall cost whatever the worker was reaching for.
      * Separate sockets per query, and a 1s wait per try: a lost packet costs a second, not five.
      * Harmless on a network that drops nothing.
      */

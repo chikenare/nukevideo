@@ -16,7 +16,7 @@ http {
     }
 
     # The zone directory that follows the ULID — `play`, `download`, `assets`. It is what separates
-    # streaming bytes from downloaded ones once the line reaches ClickHouse; nothing downstream can
+    # streaming bytes from downloaded ones once the line reaches the metrics table; nothing downstream can
     # recover it from anywhere else.
     map $uri $video_zone {
         "~^/[0-9A-Za-z]{26}/(?<z>[a-z]+)/"  $z;

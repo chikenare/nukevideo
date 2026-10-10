@@ -32,7 +32,6 @@ docker compose up -d --build
 docker compose exec nukevideo-api composer install
 docker compose exec nukevideo-api php artisan key:generate
 docker compose exec nukevideo-api php artisan migrate --seed
-docker compose exec nukevideo-api php artisan clickhouse:migrate
 
 # The scheduler and Horizon exit on a fresh checkout (no vendor/, no APP_KEY yet): start them again
 docker compose up -d
@@ -42,7 +41,7 @@ docker compose up -d
 
 The containers reach each other by service name, so point the copied `.env` at them before going further:
 
-- `REDIS_HOST=redis` (`.env.example` ships `127.0.0.1`, which inside a container is the container itself). `DB_HOST=db` and `CLICKHOUSE_HOST=clickhouse` already match.
+- `REDIS_HOST=redis` (`.env.example` ships `127.0.0.1`, which inside a container is the container itself). `DB_HOST=db` already matches.
 - A non-empty `DB_PASSWORD`: the MariaDB container is initialised with it as the root password.
 - For the bundled RustFS: `AWS_ENDPOINT=http://rustfs:9000` and `AWS_USE_PATH_STYLE_ENDPOINT=true`, with its credentials and a bucket created in the RustFS console.
 
@@ -65,7 +64,6 @@ Traefik publishes each service under a `*.nukevideo.localhost` hostname (these r
 | Admin SPA | `http://app.nukevideo.localhost` |
 | Docs | `http://docs.nukevideo.localhost` |
 | Adminer (DB UI) | `http://adminer.nukevideo.localhost` |
-| ClickHouse UI | `http://ch.nukevideo.localhost` |
 | RustFS S3 API | `http://s3-data.nukevideo.localhost` |
 | RustFS console | `http://s3-ui.nukevideo.localhost` |
 | RedisInsight | `http://redis.nukevideo.localhost` |

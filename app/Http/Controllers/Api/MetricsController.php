@@ -15,7 +15,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
 /**
- * The general read over `usage`: whatever breakdown a consumer needs, without a new endpoint each
+ * The general read over `usage_daily`: whatever breakdown a consumer needs, without a new endpoint each
  * time it needs a different one.
  *
  * This controller is where the authorization lives, and it is the reason a general query endpoint

@@ -103,7 +103,7 @@ class AnalyticsController extends Controller
      *
      * Scoped to the caller's project in the query itself, by `project_id`. It used to need a
      * round trip to MariaDB first, to narrow the ULIDs to the ones the project owns, because
-     * `usage` had no column to say whose a row was; the column removed both the query and the
+     * `usage_daily` had no column to say whose a row was; the column removed both the query and the
      * chance of getting that narrowing wrong.
      *
      * A ULID that belongs to someone else and one that moved no bytes produce the same answer — no
@@ -135,7 +135,7 @@ class AnalyticsController extends Controller
             'video' => 'nullable|string|size:26|regex:/^[0-9A-HJKMNP-TV-Z]{26}$/',
             'trackingId' => TrackingId::rules(),
             // Which kind of delivery to report. Anything outside this list is refused rather than
-            // passed through: `usage` also holds upload volume and encoding seconds in the same
+            // passed through: `usage_daily` also holds upload volume and encoding seconds in the same
             // `value` column, and letting one of those names reach the bandwidth queries would
             // report seconds as if they were bytes.
             'metric' => ['nullable', 'string', Rule::in(UsageMetric::delivery())],

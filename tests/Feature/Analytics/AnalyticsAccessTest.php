@@ -3,7 +3,7 @@
 /**
  * Analytics is readable by ANY authenticated token, a project API key included. It is the read side
  * of the CDN access logs, and reading those back is precisely what an integrating backend holds a
- * project key for — gating it behind an admin account meant the numbers were written to ClickHouse
+ * project key for — gating it behind an admin account meant the numbers were stored
  * and nobody downstream could ever see them.
  *
  * What that accepts is stated plainly rather than assumed: the figures span the whole instance, so
@@ -24,8 +24,7 @@ use Mockery\MockInterface;
 uses(RefreshDatabase::class);
 
 /**
- * The dashboard reads ClickHouse, which the suite has no fixture for and CI does not run. These
- * cases are about who gets through the door, so the service behind it is stubbed empty.
+ * These cases are about who gets through the door, so the service behind it is stubbed empty.
  */
 function stubAnalyticsService(): void
 {

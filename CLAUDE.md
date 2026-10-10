@@ -30,14 +30,13 @@ Monorepo: **Laravel 13 backend at the root**, **Vue 3 SPA in `front/`**, **ViteP
 │   ├── Settings/           # spatie/laravel-settings (AppSettings holds the one SSH key)
 │   └── Support/            # stateless helpers: Cpu, Gpu, MediaDuration, MediaSource
 ├── database/
-│   ├── migrations/             # MariaDB in production, SQLite in tests
-│   ├── clickhouse-migrations/  # php artisan clickhouse:migrate
-│   └── settings/               # spatie/laravel-settings migrations
+│   ├── migrations/         # MariaDB in production, SQLite in tests
+│   └── settings/           # spatie/laravel-settings migrations
 ├── resources/deploy/       # the node deploy, as bash; NodeService only prepends a variable header
 ├── docs/                   # VitePress (guide/ + api/)
 ├── front/                  # Vue 3 + Vite SPA (its own pnpm project)
 ├── vod/                    # delivery edge nginx (secure_token)
-├── vector/                 # Vector config: edge logs → ClickHouse
+├── vector/                 # Vector config: edge logs → API → usage_daily
 └── compose.yml             # the whole local stack
 ```
 
@@ -59,7 +58,6 @@ docker compose exec nukevideo-api php artisan test
 
 docker compose exec nukevideo-api ./vendor/bin/pint           # format PHP
 docker compose exec nukevideo-api php artisan migrate
-docker compose exec nukevideo-api php artisan clickhouse:migrate
 docker compose exec nukevideo-api php artisan typescript:transform   # regenerates front/src/types/generated.d.ts
 docker compose exec nukevideo-api php artisan data:cache-structures  # after editing app/Data
 ```
@@ -90,15 +88,14 @@ Docs (`docs/`, pnpm as well): the `nukevideo-docs` container serves `docs:dev` a
 and project tokens) · Spatie Laravel Data (DTOs and validation) ·
 spatie/laravel-typescript-transformer (generates the frontend types) · Horizon on Redis ·
 Telescope (local only — it is in `dont-discover` and registered conditionally) · Pest 5 · Pint ·
-spatie/laravel-activitylog · spatie/laravel-settings · Sentry · phpseclib (SSH to the nodes) ·
-ClickHouse through cybercog/laravel-clickhouse.
+spatie/laravel-activitylog · spatie/laravel-settings · Sentry · phpseclib (SSH to the nodes).
 
 **Frontend:** Vue 3 `<script setup lang="ts">` · Vite 8 · Pinia (setup stores) · Vue Router ·
 Tailwind v4 (no `tailwind.config.js`; the config lives in CSS) · shadcn-vue on top of reka-ui ·
 axios · shaka-player / hls.js / dashjs · Uppy.
 
 **Infrastructure:** Docker + Traefik (`*.nukevideo.localhost`) · **MariaDB 11** (not PostgreSQL) ·
-Redis · RustFS (S3) · ClickHouse · **ffmpeg** and **shaka-packager** (both compiled in the
+Redis · RustFS (S3) · **ffmpeg** and **shaka-packager** (both compiled in the
 Dockerfile) · **s5cmd** for every S3 transfer · Vector.
 
 ## The encoding pipeline
@@ -178,7 +175,7 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   `down()`, `Schema::hasColumn` guards so they can be re-run, and compatible with MariaDB **and**
   SQLite (no `JSON_EXTRACT`; guard `dropForeign` for sqlite).
 - **Style**: Pint on the default preset (there is no `pint.json`). The codebase does **not** use
-  `declare(strict_types=1)` outside `Services/Cdn` and the ClickHouse migrations, and has no
+  `declare(strict_types=1)` outside `Services/Cdn`, and has no
   `final` classes: follow what is there rather than introducing a second style.
 - Comments explain **why**, and reason about failure modes. That density is the house style.
 
@@ -226,9 +223,15 @@ Project-specific configs: `ffmpeg.php` (codec and parameter catalogue), `package
   comes from a different sequence than a user's, so reading it as a user id silently answers with
   another account's data — use `$request->user()->accountId()`, which both models implement.
   `is_admin` needs nothing: the attribute is simply absent on a Project, so Eloquent answers null.
-- The ClickHouse client cannot bind an array through `select()` — the bindings go through
-  `http_build_query`, so `param_x[0]=…` never reaches the server. Use `selectWithParams()` for any
-  `{name:Array(String)}` parameter.
+- Metrics live in MariaDB, in `usage_daily`: one row per day per combination of dimensions, and
+  the unique key over those dimensions IS the aggregation. Every write goes through
+  `UsageService::add()`, which upserts `value = value + new`; a plain insert or an Eloquent
+  `upsert()` either fails on the key or overwrites a total. Reads go through `AnalyticsService`
+  on the query builder with nothing MariaDB-only, because the suite runs them on SQLite.
+  `country` is the one column outside the key: `GeoIp` resolves it from the address at ingest, off
+  a GeoLite2 file on the local disk of the container draining `default` — there is no shared
+  volume, so the download is a queued job (`RefreshGeoIpJob`: weekly, and on demand when the ingest finds
+  the file missing), not a scheduled command.
 
 ## Rules for Claude
 

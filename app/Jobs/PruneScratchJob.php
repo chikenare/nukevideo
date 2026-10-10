@@ -34,11 +34,11 @@ class PruneScratchJob implements ShouldQueue
      *  conservatively than internal scratch — a full day for any manual recovery/retry. */
     private const UPLOAD_GRACE_SECONDS = 86400; // 24 h
 
-    public function handle(): void
+    public function handle(UppyS3Service $uploads): void
     {
         $this->pruneLocalScratch();
         $this->pruneChunkStore();
-        $this->pruneUploadTmp();
+        $this->pruneUploadTmp($uploads);
         $this->pruneStaleMultipartUploads();
     }
 
@@ -114,7 +114,7 @@ class PruneScratchJob implements ShouldQueue
      * its `original` stream's `path` until cleanup, so those are skipped; the rest are keyed by a
      * ULID filename whose embedded timestamp gives the age with no object mtime.
      */
-    private function pruneUploadTmp(): void
+    private function pruneUploadTmp(UppyS3Service $uploads): void
     {
         $folder = (string) config('uppy-s3-multipart-upload.s3.bucket.folder');
 
@@ -139,7 +139,7 @@ class PruneScratchJob implements ShouldQueue
             // Uploaded object with live metadata but no ingested stream: the storage webhook was
             // most likely lost. Re-dispatch ingestion (idempotent) once instead of letting the
             // user's upload silently age out below.
-            if (app(UppyS3Service::class)->getUploadMeta($key)) {
+            if ($uploads->getUploadMeta($key)) {
                 if (Cache::add("reingest:{$key}", 1, self::UPLOAD_GRACE_SECONDS * 2)) {
                     OnVideoUploaded::dispatch($key, (int) $disk->size($key));
                     Log::warning('Re-dispatched ingestion for un-ingested upload (lost webhook?)', ['key' => $key]);

@@ -5,8 +5,6 @@ use App\Models\Template;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\ApiTokenService;
-use ClickHouseDB\Client;
-use ClickHouseDB\Statement;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\PersonalAccessToken;
 use Laravel\Sanctum\Sanctum;
@@ -136,10 +134,6 @@ it('reads the metrics endpoints, which is what an integrating backend holds the 
     // {@see \Tests\Feature\Analytics\AnalyticsAccessTest} covers what that opening does and does
     // not include.
     $key = projectKey($this->project);
-
-    $client = Mockery::mock(Client::class);
-    $client->shouldReceive('select')->andReturn(Mockery::mock(Statement::class, fn ($mock) => $mock->shouldReceive('rows')->andReturn([])));
-    app()->instance(Client::class, $client);
 
     $this->withToken($key)->getJson('/api/usage?from=2026-01-01&to=2026-01-31')->assertOk();
     $this->withToken($key)->getJson('/api/analytics/queue')->assertOk();

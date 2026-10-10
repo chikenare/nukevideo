@@ -10,12 +10,12 @@
     "license": "MIT",
     "require": {
         "php": "^8.4",
-        "cybercog/laravel-clickhouse": "^0.2.1",
         "laravel/framework": "^13.0",
         "laravel/horizon": "^5.43",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^3.0",
         "league/flysystem-aws-s3-v3": "^3.0",
+        "maxmind-db/reader": "^1.14",
         "php-ffmpeg/php-ffmpeg": "^1.4",
         "phpseclib/phpseclib": "^3.0",
         "sentry/sentry-laravel": "^4.22",

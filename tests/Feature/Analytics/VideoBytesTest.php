@@ -6,13 +6,13 @@
  * point of the file — this one IS scoped to a project.
  *
  * The scoping is `project_id` in the query itself. It used to be a round trip to MariaDB that
- * narrowed the ULIDs to the ones the project owns, because `usage` had no column to say whose a row
+ * narrowed the ULIDs to the ones the project owns, because `usage_daily` had no column to say whose a row
  * was; the column removed both the query and the chance of getting that narrowing wrong. What is
  * pinned here is that the project reaches the query, and that a ULID belonging to someone else is
  * answered exactly like one with no traffic — with nothing — so the endpoint cannot be used to find
  * out which videos exist.
  *
- * The service is stubbed: the suite has no ClickHouse fixture and CI does not run one.
+ * The service is stubbed: what these cases pin is the endpoint, not the query behind it.
  */
 
 use App\Models\Project;
@@ -71,7 +71,7 @@ it('reports bytes for a batch of the project videos, split by metric', function 
 });
 
 it('scopes the query to the caller project', function () {
-    // The tenant boundary, and now the only thing enforcing it: the list goes to ClickHouse as
+    // The tenant boundary, and now the only thing enforcing it: the list goes to the query as
     // given, and `project_id` in the WHERE is what makes another tenant's ULID match nothing.
     $mine = projectVideo($this->project);
     $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');

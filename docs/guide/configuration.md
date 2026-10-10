@@ -8,7 +8,7 @@ The **Used in** column indicates where each variable is used:
 - **Proxy** — Self-hosted CMAF delivery proxy nodes
 - **Worker** — FFmpeg encoding nodes
 
-Nodes have no `.env` of their own. A deploy copies the database, Redis, S3, ClickHouse, Sentry, `WEBHOOK_SECRET` and `INTERNAL_API_SECRET` values from the API host's environment into every node container, and adds what it sets itself; see [Node Environment Variables](#node-environment-variables) for the rest.
+Nodes have no `.env` of their own. A deploy copies the database, Redis, S3, Sentry, `WEBHOOK_SECRET` and `INTERNAL_API_SECRET` values from the API host's environment into every node container, and adds what it sets itself; see [Node Environment Variables](#node-environment-variables) for the rest.
 
 ## Application
 
@@ -92,20 +92,56 @@ Variables that control FFmpeg concurrency on worker nodes. They are read on the 
 
 On a node that shares its box with other services, set `DOCKER_MEMORY` (and optionally `DOCKER_CPUSET_CPUS`): the worker container gets that limit, the auto-sizing above budgets against it instead of the whole host, and an encode that overruns takes the worker down — not whatever else the host is running. Both are read from the global node environment and then the node's own `env`, the node winning, like every other variable.
 
-## ClickHouse (Analytics)
+## Analytics
+
+Bandwidth, upload volume and encoding time are stored in MariaDB, in `usage_daily`: one row per day
+per combination of video, viewer address, tracking id, node and cache status, summed as the traffic
+arrives. There is nothing to configure — it uses the application's own database connection, and
+Vector never writes to it directly: it posts to the API's internal bandwidth endpoint and receives
+only `INTERNAL_API_URL` and `INTERNAL_API_SECRET`.
+
+### Viewer country
+
+Each delivery row can carry the viewer's country, resolved from the address when the traffic is
+ingested, which makes `country` a dimension of [`/api/metrics`](/api/analytics). It is optional and
+needs a free [MaxMind GeoLite2](https://www.maxmind.com/en/geolite2/signup) account:
 
 | Variable | Default | Used in | Description |
 |----------|---------|---------|-------------|
-| `CLICKHOUSE_HOST` | `clickhouse` | API, Worker | ClickHouse hostname |
-| `CLICKHOUSE_PORT` | `8123` | API, Worker | ClickHouse HTTP port |
-| `CLICKHOUSE_DATABASE` | `default` | API, Worker | ClickHouse database name |
-| `CLICKHOUSE_USER` | `default` | API, Worker | ClickHouse username |
-| `CLICKHOUSE_PASSWORD` | — | API, Worker | ClickHouse password |
-| `CLICKHOUSE_TIMEOUT` | `5` | API, Worker | Whole seconds for a query, which the client also uses as the HTTP request's whole budget. Workers write usage rows, so raise it when ClickHouse is reached over the internet |
-| `CLICKHOUSE_CONNECT_TIMEOUT` | `3` | API, Worker | Seconds for the DNS lookup plus TCP/TLS connect |
+| `MAXMIND_LICENSE_KEY` | — | API | MaxMind license key. A new key takes a few minutes to become valid |
+| `MAXMIND_ACCOUNT_ID` | — | API | MaxMind account ID. Optional but recommended: with it the key is sent as credentials instead of in the download URL |
 
-The application connects with `CLICKHOUSE_HOST` and `CLICKHOUSE_PORT`; `CLICKHOUSE_ENDPOINT` in `.env.example` is only copied to nodes and read by nothing. Vector never talks to ClickHouse either: it posts to the API's internal bandwidth endpoint and receives only `INTERNAL_API_URL` and `INTERNAL_API_SECRET`.
+With the key set, the GeoLite2-Country database is downloaded when the next traffic is ingested and
+refreshed weekly, on the container that runs Horizon. To fetch it right away:
 
+```bash
+docker compose exec nukevideo-horizon php artisan geoip:update
+```
+
+Without a key nothing is downloaded and `country` stays empty; everything else works the same.
+Traffic ingested before the database was there keeps an empty country unless the same viewer
+returns that day. If you show these numbers publicly, MaxMind's licence asks for the attribution
+"This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com".
+
+### Upgrading from a release that used ClickHouse
+
+Earlier releases kept this table in ClickHouse. After upgrading, new traffic is written to MariaDB
+and the history stays behind until it is imported — once, with the old ClickHouse container still
+running:
+
+```bash
+docker compose exec nukevideo-api php artisan migrate --force
+docker compose exec nukevideo-api php artisan usage:import-clickhouse \
+    --url=http://clickhouse:8123 --user=default --password=... --database=default
+```
+
+`docker-compose.yml` no longer defines the `clickhouse` service, so `docker compose up -d` leaves
+the old container running as an orphan, still reachable by that name. **Do not pass
+`--remove-orphans` until the import has finished.** The import adds to what MariaDB already holds,
+is resumable (a day that finished is skipped on the next run) and must not be forced a second time.
+Set `MAXMIND_LICENSE_KEY` first if you want the history tagged with the [viewer's
+country](#viewer-country): the import resolves it as it copies, and cannot add it afterwards.
+Once it reports every day, the container, its volume and the `CLICKHOUSE_*` variables can go.
 
 ## Monitoring
 
@@ -154,8 +190,8 @@ The edge sizes its segment cache to the filesystem it is given on every boot. Th
 
 ### Worker Nodes
 
-Worker containers receive the database, Redis, S3, ClickHouse and Sentry settings from the API host, plus the [Video Processing](#video-processing) variables set in the node environment. `DOCKER_MEMORY` and `DOCKER_CPUSET_CPUS` apply to workers only.
+Worker containers receive the database, Redis, S3 and Sentry settings from the API host, plus the [Video Processing](#video-processing) variables set in the node environment. `DOCKER_MEMORY` and `DOCKER_CPUSET_CPUS` apply to workers only.
 
 ### Vector (Proxy Nodes, self-hosted CDN only)
 
-Vector runs on proxy nodes when the CDN provider is `self_hosted` — nothing else produces the access-log lines it ships, and a deploy removes it anywhere else. It reads the edge nginx's log from the Docker socket, sums bytes per video, viewer and link token on the node (the token is hashed there; it never leaves), and posts the aggregates to the API's internal bandwidth endpoint, which writes them to ClickHouse. Its config is rendered from `vector/vector.yaml` at deploy time; to watch what it emits on a node, `docker exec <vector container> vector tap aggregate_bandwidth_logs`.
+Vector runs on proxy nodes when the CDN provider is `self_hosted` — nothing else produces the access-log lines it ships, and a deploy removes it anywhere else. It reads the edge nginx's log from the Docker socket, sums bytes per video, viewer and link token on the node (the token is hashed there; it never leaves), and posts the aggregates to the API's internal bandwidth endpoint, which sums them into `usage_daily`. Its config is rendered from `vector/vector.yaml` at deploy time; to watch what it emits on a node, `docker exec <vector container> vector tap aggregate_bandwidth_logs`.

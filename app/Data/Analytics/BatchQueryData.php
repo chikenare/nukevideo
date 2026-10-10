@@ -28,7 +28,7 @@ abstract class BatchQueryData extends RequestData
     public const MAX_BATCH = 1000;
 
     /**
-     * Both bounds required, as ISO dates: they are bound into ClickHouse `Date` parameters, and an
+     * Both bounds required, as ISO dates: they are compared against a `date` column, and an
      * open-ended range over a table kept indefinitely is a full scan nobody asked for.
      *
      * @return array<string, string>

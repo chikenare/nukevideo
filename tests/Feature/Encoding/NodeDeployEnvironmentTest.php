@@ -271,8 +271,7 @@ describe('name resolution inside the containers', function () {
 
     it('keeps a lost DNS packet to a one-second retry in every container a deploy raises', function (array $attributes) {
         // A home router's NAT dropped one of the A/AAAA pair glibc sends from a single socket, and
-        // 1 in 10-30 lookups inside the workers stalled 5s; the usage insert to ClickHouse gave up
-        // after 1s every time.
+        // 1 in 10-30 lookups inside the workers stalled 5s.
         $script = app(NodeService::class)->buildDeployScript(deployableNode($attributes));
 
         preg_match_all('/^[A-Z_]*RUN_ARGS=\'(--name .*)$/m', $script, $runs);
@@ -286,22 +285,6 @@ describe('name resolution inside the containers', function () {
         'worker with its storage' => [['type' => 'worker']],
         'proxy' => [['type' => 'proxy', 'hostname' => 'edge.example.com']],
     ]);
-});
-
-it('hands the ClickHouse timeouts to the workers, which are the ones writing usage rows', function () {
-    fakeCdnProvider('self_hosted');
-    putenv('CLICKHOUSE_TIMEOUT=9');
-    putenv('CLICKHOUSE_CONNECT_TIMEOUT=4');
-
-    try {
-        $env = app(NodeService::class)->getEnvironmentVariables(deployableNode());
-    } finally {
-        putenv('CLICKHOUSE_TIMEOUT');
-        putenv('CLICKHOUSE_CONNECT_TIMEOUT');
-    }
-
-    expect($env)->toContain('CLICKHOUSE_TIMEOUT=9')
-        ->toContain('CLICKHOUSE_CONNECT_TIMEOUT=4');
 });
 
 describe('fleet-wide timing', function () {

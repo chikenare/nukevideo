@@ -36,10 +36,10 @@ function fakeBunnySettings(string $provider = 'bunny', string $apiKey = 'api-key
  */
 function eventsWithoutDate(IngestBandwidthJob $job): array
 {
-    // `token_hash` and `zone` are dropped alongside `date`: these assertions are about aggregation
-    // shape, and each is covered by its own case below.
+    // `token_hash`, `zone` and `requests` are dropped alongside `date`: these assertions are about
+    // aggregation shape, and each is covered by its own case below.
     return array_map(
-        fn (array $event) => collect($event)->except(['date', 'token_hash', 'zone'])->all(),
+        fn (array $event) => collect($event)->except(['date', 'token_hash', 'zone', 'requests'])->all(),
         array_values($job->events),
     );
 }
@@ -108,8 +108,8 @@ it('aggregates log lines by video and ip and dispatches the ingest job', functio
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
         // Every event carries the day the traffic happened, not the day it was ingested: the run
-        // just after midnight reads the tail of the previous day, and `date` is what partitions
-        // the ClickHouse table these land in. Which day, per line, is asserted separately below.
+        // just after midnight reads the tail of the previous day, and `date` is part of
+        // the key these rows are summed on. Which day, per line, is asserted separately below.
         expect($job->events)->each->toHaveKey('date');
 
         return eventsWithoutDate($job) === [
@@ -130,6 +130,24 @@ it('walks pagination until the API reports no more entries', function () {
 
     Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => eventsWithoutDate($job) === [
         ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 150],
+    ]);
+});
+
+it('counts the log lines it summed into an event', function () {
+    fakeBunnySettings();
+    Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
+        bunnyLogLine(ULID_A, '1.2.3.4', 100),
+        bunnyLogLine(ULID_A, '1.2.3.4', 50),
+        bunnyLogLine(ULID_A, '1.2.3.4', 25),
+        bunnyLogLine(ULID_B, '1.2.3.4', 10),
+    ]))]);
+
+    $this->artisan('bunny:ingest-logs')->assertExitCode(0);
+
+    // The bytes say how much was moved; this says in how many requests, which is what tells a
+    // viewer from a scraper once the lines themselves are gone.
+    Queue::assertPushed(IngestBandwidthJob::class, fn (IngestBandwidthJob $job) => array_column($job->events, 'requests', 'video_ulid') === [
+        ULID_A => 3, ULID_B => 1,
     ]);
 });
 
@@ -200,8 +218,8 @@ it('keeps the slices that made it when a later one times out', function () {
 it('dates every event by its own log line, so a window that straddles midnight splits', function () {
     fakeBunnySettings();
 
-    // A window can span a midnight: `--from`, or a cursor recovered after an outage. `date` is the
-    // partition key of a SummingMergeTree, so stamping the whole window with its start would book
+    // A window can span a midnight: `--from`, or a cursor recovered after an outage. `date` is
+    // part of the key a row is summed into, so stamping the whole window with its start would book
     // post-midnight traffic to the previous day with no way back.
     // The two-hour window is walked in slices; only the first answers, the rest are empty.
     Http::fake([BUNNY_LOGS_URL => Http::sequence()
@@ -218,8 +236,8 @@ it('dates every event by its own log line, so a window that straddles midnight s
 
     Queue::assertPushed(IngestBandwidthJob::class, function (IngestBandwidthJob $job) {
         return array_values($job->events) === [
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
-            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'token_hash' => hash('sha256', 'abc'), 'zone' => ''],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-01', 'token_hash' => hash('sha256', 'abc'), 'zone' => '', 'requests' => 1],
+            ['video_ulid' => ULID_A, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-01-02', 'token_hash' => hash('sha256', 'abc'), 'zone' => '', 'requests' => 2],
         ];
     });
 });
@@ -286,7 +304,7 @@ it('counts the bytes of a token that could not have been ours, as unattributed',
 
     // The point of the whole pipeline is bandwidth. A token outside the signer's alphabet is a
     // broken LABEL, never a reason to drop the line: those bytes were really delivered and really
-    // cost money, and `usage` is a SummingMergeTree where a dropped row is gone for good.
+    // cost money, and a dropped line is one nothing downstream can put back.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
         ['statusCode' => 200, 'bytesSent' => 70, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4?token=a%26b%3Dc'],
         ['statusCode' => 200, 'bytesSent' => 30, 'remoteIp' => '1.2.3.4', 'path' => '/'.ULID_A.'/download/video/x.mp4'],
@@ -303,7 +321,7 @@ it('reads the delivery zone out of the logged path', function () {
     fakeBunnySettings();
 
     // `play` vs `download` is what separates streaming bytes from downloaded ones once the batch
-    // reaches ClickHouse, and the log path is the only place that distinction survives. The zone
+    // reaches the metrics table, and the log path is the only place that distinction survives. The zone
     // is anchored on the ULID's own position, so the `bcdn_token=` prefix cannot be mistaken for it.
     Http::fake([BUNNY_LOGS_URL => Http::response(bunnyLogsPage([
         ['statusCode' => 200, 'bytesSent' => 10, 'remoteIp' => '1.2.3.4', 'path' => '/bcdn_token=abc&token_path=%2Fplay%2F&expires=1/'.ULID_A.'/play/chunk-0001.m4s'],

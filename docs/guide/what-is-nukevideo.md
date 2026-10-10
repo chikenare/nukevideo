@@ -15,7 +15,7 @@ Most video solutions are either expensive SaaS products or full-blown platforms 
 
 - **Backend** — Laravel 13 (PHP 8.4+; the images ship PHP 8.5). Queues run on Laravel Horizon (Redis).
 - **Admin panel** — Vue 3 + TypeScript SPA, served by nginx in production.
-- **Databases** — MariaDB 11 for application data, ClickHouse for bandwidth and usage analytics.
+- **Databases** — MariaDB 11 for application data and for bandwidth and usage analytics.
 - **Storage** — Any S3-compatible service (AWS S3, MinIO, RustFS, iDrive e2). Transfers use s5cmd.
 - **Auth** — Laravel Sanctum (SPA cookie sessions plus API bearer tokens).
 
@@ -42,7 +42,7 @@ Choose per deployment how packaged content reaches viewers:
 See [CDN & Delivery](/guide/cdn) for a full comparison.
 
 ### Analytics & Monitoring
-Track bandwidth consumption and per-video usage through ClickHouse-powered analytics, and monitor encoding progress and node health from the admin panel.
+Track bandwidth consumption and per-video usage through built-in analytics, and monitor encoding progress and node health from the admin panel.
 
 ## How It Works
 

@@ -23,7 +23,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
         public string $videoUlid,
     ) {}
 
-    public function handle(): void
+    public function handle(UppyS3Service $uploads): void
     {
         Log::info('CleanupVideoResources started', ['ulid' => $this->videoUlid]);
 
@@ -61,7 +61,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
         $original = $video->streams()->where('type', 'original')->first();
 
         if ($video->template?->keep_original ?? false) {
-            $this->archiveOriginal($video, $original);
+            $this->archiveOriginal($video, $original, $uploads);
 
             return;
         }
@@ -79,7 +79,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
      * meta is forgotten before the column moves, and every crash point in between is safe: the row
      * still references the old key until the copy is durable, and a leftover key ages out on its own.
      */
-    private function archiveOriginal(Video $video, ?Stream $original): void
+    private function archiveOriginal(Video $video, ?Stream $original, UppyS3Service $uploads): void
     {
         if (! $original) {
             return;
@@ -98,7 +98,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
             $disk->copy($source, $destination);
         }
 
-        app(UppyS3Service::class)->forgetUploadMeta($source);
+        $uploads->forgetUploadMeta($source);
         $original->update(['path' => $destination]);
         $disk->delete($source);
 

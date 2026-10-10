@@ -10,8 +10,8 @@ class BandwidthController extends Controller
 {
     /**
      * Receives a batch of aggregated bandwidth events from Vector and hands it to
-     * a queue job for enrichment + ClickHouse insert, so the request returns fast
-     * and never blocks Vector on ClickHouse latency.
+     * a queue job for enrichment and the database write, so the request returns fast
+     * and never blocks Vector on either.
      */
     public function ingest(Request $request): JsonResponse
     {

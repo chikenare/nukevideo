@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\PruneScratchJob;
+use App\Jobs\RefreshGeoIpJob;
 use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('videos:dispatch')->everyFiveSeconds()->withoutOverlapping(1);
@@ -22,3 +23,8 @@ Schedule::command('queue:prune-batches --hours=168 --unfinished=168 --cancelled=
 // EVERY worker drains: `video-processing` is the CPU transcode queue, which an all-GPU fleet has
 // no consumer for — the job piled up there unnoticed instead of ever running.
 Schedule::job(new PruneScratchJob, 'orchestration')->everyThirtyMinutes();
+
+// No-op unless a MaxMind key is set. Queued rather than run here: the country database has to
+// land on the disk of the container that ingests bandwidth, which is not the scheduler's. Weekly
+// keeps it current; a container that starts without one asks for it from the ingest itself.
+Schedule::job(new RefreshGeoIpJob, RefreshGeoIpJob::QUEUE)->weekly();
