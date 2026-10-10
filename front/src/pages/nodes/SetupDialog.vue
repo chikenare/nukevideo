@@ -35,21 +35,49 @@ const pendingJobsCount = ref(0)
 const reservedJobsCount = ref(0)
 const totalJobs = computed(() => pendingJobsCount.value + reservedJobsCount.value)
 
-// Cache disks (proxy nodes). The deploy formats every spare disk on the host into the cache
-// pool, so what it found is shown — and anything holding data confirmed — before it runs.
+// Cache disks (proxy nodes). The deploy builds the cache pool out of the host's disks, so
+// what it found is shown — and anything holding data confirmed — before it runs. A spare disk
+// is formatted whole; a `shared` one holds the OS and has unpartitioned space left, and only
+// ever gains a partition over that space.
 const disksLoading = ref(false)
 const disksError = ref<string | null>(null)
 const cacheDisks = ref<CacheDisk[]>([])
 const disksConfirmed = ref(false)
-const disksToFormat = computed(() => cacheDisks.value.filter(d => d.state === 'empty' || d.state === 'foreign'))
 const poolDisks = computed(() => cacheDisks.value.filter(d => d.state === 'nukevideo'))
-const needsDiskConfirmation = computed(() => disksToFormat.value.length > 0 && !disksConfirmed.value)
+// A host that already has its pool keeps it whatever else is ticked, so nothing is offered
+// there: asking would be a question whose answer the deploy ignores.
+const hasPool = computed(() => poolDisks.value.length > 0)
+const offeredDisks = computed(() =>
+  hasPool.value ? [] : cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)),
+)
+const idleDisks = computed(() =>
+  hasPool.value ? cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)) : [],
+)
+const needsDiskConfirmation = computed(() => offeredDisks.value.length > 0 && !disksConfirmed.value)
+// The listing installs nothing, so on a host without sfdisk it cannot tell whether a system
+// disk has room to share. The script says so in that disk's detail.
+const sfdiskMissing = computed(() =>
+  cacheDisks.value.some(d => d.state === 'system' && d.detail.includes('sfdisk missing')),
+)
 // A proxy whose disks could not be listed cannot be deployed from here: the deploy needs an
 // explicit list, and the only list this panel could send is one it never got to show.
 const disksUnknown = computed(() => node.value?.type === 'proxy' && disksError.value !== null)
 // Every spare disk is ticked by default; unticking is for the one that would only drag a
-// stripe down or is kept for something else. Untouched disks stay exactly as they are.
+// stripe down or is kept for something else. Untouched disks stay exactly as they are. A
+// shared one starts unticked: putting the cache's I/O on the system's disk is a choice.
 const selectedDisks = ref<string[]>([])
+// The two fates travel as two lists. The node reads each disk's state again when the deploy
+// runs, and a disk ticked as shared must not be formatted because that reading changed.
+const chosen = computed(() => offeredDisks.value.filter(d => selectedDisks.value.includes(d.device)))
+const disksToFormat = computed(() => chosen.value.filter(d => d.state !== 'shared').map(d => d.device))
+const disksToShare = computed(() => chosen.value.filter(d => d.state === 'shared').map(d => d.device))
+const plural = (count: number) => `${count} ${count === 1 ? 'disk' : 'disks'}`
+const confirmLabel = computed(() => {
+  const format = disksToFormat.value.length
+  const share = disksToShare.value.length
+  if (format && share) return `Format ${plural(format)}, share ${plural(share)} and continue`
+  return `${format ? 'Format' : 'Share'} ${plural(format || share)} and continue`
+})
 const toggleDisk = (device: string, checked: boolean) => {
   selectedDisks.value = checked
     ? [...new Set([...selectedDisks.value, device])]
@@ -102,6 +130,7 @@ const show = async (targetNode: Node) => {
   disksLoading.value = false
   disksError.value = null
   cacheDisks.value = []
+  selectedDisks.value = []
   disksConfirmed.value = false
   open.value = true
 
@@ -147,7 +176,9 @@ const runDeploy = async () => {
     // "every spare disk", and a list this dialog never showed is not one anyone agreed to.
     await NodeService.deploy(node.value.id, {
       force: forceDeploy.value,
-      ...(node.value.type === 'proxy' ? { disks: selectedDisks.value } : {}),
+      ...(node.value.type === 'proxy'
+        ? { disks: disksToFormat.value, sharedDisks: disksToShare.value }
+        : {}),
     })
     // It runs in the background: the logs take over from here.
     emit('deployed', node.value.id)
@@ -237,17 +268,26 @@ defineExpose({ show })
               <span class="text-xs text-muted-foreground">Fix the SSH access or the sudo rule, then reopen this dialog: a proxy is not deployed without a look at its disks.</span>
             </div>
           </div>
-          <div v-else-if="disksToFormat.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
+          <div v-else-if="hasPool" class="flex items-start gap-2 text-xs text-muted-foreground">
+            <CheckCircle2 class="h-4 w-4 shrink-0 text-emerald-500" />
+            <div class="flex flex-col gap-0.5">
+              <span>Existing cache pool on {{ poolDisks.map(d => d.device).join(', ') }} — kept as it is.</span>
+              <span v-if="idleDisks.length > 0">
+                {{ idleDisks.map(d => d.device).join(', ') }} {{ idleDisks.length === 1 ? 'is' : 'are' }} not part of it and left untouched: a pool only grows by being rebuilt.
+              </span>
+            </div>
+          </div>
+          <div v-else-if="offeredDisks.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
             <AlertTriangle class="h-5 w-5 text-yellow-500 mt-0.5 shrink-0" />
             <div class="flex flex-col gap-1 flex-1 min-w-0">
               <span class="text-sm font-medium">
-                Spare disks to format into the cache pool
+                Disks for the cache pool
               </span>
               <span class="text-xs text-muted-foreground">
-                Everything on the ticked disks is erased; untick one to leave it alone. Disks holding the operating system are never touched.
+                Everything on a ticked spare disk is erased; untick one to leave it alone. A disk shared with the operating system only gives its unpartitioned space: a partition is added there and nothing that exists is touched.
               </span>
               <ul class="mt-1 flex flex-col gap-0.5 font-mono text-xs">
-                <li v-for="disk in disksToFormat" :key="disk.device" class="flex items-center gap-2">
+                <li v-for="disk in offeredDisks" :key="disk.device" class="flex items-center gap-2">
                   <input
                     type="checkbox"
                     class="h-3.5 w-3.5 shrink-0 accent-yellow-500"
@@ -256,14 +296,15 @@ defineExpose({ show })
                     @change="toggleDisk(disk.device, ($event.target as HTMLInputElement).checked)"
                   />
                   <span class="w-28 shrink-0">{{ disk.device }}</span>
-                  <span class="w-16 shrink-0 text-right">{{ formatBytes(disk.size) }}</span>
+                  <span class="w-16 shrink-0 text-right">{{ formatBytes(disk.state === 'shared' ? disk.free : disk.size) }}</span>
                   <span class="truncate text-muted-foreground">{{ disk.model }}</span>
-                  <span :class="disk.state === 'foreign' ? 'text-red-400' : 'text-muted-foreground'">{{ disk.detail || 'empty' }}</span>
+                  <span v-if="disk.state === 'shared'" class="text-muted-foreground">unpartitioned, shared with the OS</span>
+                  <span v-else :class="disk.state === 'foreign' ? 'text-red-400' : 'text-muted-foreground'">{{ disk.detail || 'empty' }}</span>
                 </li>
               </ul>
               <div v-if="!disksConfirmed" class="flex gap-2 mt-2">
-                <Button v-if="selectedDisks.length > 0" variant="destructive" size="sm" @click="disksConfirmed = true">
-                  Format {{ selectedDisks.length }} {{ selectedDisks.length === 1 ? 'disk' : 'disks' }} and continue
+                <Button v-if="chosen.length > 0" :variant="disksToFormat.length > 0 ? 'destructive' : 'default'" size="sm" @click="disksConfirmed = true">
+                  {{ confirmLabel }}
                 </Button>
                 <Button v-else variant="outline" size="sm" @click="disksConfirmed = true">
                   Skip the disks — cache in a volume
@@ -271,9 +312,11 @@ defineExpose({ show })
               </div>
             </div>
           </div>
-          <div v-else-if="poolDisks.length > 0" class="flex items-center gap-2 text-xs text-muted-foreground">
-            <CheckCircle2 class="h-4 w-4 text-emerald-500" />
-            <span>Existing cache pool on {{ poolDisks.map(d => d.device).join(', ') }} — kept as it is.</span>
+          <div v-if="sfdiskMissing && !hasPool" class="flex items-start gap-2 text-xs text-muted-foreground">
+            <AlertTriangle class="h-4 w-4 shrink-0 text-yellow-500" />
+            <span>
+              <code>sfdisk</code> is not installed on this host, so its system disks could not be checked for unpartitioned space to share. Install the <code>fdisk</code> package and reopen this dialog if one of them should be.
+            </span>
           </div>
 
           <div class="flex items-center justify-end gap-3">

@@ -39,6 +39,7 @@ size: number,
 model: string,
 state: string,
 detail: string,
+free: number,
 };
 export type CdnSettingsData = {
 provider: App.Enums.CdnDriver,
@@ -322,6 +323,7 @@ password: string,
 namespace Node {
 export type DeployNodeData = {
 disks?: Array<any> | null,
+sharedDisks: Array<any>,
 force: boolean,
 };
 export type DeployNodesData = {

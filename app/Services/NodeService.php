@@ -277,10 +277,12 @@ class NodeService
      *                                          null formats every spare disk, [] formats none.
      *                                          The controller never passes null for a proxy
      *                                          ({@see DeployNodeData}).
+     * @param  array<int, string>  $sharedDisks  system disks that give the pool a partition over
+     *                                           their unpartitioned space; never implied.
      */
-    public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true, ?array $disks = null): void
+    public function runFullDeploy(Node $node, \Closure $onOutput, bool $drain = true, ?array $disks = null, array $sharedDisks = []): void
     {
-        $script = $this->buildDeployScript($node, $disks);
+        $script = $this->buildDeployScript($node, $disks, $sharedDisks);
         $grace = $drain ? self::drainGrace() : 0;
 
         // SSH timeout covers the worst case: the drain window plus image pull and startup.
@@ -325,7 +327,7 @@ class NodeService
      * scripts readable and lintable as scripts, and keeps every node-supplied value from ever
      * being interpolated into one.
      */
-    public function buildDeployScript(Node $node, ?array $disks = null): string
+    public function buildDeployScript(Node $node, ?array $disks = null, array $sharedDisks = []): string
     {
         $type = $node->type->value;
 
@@ -338,7 +340,7 @@ class NodeService
             ...$this->imageVars($node->type === NodeType::PROXY ? 'proxy' : 'api'),
             ...match ($node->type) {
                 NodeType::WORKER => $this->workerVars($node),
-                NodeType::PROXY => $this->proxyVars($node, $disks),
+                NodeType::PROXY => $this->proxyVars($node, $disks, $sharedDisks),
             },
             ...$this->vectorVars($node),
         ];
@@ -484,7 +486,7 @@ class NodeService
         ];
     }
 
-    private function proxyVars(Node $node, ?array $disks): array
+    private function proxyVars(Node $node, ?array $disks, array $sharedDisks): array
     {
         // nginx templates the secure-token key at boot; an empty one renders `key ;` and the
         // container crashloops on an emerg. Fail here with a message that names the fix instead.
@@ -545,6 +547,10 @@ class NodeService
             'CACHE_FALLBACK_MAX_SIZE' => ProxyCacheService::FALLBACK_MAX_SIZE,
             // Unset means every spare disk; a list (possibly empty) means exactly those.
             'CHOSEN_DISKS' => $disks === null ? null : implode(' ', $disks),
+            // Always set: there is no "every shared disk". Two lists rather than one because
+            // the script reads each disk's state again, and what was agreed to for a disk —
+            // format it, or only add a partition to it — must not depend on that reading.
+            'CHOSEN_SHARED' => implode(' ', $sharedDisks),
             ...$this->traefikVars($isProduction),
         ];
     }

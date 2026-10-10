@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Data\Node\DeployNodeData;
 use App\Models\Node;
 
 /**
@@ -27,8 +28,20 @@ use App\Models\Node;
  * disk may be NVMe too. A disk already carrying this cache is assembled and mounted as it is: a
  * redeploy, which is how a node is updated, keeps the cache. Anything else among the remaining
  * disks is wiped, which is why the panel lists them and asks before a deploy runs, and why a
- * development panel never provisions at all — its deploy target is usually the developer's own
+ * development panel ticks none of them — its deploy target is usually the developer's own
  * machine, where an unmounted disk is a backup, not a spare.
+ *
+ * Not every host has a disk to give whole, though: a server with nothing but two HDDs has the
+ * OS on one of them, and most of that disk is the capacity it was bought for. A system disk
+ * with unpartitioned space left on it is therefore offered as `shared`: ticked, the deploy
+ * appends one partition over that space and makes it a pool member like any whole disk (or the
+ * whole pool, on a host with a single disk). It never shrinks, moves or reformats what is
+ * there, so the space has to be left unpartitioned when the OS is installed — a root
+ * filesystem spanning the disk leaves nothing to carve, and no deploy is going to resize one.
+ * GPT only, and never a disk that is whole a member of a mirror: see the script for both.
+ *
+ * Sharing is asked for by name, in a list of its own ({@see DeployNodeData}),
+ * and refused when the disk no longer is what the panel showed.
  */
 class ProxyCacheService
 {
@@ -39,13 +52,14 @@ class ProxyCacheService
     public const CONTAINER_PATH = '/var/cache/nginx/vod';
 
     /**
-     * Filesystem label and md array name; they are how a redeploy recognises its own pool. mdadm
-     * stores the name as `{homehost}:{name}`, which is why the RAID member check below matches
-     * on the suffix — and why the name carries no colon of its own, or udev would publish the
-     * array under a different `/dev/md/` path on every host whose name is not the one in the
-     * superblock.
+     * Filesystem label and md array name; they are how a redeploy recognises its own pool. Two
+     * names rather than one because XFS takes a label of twelve characters and mkfs.xfs refuses
+     * a longer one outright. mdadm stores the array's as `{homehost}:{name}`, which is why the
+     * RAID member check matches on the suffix — and why the name carries no colon of its own,
+     * or udev would publish the array under a different `/dev/md/` path on every host whose
+     * name is not the one in the superblock.
      */
-    public const FS_LABEL = 'nukevideo-cache';
+    public const FS_LABEL = 'nukevideo';
 
     public const MD_DEVICE = '/dev/md/nukevideo-cache';
 
@@ -77,7 +91,7 @@ class ProxyCacheService
     /**
      * What a deploy would do to the node's disks, read over SSH without changing anything.
      *
-     * @return array<int, array{device: string, size: int, model: string, state: string, detail: string}>
+     * @return array<int, array{device: string, size: int, model: string, state: string, detail: string, free: int}>
      */
     public function inventory(Node $node): array
     {
@@ -95,15 +109,16 @@ class ProxyCacheService
         );
 
         $disks = [];
-        // Newlines only: the detail is the last field and empty for a blank disk, so a plain
-        // trim() ate the trailing tab of the last line and dropped exactly the disk that matters.
+        // Newlines only: a field in the middle may be empty (the detail of a blank disk), and
+        // a plain trim() once ate the trailing tab of the last line with it, dropping exactly
+        // the disk that matters.
         foreach (explode("\n", trim($output, "\r\n")) as $line) {
             $fields = explode("\t", rtrim($line, "\r"));
-            if (count($fields) !== 5) {
+            if (count($fields) !== 6) {
                 continue;
             }
-            [$device, $size, $model, $state, $detail] = $fields;
-            $disks[] = ['device' => $device, 'size' => (int) $size, 'model' => $model, 'state' => $state, 'detail' => $detail];
+            [$device, $size, $model, $state, $detail, $free] = $fields;
+            $disks[] = ['device' => $device, 'size' => (int) $size, 'model' => $model, 'state' => $state, 'detail' => $detail, 'free' => (int) $free];
         }
 
         return $disks;
