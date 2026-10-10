@@ -87,7 +87,7 @@ class IngestBandwidthJob implements ShouldQueue
      * @param  list<array<string, mixed>>  $events
      * @return array<string, string|null>
      */
-    private function resolveTrackingIds(array $events): array
+    private function resolveTrackingIds(array $events, TrackingRegistry $registry): array
     {
         $hashes = [];
 
@@ -101,7 +101,7 @@ class IngestBandwidthJob implements ShouldQueue
             }
         }
 
-        return $hashes === [] ? [] : app(TrackingRegistry::class)->resolveMany($hashes);
+        return $hashes === [] ? [] : $registry->resolveMany($hashes);
     }
 
     /**
@@ -146,11 +146,11 @@ class IngestBandwidthJob implements ShouldQueue
         return max(0, min(65535, (int) ($event['node'] ?? 0)));
     }
 
-    public function handle(): void
+    public function handle(TrackingRegistry $registry, GeoIp $geoIp): void
     {
         $valid = [];
         $ulids = [];
-        $resolved = $this->resolveTrackingIds($this->events);
+        $resolved = $this->resolveTrackingIds($this->events, $registry);
 
         foreach ($this->events as $event) {
             $videoUlid = (string) ($event['video_ulid'] ?? '');
@@ -192,7 +192,6 @@ class IngestBandwidthJob implements ShouldQueue
 
         // The viewer's country, resolved here and stored: a report by country is then a GROUP BY,
         // not a lookup per stored address. Empty when there is no database or no match.
-        $geoIp = app(GeoIp::class);
         $countries = $geoIp->countries(array_column($valid, 1));
 
         // This batch goes without; the next one finds the file. Never downloaded inline, and

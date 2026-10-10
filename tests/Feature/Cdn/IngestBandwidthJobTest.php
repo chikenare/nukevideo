@@ -34,7 +34,7 @@ const OTHER_ULID = '01HZXW3V5N8Q9R2T4Y6B8D0F9Z';
  */
 function storedRows(array $events): Collection
 {
-    (new IngestBandwidthJob($events))->handle();
+    IngestBandwidthJob::dispatchSync($events);
 
     return DB::table(UsageService::TABLE)->orderBy('value')->orderBy('id')->get()->map(fn (object $row) => [
         ...(array) $row,

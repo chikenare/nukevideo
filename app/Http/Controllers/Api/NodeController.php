@@ -24,6 +24,8 @@ class NodeController extends Controller
 {
     public function __construct(
         private NodeService $nodeService,
+        private NodeOperationService $operations,
+        private DockerService $docker,
     ) {}
 
     public function index()
@@ -87,11 +89,10 @@ class NodeController extends Controller
 
         // A deploy still running would recreate the container this removes: a worker draining the
         // queues under a node id that no longer exists, with nothing in the panel to show it.
-        abort_if(app(NodeOperationService::class)->busy($node), 409, 'This node has an operation running; wait for it to finish.');
+        abort_if($this->operations->busy($node), 409, 'This node has an operation running; wait for it to finish.');
 
         try {
-            $docker = app(DockerService::class);
-            $containers = $docker->listContainers($node);
+            $containers = $this->docker->listContainers($node);
             // Through the model: the names carry an environment prefix, and a hand-built one here
             // would either miss this environment's containers or match the other environment's.
             $owned = $node->deployedContainerNames();
@@ -107,7 +108,7 @@ class NodeController extends Controller
                 // `nukevideo_worker_11`, so deleting node 1 also removed node 11's worker whenever
                 // the two shared a host — which is the normal case for a development node.
                 if (in_array($name, $owned, true)) {
-                    $docker->removeContainer($node, $name);
+                    $this->docker->removeContainer($node, $name);
                 }
             }
 

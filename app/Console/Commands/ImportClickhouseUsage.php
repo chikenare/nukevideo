@@ -47,6 +47,11 @@ class ImportClickhouseUsage extends Command
 
     private const READ_TIMEOUT_SECONDS = 600;
 
+    public function __construct(private GeoIp $geoIp)
+    {
+        parent::__construct();
+    }
+
     public function handle(): int
     {
         if (! $this->option('url')) {
@@ -59,14 +64,14 @@ class ImportClickhouseUsage extends Command
         // Fetched here because this runs in whichever container it was started in, and that one
         // may not hold a copy. Best effort: without it the rows import with no country.
         try {
-            if (app(GeoIp::class)->missing()) {
-                app(GeoIp::class)->refresh();
+            if ($this->geoIp->missing()) {
+                $this->geoIp->refresh();
             }
         } catch (\Throwable $e) {
             $this->warn('Could not download the country database: '.$e->getMessage());
         }
 
-        if (! is_file(app(GeoIp::class)->path())) {
+        if (! is_file($this->geoIp->path())) {
             $this->warn('No country database: the history is imported without countries.');
         }
 
@@ -185,7 +190,7 @@ class ImportClickhouseUsage extends Command
     /** @param list<array<string, mixed>> $batch */
     private function write(array $batch): void
     {
-        $countries = app(GeoIp::class)->countries(array_column($batch, 'ip'));
+        $countries = $this->geoIp->countries(array_column($batch, 'ip'));
 
         foreach ($batch as &$row) {
             $row['country'] = $countries[$row['ip']] ?? '';

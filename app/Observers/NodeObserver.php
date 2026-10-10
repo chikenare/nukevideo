@@ -9,6 +9,8 @@ use Illuminate\Support\Str;
 
 class NodeObserver
 {
+    public function __construct(private NodeSettings $settings) {}
+
     public function creating(Node $node): void
     {
         $node->uuid = Str::uuid()->toString();
@@ -21,11 +23,9 @@ class NodeObserver
      */
     public function created(Node $node): void
     {
-        $settings = app(NodeSettings::class);
-
-        if ($node->type === NodeType::WORKER && $settings->chunk_store_address === '') {
-            $settings->chunk_store_address = $node->ip_address;
-            $settings->save();
+        if ($node->type === NodeType::WORKER && $this->settings->chunk_store_address === '') {
+            $this->settings->chunk_store_address = $node->ip_address;
+            $this->settings->save();
         }
     }
 
@@ -35,11 +35,9 @@ class NodeObserver
      */
     public function deleted(Node $node): void
     {
-        $settings = app(NodeSettings::class);
-
-        if (($settings->chunkStore()[0] ?? null) === $node->ip_address) {
-            $settings->chunk_store_address = '';
-            $settings->save();
+        if (($this->settings->chunkStore()[0] ?? null) === $node->ip_address) {
+            $this->settings->chunk_store_address = '';
+            $this->settings->save();
         }
     }
 }

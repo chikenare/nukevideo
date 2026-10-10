@@ -94,10 +94,10 @@ it('stores the country on the delivery row and on its origin row', function () {
     config(['services.maxmind.database' => GEO_FIXTURE]);
     $video = geoVideo();
 
-    (new IngestBandwidthJob([
+    IngestBandwidthJob::dispatchSync([
         ['video_ulid' => $video->ulid, 'ip' => GB_IP, 'bytes' => 500, 'origin' => 200, 'date' => '2026-04-10'],
         ['video_ulid' => $video->ulid, 'ip' => '10.0.0.1', 'bytes' => 70, 'date' => '2026-04-10'],
-    ]))->handle();
+    ]);
 
     expect(DB::table(UsageService::TABLE)->orderBy('value')->pluck('country', 'metric')->all())
         ->toBe(['bandwidth_bytes' => 'GB', 'origin_bytes' => 'GB'])
@@ -107,7 +107,7 @@ it('stores the country on the delivery row and on its origin row', function () {
 it('keeps the bytes when there is no database, with no country', function () {
     $video = geoVideo();
 
-    (new IngestBandwidthJob([['video_ulid' => $video->ulid, 'ip' => GB_IP, 'bytes' => 500]]))->handle();
+    IngestBandwidthJob::dispatchSync([['video_ulid' => $video->ulid, 'ip' => GB_IP, 'bytes' => 500]]);
 
     $row = DB::table(UsageService::TABLE)->sole();
 
@@ -118,10 +118,10 @@ it('fills a row written without a country in, instead of splitting it in two', f
     $video = geoVideo();
     $event = ['video_ulid' => $video->ulid, 'ip' => GB_IP, 'bytes' => 500, 'date' => '2026-04-10'];
 
-    (new IngestBandwidthJob([$event]))->handle();
+    IngestBandwidthJob::dispatchSync([$event]);
 
     config(['services.maxmind.database' => GEO_FIXTURE]);
-    (new IngestBandwidthJob([$event]))->handle();
+    IngestBandwidthJob::dispatchSync([$event]);
 
     $row = DB::table(UsageService::TABLE)->sole();
 
@@ -189,8 +189,8 @@ it('asks for the database from the ingest when it is missing, once', function ()
     $video = geoVideo();
     $event = ['video_ulid' => $video->ulid, 'ip' => GB_IP, 'bytes' => 500];
 
-    (new IngestBandwidthJob([$event]))->handle();
-    (new IngestBandwidthJob([$event]))->handle();
+    IngestBandwidthJob::dispatchSync([$event]);
+    IngestBandwidthJob::dispatchSync([$event]);
 
     Queue::assertPushedOn(RefreshGeoIpJob::QUEUE, RefreshGeoIpJob::class);
     Queue::assertPushed(RefreshGeoIpJob::class, 1);
@@ -201,7 +201,7 @@ it('does not ask for a database it has, nor for one it has no key for', function
     $arrange($path);
     Queue::fake([RefreshGeoIpJob::class]);
 
-    (new IngestBandwidthJob([['video_ulid' => geoVideo()->ulid, 'ip' => GB_IP, 'bytes' => 500]]))->handle();
+    IngestBandwidthJob::dispatchSync([['video_ulid' => geoVideo()->ulid, 'ip' => GB_IP, 'bytes' => 500]]);
 
     Queue::assertNotPushed(RefreshGeoIpJob::class);
 })->with([

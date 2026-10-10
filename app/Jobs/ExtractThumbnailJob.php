@@ -41,7 +41,7 @@ class ExtractThumbnailJob implements ShouldBeUnique, ShouldQueue
         return (string) $this->videoId;
     }
 
-    public function handle(): void
+    public function handle(ThumbnailService $thumbnails): void
     {
         Log::info('ExtractThumbnail started', ['video' => $this->videoId]);
 
@@ -60,7 +60,7 @@ class ExtractThumbnailJob implements ShouldBeUnique, ShouldQueue
 
             $offset = (int) (self::POSITION_PERCENT / 100 * $video->duration);
 
-            app(ThumbnailService::class)->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
+            $thumbnails->extractThumbnail($sourceUrl, $thumbnailLocalPath, $offset);
 
             // Straight to primary S3 (not the mirror's final/ staging): this job races the encode
             // batch, and packaging would sync final/ before a slow thumbnail lands there — the

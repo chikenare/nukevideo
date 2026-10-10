@@ -24,6 +24,8 @@ class StreamObserver
     /** {@see withoutAnnouncing} */
     private static bool $announcing = true;
 
+    public function __construct(private UppyS3Service $uploads) {}
+
     /**
      * Run `$callback` without announcing the stream changes it makes. Deleting a video deletes its
      * `original` through Eloquent so this observer reclaims the object ({@see VideoObserver}), and
@@ -100,7 +102,7 @@ class StreamObserver
             // webhook be replayed, {@see PruneScratchJob}) — but an original whose row is gone
             // must not be replayable: if the delete above failed and left the object behind, the
             // sweep would re-ingest it and hand the user back the video they just deleted.
-            app(UppyS3Service::class)->forgetUploadMeta($stream->path);
+            $this->uploads->forgetUploadMeta($stream->path);
 
             return;
         }

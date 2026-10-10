@@ -58,7 +58,7 @@ class GenerateVideoStoryboard implements ShouldBeUnique, ShouldQueue
         return (string) $this->videoId;
     }
 
-    public function handle(): void
+    public function handle(ThumbnailService $thumbnails): void
     {
         Log::info('GenerateStoryboard started', ['video' => $this->videoId]);
 
@@ -75,7 +75,7 @@ class GenerateVideoStoryboard implements ShouldBeUnique, ShouldQueue
 
             $video->heartbeat();
 
-            $spriteCount = app(ThumbnailService::class)->generateStoryboardSprites(
+            $spriteCount = $thumbnails->generateStoryboardSprites(
                 inputPath: $sourceUrl,
                 outputPattern: "{$tmpDir}/".Video::STORYBOARD_SPRITE_PATTERN,
                 interval: self::THUMBNAIL_INTERVAL,
