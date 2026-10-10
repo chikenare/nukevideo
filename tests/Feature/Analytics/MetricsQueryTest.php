@@ -1,19 +1,19 @@
 <?php
 
 /**
- * The general read over `usage`: any breakdown the allowlist permits, rather than a new endpoint
+ * The general read over `usage_daily`: any breakdown the allowlist permits, rather than a new endpoint
  * per question.
  *
  * A query endpoint over a shared table is only defensible because of what these cases pin. The
- * dimensions of `usage` are not equally shareable, so there are two ways to be allowed to break
+ * dimensions of `usage_daily` are not equally shareable, so there are two ways to be allowed to break
  * down by one that NAMES something — a video, a viewer, a viewer's address: either the query is
  * narrowed to one project, in which case those identifiers are the caller's own, or the caller
  * names exactly what it is asking about, which bounds the question to values it already had. The
  * customer-label column pins the query to the caller's account on top of that, and the two fleet
  * columns take only the first route, because there is no list of edges a tenant could name.
  *
- * The service is stubbed — the suite has no ClickHouse fixture — so what is under test is the
- * authorization and the shaping, which is where this endpoint can go wrong.
+ * The service is stubbed here — {@see AnalyticsServiceTest} runs the queries — so what is under
+ * test is the authorization and the shaping, which is where this endpoint can go wrong.
  */
 
 use App\Models\Project;
@@ -117,8 +117,8 @@ it('resolves a project key to its owning account, not to the project id', functi
 });
 
 it('scopes the query to the caller project rather than pre-filtering the list', function () {
-    // The list goes to ClickHouse as given; `project_id` in the WHERE is what makes another
-    // tenant's ULID match nothing. One clause instead of a MariaDB round trip and a narrowing that
+    // The list goes to the query as given; `project_id` in the WHERE is what makes another
+    // tenant's ULID match nothing. One clause instead of a second lookup and a narrowing that
     // could be got wrong.
     $mine = projectVideo($this->project);
     $theirs = projectVideo(Project::factory()->for(User::factory()->create())->create(), 'theirs');
@@ -138,7 +138,7 @@ it('scopes the query to the caller project rather than pre-filtering the list', 
 
 it('lets project context stand in for naming what you ask about', function () {
     // Scoped to a project, the identifiers ARE the caller's, so no list is needed — which is the
-    // whole reason `usage` grew a project column.
+    // whole reason `usage_daily` grew a project column.
     $seen = stubMetricsQuery();
 
     $this->postJson(METRICS_ENDPOINT, [

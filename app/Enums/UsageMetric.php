@@ -6,7 +6,7 @@ use App\Jobs\IngestBandwidthJob;
 use App\Services\UsageService;
 
 /**
- * Every metric `usage` can hold, in one place.
+ * Every metric `usage_daily` can hold, in one place.
  *
  * The table stores all of them in a single `value` column whose unit lives in the metric name —
  * bytes for the transfer metrics, seconds for {@see UsageMetric::ENCODING_CPU} — and nothing in the

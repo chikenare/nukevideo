@@ -7,7 +7,6 @@ use App\Services\Cdn\BunnyProvider;
 use App\Services\Cdn\CdnProvider;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Settings\CdnSettings;
-use ClickHouseDB\Client as ClickhouseClient;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -30,8 +29,6 @@ class AppServiceProvider extends ServiceProvider
             CdnDriver::SelfHosted => $app->make(SelfHostedProvider::class),
             CdnDriver::Bunny => $app->make(BunnyProvider::class),
         });
-
-        $this->app->extend(ClickhouseClient::class, fn (ClickhouseClient $client) => $client->https(! $this->app->isLocal()));
     }
 
     /**

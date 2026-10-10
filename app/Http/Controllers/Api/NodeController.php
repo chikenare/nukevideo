@@ -148,7 +148,7 @@ class NodeController extends Controller
         }
 
         // The script this URL serves carries the instance's entire credential set in cleartext —
-        // APP_KEY, the database and Redis passwords, the S3 and ClickHouse keys, the webhook and
+        // APP_KEY, the database and Redis passwords, the S3 keys, the webhook and
         // internal secrets, the CDN token secret. It is delivered as a `curl … | bash` one-liner,
         // so the URL predictably ends up in shell history, in the proxy's access log and in
         // whatever ticket the admin pasted it into. The nonce below makes reading it there

@@ -5,7 +5,7 @@ namespace App\Enums;
 use App\Http\Controllers\Api\MetricsController;
 
 /**
- * A column of `usage` a caller may break its numbers down by, and what it takes to be allowed to.
+ * A column of `usage_daily` a caller may break its numbers down by, and what it takes to be allowed to.
  *
  * The authorization lives here rather than in the shape of the URL tree, and that is the whole
  * design. Named endpoints put each question behind its own route and its own middleware group,
@@ -25,7 +25,8 @@ use App\Http\Controllers\Api\MetricsController;
  *   owns because it owns none. Inside a project those two say which edge served THAT project's
  *   traffic and how well it cached; the fleet-wide view stays on the admin-only per-node report.
  * - `ip` is also personal data, which is why it takes the same rule as the rest rather than a
- *   looser one for convenience.
+ *   looser one for convenience. `country` is derived from it and takes the same rule: unnarrowed,
+ *   it would describe the audience of every tenant on the installation at once.
  * - `external_user_id` narrows on a second axis as well: the row carries the `user_id` of the owning
  *   account, so a query touching it is pinned to the caller's account the way `/api/usage` is.
  */
@@ -37,20 +38,19 @@ enum MetricDimension: string
     case VIDEO = 'video';
     case EXTERNAL_USER_ID = 'external_user_id';
     case IP = 'ip';
+    case COUNTRY = 'country';
     case NODE_ID = 'node_id';
     case CACHE = 'cache';
 
     /**
-     * The SQL that produces this dimension. A class-controlled expression, never caller input — the
-     * caller picks a case of this enum, not a column name.
+     * The column that produces this dimension, as the query builder selects it. Class-controlled,
+     * never caller input — the caller picks a case of this enum, not a column name.
      */
     public function selection(): string
     {
         return match ($this) {
-            // Stored as IPv6 (v4 arrives mapped), which is meaningless to a consumer as a number.
-            self::IP => 'IPv6NumToString(ip) AS ip',
             // Aliased to the name every other video breakdown already answers with.
-            self::VIDEO => 'video_ulid AS video',
+            self::VIDEO => 'video_ulid as video',
             default => $this->value,
         };
     }
@@ -70,7 +70,7 @@ enum MetricDimension: string
      */
     public function requiresScope(): bool
     {
-        return in_array($this, [self::VIDEO, self::IP, self::TRACKING_ID, self::NODE_ID, self::CACHE], true);
+        return in_array($this, [self::VIDEO, self::IP, self::COUNTRY, self::TRACKING_ID, self::NODE_ID, self::CACHE], true);
     }
 
     /**
@@ -83,7 +83,7 @@ enum MetricDimension: string
     public function namedBy(): ?string
     {
         return match ($this) {
-            self::VIDEO, self::IP => 'videos',
+            self::VIDEO, self::IP, self::COUNTRY => 'videos',
             self::TRACKING_ID => 'trackingIds',
             default => null,
         };

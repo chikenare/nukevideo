@@ -4,8 +4,10 @@ namespace App\Jobs;
 
 use App\Models\Video;
 use App\Services\Cdn\TrackingRegistry;
+use App\Services\GeoIp;
+use App\Services\UsageService;
+use App\Support\IpAddress;
 use App\Support\TrackingId;
-use ClickHouseDB\Client;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -15,7 +17,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 /**
- * Writes a batch of aggregated bandwidth events to ClickHouse `usage`, the single metrics table.
+ * Writes a batch of aggregated bandwidth events to `usage_daily`, the single metrics table.
  *
  * The video and IP come straight from the edge log (the URL path + request); the owning account and
  * the integrator's own customer are resolved here, from the video, in one batched lookup, and the
@@ -35,10 +37,10 @@ class IngestBandwidthJob implements ShouldQueue
     /**
      * Which metric a request counts towards, by the zone directory its path sits in
      * ({@see Video::PLAY_DIR} and friends). Splitting delivery this way is the whole
-     * point of folding `video_usage` into `usage`: the old table had one `bytes` column and no way
-     * to tell a playback segment from a downloaded master.
+     * point of keeping delivery in the metrics table: one `bytes` column would have no way to tell
+     * a playback segment from a downloaded master.
      *
-     * The unit lives in the metric name, deliberately — `value` is a shared Float64 that means
+     * The unit lives in the metric name, deliberately — `value` is a shared double that means
      * seconds for `encoding_cpu` and bytes here, and nothing in the schema says which.
      */
     private const ZONE_METRICS = [
@@ -66,12 +68,12 @@ class IngestBandwidthJob implements ShouldQueue
     /**
      * What nginx can say about a cache lookup. Clamped to the set rather than stored as received,
      * because the value is parsed out of a log line: an unknown word becomes '' — "unknown" —
-     * which the hit-ratio query leaves out, and never a string that pollutes a LowCardinality
-     * dictionary. `OFF` is the download location (no cache), `BYPASS` the manifests.
+     * which the hit-ratio query leaves out, and never a string wider than the column. `OFF` is
+     * the download location (no cache), `BYPASS` the manifests.
      */
     private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
 
-    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, token_hash?: string, tracking_id?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string}> $events */
+    /** @param array<int, array{video_ulid?: string, ip?: string, bytes?: int|string, date?: string, token_hash?: string, tracking_id?: string, zone?: string, cache?: string, origin?: int|string, node?: int|string, requests?: int|string}> $events */
     public function __construct(public array $events) {}
 
     /**
@@ -134,8 +136,8 @@ class IngestBandwidthJob implements ShouldQueue
     }
 
     /**
-     * The edge's node id, 0 when the line predates the field. UInt16 in the table, and a node id
-     * comes out of an auto-increment, so the clamp only guards the parse.
+     * The edge's node id, 0 when the line predates the field. An unsigned smallint in the table,
+     * and a node id comes out of an auto-increment, so the clamp only guards the parse.
      *
      * @param  array<string, mixed>  $event
      */
@@ -153,20 +155,19 @@ class IngestBandwidthJob implements ShouldQueue
         foreach ($this->events as $event) {
             $videoUlid = (string) ($event['video_ulid'] ?? '');
             $bytes = (int) ($event['bytes'] ?? 0);
-            $ip = (string) ($event['ip'] ?? '');
+            $ip = IpAddress::canonical((string) ($event['ip'] ?? ''));
 
             // The ulid is parsed out of a public request path, so it is attacker-controlled text
             // until it matches the shape: anything else must never reach a stored column. The
-            // address gets the same treatment for a blunter reason — the column is `IPv6`, which
-            // cannot parse '' or '-', and ClickHouse rejects the whole block over one bad value.
-            // Dropping the row loses one event; letting it through loses the entire batch.
-            if (! Str::isUlid($videoUlid) || $bytes <= 0 || ! filter_var($ip, FILTER_VALIDATE_IP)) {
+            // address gets the same treatment: '' and '-' are what a log line carries when there
+            // was none, and a row with no viewer behind it would only inflate the distinct counts.
+            if (! Str::isUlid($videoUlid) || $bytes <= 0 || $ip === null) {
                 continue;
             }
 
             $valid[] = [
                 $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event, $resolved), $this->metric($event),
-                $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)),
+                $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)), $this->requests($event),
             ];
             $ulids[$videoUlid] = true;
         }
@@ -183,28 +184,39 @@ class IngestBandwidthJob implements ShouldQueue
 
         // Ingest time, not traffic time — the ingest runs every five minutes over a window that
         // ends two minutes in the past, so the run just after midnight books the tail of the old
-        // day to the new one. `date` is the column every analytics query groups on and the
-        // partition key, so that slice is misattributed permanently. Prefer a date carried on the
-        // event; the fallback is only for events emitted before the edge started sending one.
+        // day to the new one. `date` is the column every analytics query groups on, so that slice
+        // is misattributed permanently. Prefer a date carried on the event; the fallback is only
+        // for events emitted before the edge started sending one.
         $ingestedOn = now()->format('Y-m-d');
-        $columns = ['date', 'user_id', 'project_id', 'metric', 'external_user_id', 'video_ulid', 'ip', 'tracking_id', 'node_id', 'cache', 'value'];
         $rows = [];
 
-        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $trackingId, $metric, $nodeId, $cache, $origin]) {
+        // The viewer's country, resolved here and stored: a report by country is then a GROUP BY,
+        // not a lookup per stored address. Empty when there is no database or no match.
+        $geoIp = app(GeoIp::class);
+        $countries = $geoIp->countries(array_column($valid, 1));
+
+        // This batch goes without; the next one finds the file. Never downloaded inline, and
+        // never allowed to fail the batch: the bytes must not depend on a queue push for a file
+        // they can do without.
+        rescue(fn () => RefreshGeoIpJob::dispatchIfMissing($geoIp));
+
+        foreach ($valid as [$videoUlid, $ip, $bytes, $date, $trackingId, $metric, $nodeId, $cache, $origin, $requests]) {
             $video = $videos->get($videoUlid);
 
             $rows[] = [
-                $date ?? $ingestedOn,
-                (int) ($video->user_id ?? 0),
-                (int) ($video->project_id ?? 0),
-                $metric,
-                (string) ($video->external_user_id ?? ''),
-                $videoUlid,
-                $ip,
-                $trackingId,
-                $nodeId,
-                $cache,
-                $bytes,
+                'date' => $date ?? $ingestedOn,
+                'user_id' => (int) ($video->user_id ?? 0),
+                'project_id' => (int) ($video->project_id ?? 0),
+                'metric' => $metric,
+                'external_user_id' => (string) ($video->external_user_id ?? ''),
+                'video_ulid' => $videoUlid,
+                'ip' => $ip,
+                'country' => $countries[$ip] ?? '',
+                'tracking_id' => $trackingId,
+                'node_id' => $nodeId,
+                'cache' => $cache,
+                'value' => $bytes,
+                'requests' => $requests,
             ];
 
             // The origin's side, as its own row: `value` is the one summed column, so the bytes
@@ -212,14 +224,23 @@ class IngestBandwidthJob implements ShouldQueue
             // what the operator asks about — and by nothing a customer is billed on.
             if ($origin > 0) {
                 // Project 0 as well as account 0: origin egress is the operator's cost, not any
-                // tenant's traffic, and must not fall inside a project-scoped read.
-                $rows[] = [$date ?? $ingestedOn, 0, 0, self::ORIGIN_METRIC, '', $videoUlid, $ip, '', $nodeId, '', $origin];
+                // tenant's traffic, and must not fall inside a project-scoped read. No requests of
+                // its own either — they are the ones already counted on the delivery row.
+                $rows[] = [
+                    'date' => $date ?? $ingestedOn,
+                    'metric' => self::ORIGIN_METRIC,
+                    'video_ulid' => $videoUlid,
+                    'ip' => $ip,
+                    'country' => $countries[$ip] ?? '',
+                    'node_id' => $nodeId,
+                    'value' => $origin,
+                    'requests' => 0,
+                ];
             }
         }
 
         try {
-            // The container binding already decided http vs https ({@see AppServiceProvider}).
-            app(Client::class)->insert('usage', $rows, $columns);
+            UsageService::add($rows);
         } catch (\Throwable $e) {
             Log::warning('Failed to ingest bandwidth batch: '.$e->getMessage());
             throw $e;
@@ -227,9 +248,21 @@ class IngestBandwidthJob implements ShouldQueue
     }
 
     /**
-     * The day the traffic actually happened, when the edge reports it. `usage` is a
-     * SummingMergeTree, so a row can only ever be added — a date that drifts by a few minutes at
-     * a boundary is not something a later correction can take back.
+     * How many requests the event stands for. The edge sums them alongside the bytes; one that
+     * predates the field, or a producer that does not count, is at least the one request that
+     * moved the bytes — an undercount, never a zero that would read as "nothing was asked for".
+     *
+     * @param  array<string, mixed>  $event
+     */
+    private function requests(array $event): int
+    {
+        return max(1, (int) ($event['requests'] ?? 1));
+    }
+
+    /**
+     * The day the traffic actually happened, when the edge reports it. The row is summed into its
+     * day's total, so a date that drifts by a few minutes at a boundary is not something a later
+     * correction can pick back out.
      *
      * @param  array<string, mixed>  $event
      */

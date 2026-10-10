@@ -42,7 +42,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 - **🚚 Two delivery modes** — run your own **proxy nodes** (custom nginx, token validation, S3-backed, edge caching) or point a **Bunny CDN** pull-zone at your storage. No lock-in.
 - **🔐 Token-based access control** — Akamai-style stream tokens for self-hosted delivery; Bunny HMAC token authentication for the CDN path.
 - **🗄 S3-compatible storage** — AWS S3, MinIO, RustFS, iDrive e2, or any S3 API (transfers via `s5cmd`).
-- **📊 Bandwidth & usage analytics** — Vector.dev ships edge access logs to **ClickHouse**; usage is tracked per video and per IP.
+- **📊 Bandwidth & usage analytics** — Vector.dev ships edge access logs to the API; usage is tracked per video and per IP.
 - **🔌 RESTful API + admin panel** — Sanctum auth (SPA sessions + API tokens), webhooks, node management over SSH, and a Vue 3 admin SPA.
 
 ## Tech stack
@@ -57,7 +57,7 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
 | Packaging | shaka-packager (static CMAF) |
 | Delivery | Self-hosted proxy nodes (nginx) **or** Bunny CDN |
 | Storage | S3-compatible (AWS, MinIO, RustFS, iDrive e2) via `s5cmd` |
-| Analytics | ClickHouse + Vector.dev |
+| Analytics | MariaDB + Vector.dev |
 | Routing | Traefik |
 | Infra | Docker |
 
@@ -73,8 +73,8 @@ Upload → S3 → Webhook → Encode (chunked, parallel) → Package (CMAF) → 
                          └──────┬───────┘
               ┌────────────────┼────────────────┐
         ┌─────┴─────┐    ┌─────┴─────┐    ┌──────┴──────┐
-        │  Worker   │    │   Redis   │    │ ClickHouse  │
-        │  nodes    │    │  (queue)  │    │ (analytics) │
+        │  Worker   │    │   Redis   │    │   MariaDB   │
+        │  nodes    │    │  (queue)  │    │ (+analytics)│
         │ FFmpeg +  │    └───────────┘    └─────────────┘
         │  shaka    │
         └───────────┘
@@ -98,7 +98,6 @@ cp .env.example .env
 docker compose up -d --build
 docker compose exec nukevideo-api php artisan key:generate
 docker compose exec nukevideo-api php artisan migrate --seed
-docker compose exec nukevideo-api php artisan clickhouse:migrate
 ```
 
 Then open:
@@ -109,7 +108,6 @@ Then open:
 | API | http://api.nukevideo.localhost |
 | Docs | http://docs.nukevideo.localhost |
 | Adminer (DB) | http://adminer.nukevideo.localhost |
-| ClickHouse UI | http://ch.nukevideo.localhost |
 | RustFS console | http://s3-ui.nukevideo.localhost |
 | RedisInsight | http://redis.nukevideo.localhost |
 | Traefik dashboard | http://localhost:8080 |
@@ -120,13 +118,12 @@ Then open:
 
 Production images are built and pushed to Docker Hub automatically on every `v*` git tag (`chikenare/nukevideo-api`, `chikenare/nukevideo-proxy`), for `linux/amd64` and `linux/arm64`.
 
-The provided `docker-compose.yml` pulls those images and runs the core stack — API, Horizon, scheduler, MariaDB, Redis, and ClickHouse:
+The provided `docker-compose.yml` pulls those images and runs the core stack — API, Horizon, scheduler, MariaDB and Redis:
 
 ```bash
-cp .env.example .env      # then set APP_KEY, DB/Redis/ClickHouse creds, S3, WEBHOOK_SECRET, INTERNAL_API_SECRET...
+cp .env.example .env      # then set APP_KEY, DB/Redis creds, S3, WEBHOOK_SECRET, INTERNAL_API_SECRET...
 TAG=v1.0.0 docker compose up -d
 docker compose exec nukevideo-api php artisan migrate --force
-docker compose exec nukevideo-api php artisan clickhouse:migrate
 ```
 
 Then, from the admin panel:

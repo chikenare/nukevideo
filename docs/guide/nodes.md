@@ -56,7 +56,7 @@ They handle:
 - Reading packaged segments from S3 using AWS authentication
 - Local segment caching (manifests bypass the cache)
 - Cloudflare real-IP resolution
-- Shipping access-log bandwidth to ClickHouse via Vector.dev
+- Shipping access-log bandwidth to the API via Vector.dev
 
 > **Alternative:** You don't have to run proxy nodes at all. **Bunny CDN** can deliver the same static CMAF straight from your S3 origin, configured entirely from the admin panel. See [CDN & Delivery](/guide/cdn) to decide which fits your deployment.
 

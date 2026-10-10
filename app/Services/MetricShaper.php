@@ -17,7 +17,7 @@ use Illuminate\Validation\ValidationException;
  *   library wants one accessor per series, so `{date, streaming_bytes, download_bytes}`. Every
  *   consumer writes this transformation again, in its own language, and gets the missing-key case
  *   wrong the first time.
- * - **Zero fill.** ClickHouse omits a day that produced no rows. A line drawn straight over that
+ * - **Zero fill.** The query omits a day that produced no rows. A line drawn straight over that
  *   gap is a lie — it interpolates traffic that did not happen — and the caller cannot fix it
  *   without knowing the range, which the server does.
  *

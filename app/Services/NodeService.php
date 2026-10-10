@@ -89,16 +89,6 @@ class NodeService
         'AWS_ENDPOINT',
         'AWS_USE_PATH_STYLE_ENDPOINT',
 
-        'CLICKHOUSE_HOST',
-        'CLICKHOUSE_PORT',
-        'CLICKHOUSE_DATABASE',
-        'CLICKHOUSE_USER',
-        'CLICKHOUSE_PASSWORD',
-        'CLICKHOUSE_ENDPOINT',
-        // The workers are the ones writing usage rows, so a longer budget set here has to reach them.
-        'CLICKHOUSE_TIMEOUT',
-        'CLICKHOUSE_CONNECT_TIMEOUT',
-
         'WEBHOOK_SECRET',
         'INTERNAL_API_SECRET',
 
@@ -820,8 +810,7 @@ class NodeService
      * How every container resolves names. glibc sends a lookup's A and AAAA queries at once from
      * one socket, and a home router's NAT dropped one of the pair often enough that 1 in 10-30
      * lookups stalled for glibc's default 5s before the retry — on the same hosts, their own
-     * systemd-resolved never did. The workers write usage to a remote ClickHouse with a short
-     * timeout, and every stall lost that row ("Resolving timed out after 1000 milliseconds").
+     * systemd-resolved never did, and every stall cost whatever the worker was reaching for.
      * Separate sockets per query, and a 1s wait per try: a lost packet costs a second, not five.
      * Harmless on a network that drops nothing.
      */

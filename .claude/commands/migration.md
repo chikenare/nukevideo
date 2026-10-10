@@ -1,6 +1,6 @@
 ---
 description: Create a migration following this repo's naming and structure
-argument-hint: "<what the migration does> [--clickhouse]"
+argument-hint: "<what the migration does>"
 allowed-tools: Bash(docker compose exec:*), Read, Write, Edit, Glob, Grep
 ---
 
@@ -39,14 +39,6 @@ The descriptive part follows what kind of change it is:
   (`JSON_EXTRACT`) — backfill in PHP or the query builder; guard `dropForeign` with
   `Schema::getConnection()->getDriverName() !== 'sqlite'`; `->after('col')` is fine (SQLite
   ignores it); `->json()->nullable()` rather than a literal JSON default.
-
-## ClickHouse (`--clickhouse` → `database/clickhouse-migrations/`)
-
-Different rules: `declare(strict_types=1)`, extend `AbstractClickhouseMigration`, `up()` only
-(**no `down()`**), SQL through `$this->clickhouseClient->write(<<<'SQL' ... SQL,)`. The
-descriptive part of the filename is just the table name (`video_usage`) or `drop_<table>`. Use
-`CREATE TABLE IF NOT EXISTS`, an explicit `ORDER BY`, `PARTITION BY toYYYYMM(date)` and a `TTL`.
-These run under `php artisan clickhouse:migrate`, not `migrate`.
 
 ## After writing
 

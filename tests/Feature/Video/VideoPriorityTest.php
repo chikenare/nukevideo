@@ -16,7 +16,6 @@ use App\Models\User;
 use App\Models\Video;
 use App\Services\OnVideoUploadedService;
 use App\Services\UppyS3Service;
-use ClickHouseDB\Client;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
@@ -122,8 +121,6 @@ it('stops walking the backlog once every family is full', function () {
 
 describe('on upload', function () {
     beforeEach(function () {
-        app()->instance(Client::class, Mockery::mock(Client::class)->shouldIgnoreMissing());
-
         $this->ingest = function (UploadMeta $meta): Video {
             $key = 'tmp-videos/'.Str::ulid().'.mkv';
             app(UppyS3Service::class)->storeUploadMeta($key, $meta);

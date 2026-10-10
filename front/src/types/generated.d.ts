@@ -449,7 +449,7 @@ priority?: App.Enums.VideoPriority,
 namespace Enums {
 export type CdnDriver = 'self_hosted' | 'bunny';
 export type DownloadSkipReason = 'not_retained' | 'not_downloadable' | 'not_found';
-export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'node_id' | 'cache';
+export type MetricDimension = 'date' | 'metric' | 'tracking_id' | 'video' | 'external_user_id' | 'ip' | 'country' | 'node_id' | 'cache';
 export type MetricShape = 'long' | 'wide';
 export type MetricUnit = 'bytes' | 'seconds' | 'count';
 export type NodeAccel = 'intel' | 'nvidia';

@@ -4,13 +4,17 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\UsageMetric;
 use App\Http\Controllers\Controller;
-use ClickHouseDB\Client;
+use App\Services\AnalyticsService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 
 class UsageController extends Controller
 {
+    public function __construct(
+        private AnalyticsService $analytics,
+    ) {}
+
     public function index(Request $request): JsonResponse
     {
         $request->validate([
@@ -28,35 +32,13 @@ class UsageController extends Controller
             'externalUserId' => 'nullable|string|max:255',
         ]);
 
-        $where = ['user_id = {user_id:UInt32}', 'date >= {from:Date}', 'date <= {to:Date}'];
-        $params = [
-            'user_id' => $request->user()->accountId(),
-            'from' => $request->input('from'),
-            'to' => $request->input('to'),
-        ];
-
-        if ($request->filled('metric')) {
-            $where[] = 'metric = {metric:String}';
-            $params['metric'] = $request->input('metric');
-        }
-
-        if ($request->filled('externalUserId')) {
-            // Left side names the ClickHouse column and the bound parameter; only the key the
-            // caller sends is camelCase.
-            $where[] = 'external_user_id = {external_user_id:String}';
-            $params['external_user_id'] = $request->input('externalUserId');
-        }
-
-        $whereClause = implode(' AND ', $where);
-
-        $rows = app(Client::class)->select(
-            "SELECT metric, external_user_id, sum(value) AS value, date
-             FROM usage
-             WHERE {$whereClause}
-             GROUP BY metric, external_user_id, date
-             ORDER BY date",
-            $params
-        )->rows();
+        $rows = $this->analytics->accountUsage(
+            $request->user()->accountId(),
+            $request->input('from'),
+            $request->input('to'),
+            $request->input('metric'),
+            $request->input('externalUserId'),
+        );
 
         return response()->json(['data' => $rows]);
     }

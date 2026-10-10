@@ -1,7 +1,7 @@
 <?php
 
 /**
- * `usage` is keyed by `user_id` in ClickHouse, and a project API key authenticates AS the project:
+ * `usage_daily` is keyed by `user_id`, and a project API key authenticates AS the project:
  * `$request->user()` is a Project, whose `id` comes from a different sequence than a user's. Now
  * that a project key may read this endpoint, taking that id at face value would not error — it
  * would answer with whatever account happens to share the number, or with nothing at all.
@@ -14,27 +14,26 @@
 use App\Enums\UsageMetric;
 use App\Models\Project;
 use App\Models\User;
+use App\Services\AnalyticsService;
 use App\Services\ApiTokenService;
-use ClickHouseDB\Client;
-use ClickHouseDB\Statement;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Laravel\Sanctum\Sanctum;
 
 uses(RefreshDatabase::class);
 
-/** Runs the endpoint against a fake ClickHouse and returns the parameters it bound. */
+/** Runs the endpoint against a stubbed service and returns what it was asked for. */
 function usageQueryParams(callable $request): array
 {
     $captured = [];
 
-    $client = Mockery::mock(Client::class);
-    $client->shouldReceive('select')->andReturnUsing(function ($sql, $params) use (&$captured) {
-        $captured = $params;
+    $service = Mockery::mock(AnalyticsService::class);
+    $service->shouldReceive('accountUsage')->andReturnUsing(function (int $accountId, string $from, string $to, ?string $metric, ?string $externalUserId) use (&$captured) {
+        $captured = ['user_id' => $accountId, 'metric' => $metric, 'external_user_id' => $externalUserId];
 
-        return Mockery::mock(Statement::class, fn ($mock) => $mock->shouldReceive('rows')->andReturn([]));
+        return [];
     });
 
-    app()->instance(Client::class, $client);
+    app()->instance(AnalyticsService::class, $service);
 
     $request();
 

@@ -6,7 +6,7 @@
  *
  * Neither is presentation — no labels, no formats, no colours reach this class. What it does is the
  * part the client cannot do well on its own: turn one row per metric into one field per series, and
- * put back the days ClickHouse omitted because nothing happened on them. A line drawn straight over
+ * put back the days the query omitted because nothing happened on them. A line drawn straight over
  * a missing day interpolates traffic that never occurred.
  *
  * A Feature test despite touching no HTTP and no database: `tests/Unit` runs without the Laravel
@@ -31,7 +31,7 @@ it('pivots the metric out into one field per series', function () {
 });
 
 it('fills the days that produced nothing with zero', function () {
-    // The whole reason this exists: ClickHouse omits 04-02 entirely, and a chart would draw a
+    // The whole reason this exists: the query omits 04-02 entirely, and a chart would draw a
     // straight line from the 1st to the 3rd across traffic that did not happen.
     $wide = (new MetricShaper)->wide([
         ['date' => '2026-04-01', 'metric' => 'streaming_bytes', 'value' => 100.0],

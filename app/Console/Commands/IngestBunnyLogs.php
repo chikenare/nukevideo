@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * Pulls request logs from Bunny's Logging API into the same bandwidth pipeline the
- * self-hosted edges feed (IngestBandwidthJob → ClickHouse `usage`). Polling
+ * self-hosted edges feed (IngestBandwidthJob → `usage_daily`). Polling
  * beats Bunny's UDP log forwarding here: no listener to run, and the API is a
  * complete record where UDP is best-effort.
  */
@@ -32,7 +32,7 @@ class IngestBunnyLogs extends Command
     private const LAG_SECONDS = 120;
 
     // Without a cursor (first run, flushed cache) reach back only this far: re-reading a wide
-    // window would double-count into the SummingMergeTree.
+    // window would count it twice, into a daily total nothing can subtract from.
     private const DEFAULT_LOOKBACK_SECONDS = 600;
 
     private const PAGE_SIZE = 1000;
@@ -51,7 +51,8 @@ class IngestBunnyLogs extends Command
 
     // Stop opening new slices past this point of a run: the scheduler's overlap lock expires after
     // 10 minutes, and a second run reading the same cursor would count the same traffic twice into
-    // a SummingMergeTree. Whatever is left is the next run's (five minutes later) to pick up.
+    // a sum nothing can subtract from. Whatever is left is the next run's (five minutes later) to
+    // pick up.
     private const RUN_BUDGET_SECONDS = 240;
 
     public function handle(CdnSettings $settings): int
@@ -163,7 +164,7 @@ class IngestBunnyLogs extends Command
                 // between an error page's bytes and a customer's bill. Re-check it here: Bunny
                 // hands us `statusCode` on every line, and a parameter the API someday renames or
                 // ignores would otherwise book every 403 from an expired token as delivered
-                // traffic — into a SummingMergeTree, so nothing takes it back.
+                // traffic — into a running sum, so nothing takes it back.
                 $status = (int) ($line['statusCode'] ?? 0);
 
                 if ($status < 200 || $status >= 300) {
@@ -177,8 +178,8 @@ class IngestBunnyLogs extends Command
                 }
 
                 // Dated by the line's own timestamp, not by the window or the moment of ingestion.
-                // `date` is what the analytics group on, the partition key and the TTL key, inside
-                // a SummingMergeTree no later correction can take back — and a window CAN straddle
+                // `date` is what the analytics group on and part of the key a row is summed into,
+                // so a wrong one cannot be corrected afterwards — and a window CAN straddle
                 // midnight (the sweep runs every five minutes, and `--from` or a cursor recovered
                 // after an outage widens it to hours or days). Stamping the whole window with its
                 // start booked post-midnight traffic to the previous day, permanently. The edge
@@ -206,8 +207,10 @@ class IngestBunnyLogs extends Command
                     'date' => $date,
                     'token_hash' => $tokenHash,
                     'zone' => $zone,
+                    'requests' => 0,
                 ];
                 $events[$key]['bytes'] += $bytes;
+                $events[$key]['requests']++;
             }
 
             $offset += self::PAGE_SIZE;

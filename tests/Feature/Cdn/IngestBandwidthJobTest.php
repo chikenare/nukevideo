@@ -1,14 +1,12 @@
 <?php
 
 /**
- * `usage` is a SummingMergeTree partitioned on `date`, so a row landing on the wrong day is not
- * something a later correction can take back — and the ingest runs on a timer, so a batch that
- * straddles midnight used to book the tail of one day to the next. The events now carry the day the
- * traffic actually happened; this pins that, the metric each zone lands under, the account
- * attribution resolved from the video, and the input filtering that protects the batch.
- *
- * The row is a positional array, so its shape is named once below and referred to by name: the last
- * column added shifted every index after it and every hard-coded number in this file with it.
+ * A row in `usage_daily` is summed into its day's total, so one landing on the wrong day — or under
+ * the wrong account, metric or viewer — is not something a later correction can pick back out. The
+ * ingest runs on a timer, so a batch that straddles midnight used to book the tail of one day to
+ * the next; the events now carry the day the traffic actually happened. This pins that, the metric
+ * each zone lands under, the attribution resolved from the video, the input filtering, and the
+ * folding that replaced what ClickHouse used to do in the background.
  */
 
 use App\Jobs\IngestBandwidthJob;
@@ -16,39 +14,38 @@ use App\Models\Project;
 use App\Models\User;
 use App\Models\Video;
 use App\Services\Cdn\TrackingRegistry;
-use ClickHouseDB\Client;
-use ClickHouseDB\Statement;
+use App\Services\UsageService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 uses(RefreshDatabase::class);
 
-/** The order `IngestBandwidthJob` writes its columns in. */
-const COL = [
-    'date' => 0, 'user' => 1, 'project' => 2, 'metric' => 3, 'customer' => 4,
-    'video' => 5, 'ip' => 6, 'tracking' => 7, 'node' => 8, 'cache' => 9, 'value' => 10,
-];
-
 const OTHER_ULID = '01HZXW3V5N8Q9R2T4Y6B8D0F9Z';
 
-/** Runs the job against a fake ClickHouse and returns the rows it tried to insert. */
-function insertedRows(array $events): array
+/**
+ * Runs the job and returns what the table holds afterwards, smallest value first — the write
+ * orders rows by key, so the order the events came in says nothing about the order they land in,
+ * and the cases below give every row its own byte count to be told apart by.
+ *
+ * @return Collection<int, array<string, mixed>>
+ */
+function storedRows(array $events): Collection
 {
-    $captured = [];
-
-    $client = Mockery::mock(Client::class);
-    $client->shouldReceive('insert')->andReturnUsing(function ($table, $rows) use (&$captured) {
-        expect($table)->toBe('usage');
-        $captured = $rows;
-
-        return Mockery::mock(Statement::class);
-    });
-
-    app()->instance(Client::class, $client);
-
     (new IngestBandwidthJob($events))->handle();
 
-    return $captured;
+    return DB::table(UsageService::TABLE)->orderBy('value')->orderBy('id')->get()->map(fn (object $row) => [
+        ...(array) $row,
+        // SQLite hands a double back as a float and MariaDB an unsigned as it pleases; the
+        // assertions below are about the numbers.
+        'value' => (int) $row->value,
+        'requests' => (int) $row->requests,
+        'user_id' => (int) $row->user_id,
+        'project_id' => (int) $row->project_id,
+        'node_id' => (int) $row->node_id,
+    ]);
 }
 
 function videoOwnedBySomeone(string $externalUserId = ''): Video
@@ -70,39 +67,54 @@ function videoOwnedBySomeone(string $externalUserId = ''): Video
 it('dates a row by the traffic, not by the moment it was ingested', function () {
     $video = videoOwnedBySomeone();
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 500, 'date' => '2026-01-31'],
     ]);
 
-    expect($rows)->toBe([['2026-01-31', $video->user_id, $video->project_id, 'bandwidth_bytes', '', $video->ulid, '1.2.3.4', '', 0, '', 500]]);
+    expect($rows)->toHaveCount(1)
+        ->and(Arr::except($rows[0], 'id'))->toBe([
+            'date' => '2026-01-31',
+            'project_id' => $video->project_id,
+            'user_id' => $video->user_id,
+            'metric' => 'bandwidth_bytes',
+            'external_user_id' => '',
+            'video_ulid' => $video->ulid,
+            'ip' => '1.2.3.4',
+            'country' => '',
+            'tracking_id' => '',
+            'node_id' => 0,
+            'cache' => '',
+            'value' => 500,
+            'requests' => 1,
+        ]);
 });
 
 it('accepts a full timestamp and keeps only its day', function () {
     $video = videoOwnedBySomeone();
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '::1', 'bytes' => 10, 'timestamp' => '2026-01-31T23:59:12Z'],
     ]);
 
-    expect($rows[0][COL['date']])->toBe('2026-01-31');
+    expect($rows[0]['date'])->toBe('2026-01-31');
 });
 
 it('falls back to today for an event from a producer that sends no date', function () {
     $video = videoOwnedBySomeone();
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10],
     ]);
 
-    expect($rows[0][COL['date']])->toBe(now()->format('Y-m-d'));
+    expect($rows[0]['date'])->toBe(now()->format('Y-m-d'));
 });
 
-it('drops a single unusable row rather than losing the whole batch to it', function () {
-    // The column is `IPv6`, which cannot parse '' or '-' — ClickHouse rejects the entire block
-    // over one bad value, so up to 1000 good events would go down with it.
+it('drops an unusable row and keeps the rest of the batch', function () {
+    // '' and '-' are what a log line carries when it had no address; a row with no viewer behind
+    // it would only inflate the distinct counts.
     $video = videoOwnedBySomeone();
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '', 'bytes' => 100],
         ['video_ulid' => $video->ulid, 'ip' => '-', 'bytes' => 100],
         ['video_ulid' => 'not-a-ulid', 'ip' => '1.2.3.4', 'bytes' => 100],
@@ -111,29 +123,59 @@ it('drops a single unusable row rather than losing the whole batch to it', funct
     ]);
 
     expect($rows)->toHaveCount(1)
-        ->and($rows[0][COL['value']])->toBe(700);
+        ->and($rows[0]['value'])->toBe(700);
+});
+
+it('sums events that share every dimension into one row, and counts them', function () {
+    // What ClickHouse did while merging happens at write time now: a session flushed once a minute
+    // names the same row every time, and the table holds one row for it, not one per flush.
+    $video = videoOwnedBySomeone();
+    $event = ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-08-13', 'zone' => 'play'];
+
+    // Twice in one batch, with the request count the edge summed, and once more in a later one.
+    storedRows([$event + ['requests' => 4], $event + ['requests' => 6]]);
+    $rows = storedRows([$event]);
+
+    expect($rows)->toHaveCount(1)
+        ->and($rows[0]['value'])->toBe(300)
+        ->and($rows[0]['requests'])->toBe(11);
+});
+
+it('stores one spelling of an address, however the edge wrote it', function () {
+    // `ip` is part of the row's key, so two spellings of one address are two rows — and one viewer
+    // counted twice by every distinct count.
+    $video = videoOwnedBySomeone();
+
+    $rows = storedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13'],
+        ['video_ulid' => $video->ulid, 'ip' => '::ffff:1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13'],
+        ['video_ulid' => $video->ulid, 'ip' => '2001:DB8:0:0:0:0:0:1', 'bytes' => 5, 'date' => '2026-08-13'],
+        ['video_ulid' => $video->ulid, 'ip' => '2001:db8::1', 'bytes' => 5, 'date' => '2026-08-13'],
+    ]);
+
+    expect($rows->pluck('value', 'ip')->all())->toBe(['2001:db8::1' => 10, '1.2.3.4' => 20]);
 });
 
 it('attributes traffic for a video that no longer exists to no user', function () {
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => OTHER_ULID, 'ip' => '1.2.3.4', 'bytes' => 42],
     ]);
 
-    expect($rows[0][COL['user']])->toBe(0);
+    expect($rows[0]['user_id'])->toBe(0);
 });
 
 it('keeps traffic from different tracking ids in separate rows', function () {
     $video = videoOwnedBySomeone();
 
-    // `tracking_id` is part of the sorting key of a SummingMergeTree, so two customers' bytes must arrive
-    // as distinct rows; collapsing them here would be indistinguishable from a merge later.
-    $rows = insertedRows([
+    // `tracking_id` is part of the key rows are summed on, so two subscribers' bytes stay apart —
+    // including two ids that differ only in case, which the default collation would have folded.
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'customer-a'],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'date' => '2026-08-13', 'tracking_id' => 'customer-b'],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'date' => '2026-08-13', 'tracking_id' => 'Customer-A'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'date' => '2026-08-13'],
     ]);
 
-    expect(array_column($rows, COL['tracking']))->toBe(['customer-a', 'customer-b', '']);
+    expect($rows->pluck('tracking_id')->all())->toBe(['customer-a', 'Customer-A', '']);
 });
 
 it('blanks a tracking id that did not survive the round trip intact', function () {
@@ -141,21 +183,21 @@ it('blanks a tracking id that did not survive the round trip intact', function (
 
     // A `tracking_id` sent as-is is text that crossed a log and a queue, so it reaches here
     // untrusted and is clamped to the alphabet the request validation accepts.
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => 'a&b=c'],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'date' => '2026-08-13', 'tracking_id' => str_repeat('x', 65)],
+        ['video_ulid' => $video->ulid, 'ip' => '5.6.7.8', 'bytes' => 20, 'date' => '2026-08-13', 'tracking_id' => str_repeat('x', 65)],
     ]);
 
-    expect(array_column($rows, COL['tracking']))->toBe(['', '']);
+    expect($rows->pluck('tracking_id')->all())->toBe(['', '']);
 });
 
 it('books each zone under its own metric, and an unknown one under the generic', function () {
     $video = videoOwnedBySomeone();
 
-    // The zone is the only thing that separates a playback segment from a downloaded master, and
-    // the old single-`bytes` column could not express it. A zone we do not recognise still counts:
-    // the point of this pipeline is bandwidth, so an odd path costs its label, never its bytes.
-    $rows = insertedRows([
+    // The zone is the only thing that separates a playback segment from a downloaded master. A
+    // zone we do not recognise still counts: the point of this pipeline is bandwidth, so an odd
+    // path costs its label, never its bytes.
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'download'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'zone' => 'assets'],
@@ -163,9 +205,9 @@ it('books each zone under its own metric, and an unknown one under the generic',
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 50],
     ]);
 
-    expect(array_column($rows, COL['metric']))->toBe([
-        'streaming_bytes', 'download_bytes', 'asset_bytes', 'bandwidth_bytes', 'bandwidth_bytes',
-    ])->and(array_sum(array_column($rows, COL['value'])))->toBe(150);
+    expect($rows->pluck('value', 'metric')->all())->toBe([
+        'streaming_bytes' => 10, 'download_bytes' => 20, 'asset_bytes' => 30, 'bandwidth_bytes' => 90,
+    ]);
 });
 
 it('attributes every row to the integrator customer that owns the video', function () {
@@ -173,28 +215,28 @@ it('attributes every row to the integrator customer that owns the video', functi
     // a viewer can rewrite a link however they like and the bytes still land on the right account.
     $video = videoOwnedBySomeone('cliente-77');
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play'],
         ['video_ulid' => $video->ulid, 'ip' => '5.6.7.8', 'bytes' => 20, 'zone' => 'download'],
     ]);
 
-    expect(array_column($rows, COL['customer']))->toBe(['cliente-77', 'cliente-77']);
+    expect($rows->pluck('external_user_id')->all())->toBe(['cliente-77', 'cliente-77']);
 });
 
 it('leaves the customer empty for a video that no longer exists, without losing the bytes', function () {
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => OTHER_ULID, 'ip' => '1.2.3.4', 'bytes' => 42, 'zone' => 'play'],
     ]);
 
-    expect($rows[0][COL['user']])->toBe(0)
-        ->and($rows[0][COL['customer']])->toBe('')
-        ->and($rows[0][COL['value']])->toBe(42);
+    expect($rows[0]['user_id'])->toBe(0)
+        ->and($rows[0]['external_user_id'])->toBe('')
+        ->and($rows[0]['value'])->toBe(42);
 });
 
 it('records which edge served the bytes and whether its cache had them', function () {
     $video = videoOwnedBySomeone();
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'play', 'node' => 3, 'cache' => 'miss'],
         // An edge from before the fields existed, and a word nginx never emits.
@@ -202,8 +244,8 @@ it('records which edge served the bytes and whether its cache had them', functio
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 40, 'zone' => 'play', 'node' => 3, 'cache' => "HIT'); DROP"],
     ]);
 
-    expect(array_column($rows, COL['node']))->toBe([3, 3, 0, 3])
-        ->and(array_column($rows, COL['cache']))->toBe(['HIT', 'MISS', '', '']);
+    expect($rows->pluck('node_id')->all())->toBe([3, 3, 0, 3])
+        ->and($rows->pluck('cache')->all())->toBe(['HIT', 'MISS', '', '']);
 });
 
 it('books what the edge fetched from the origin as its own metric, under nobody\'s account', function () {
@@ -212,20 +254,23 @@ it('books what the edge fetched from the origin as its own metric, under nobody\
     // be asked for, and the metric keeps them out of every bandwidth query.
     $video = videoOwnedBySomeone('cliente-77');
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'MISS', 'origin' => 1010, 'tracking_id' => 'abc'],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 1000, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT', 'origin' => 0],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 999, 'zone' => 'play', 'node' => 3, 'cache' => 'HIT', 'origin' => 0],
     ]);
 
+    $origin = $rows->firstWhere('metric', IngestBandwidthJob::ORIGIN_METRIC);
+
     expect($rows)->toHaveCount(3)
-        ->and($rows[1][COL['user']])->toBe(0)
-        ->and($rows[1][COL['metric']])->toBe(IngestBandwidthJob::ORIGIN_METRIC)
-        ->and($rows[1][COL['customer']])->toBe('')
-        ->and($rows[1][COL['video']])->toBe($video->ulid)
-        ->and($rows[1][COL['tracking']])->toBe('')
-        ->and($rows[1][COL['node']])->toBe(3)
-        ->and($rows[1][COL['value']])->toBe(1010)
-        ->and($rows[2][COL['metric']])->toBe('streaming_bytes');
+        ->and($origin['user_id'])->toBe(0)
+        ->and($origin['external_user_id'])->toBe('')
+        ->and($origin['video_ulid'])->toBe($video->ulid)
+        ->and($origin['tracking_id'])->toBe('')
+        ->and($origin['node_id'])->toBe(3)
+        ->and($origin['value'])->toBe(1010)
+        // The requests are the ones already counted on the delivery row.
+        ->and($origin['requests'])->toBe(0)
+        ->and($rows->where('metric', 'streaming_bytes'))->toHaveCount(2);
 });
 
 it('resolves the tracking id from the token hash the edge sends', function () {
@@ -238,15 +283,15 @@ it('resolves the tracking id from the token hash the edge sends', function () {
     $known = hash('sha256', 'exp=1~acl=/x/*~hmac=ff');
     Cache::put(TrackingRegistry::cacheKey($known), 'customer-a', 600);
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $known],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'play', 'token_hash' => str_repeat('0', 64)],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'zone' => 'play', 'token_hash' => 'not-a-hash'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 40, 'zone' => 'play', 'token_hash' => ''],
     ]);
 
-    expect(array_column($rows, COL['tracking']))->toBe(['customer-a', '', '', ''])
-        ->and(array_column($rows, COL['value']))->toBe([10, 20, 30, 40]);
+    // The three unattributed events are one viewer on one video, so they are one row.
+    expect($rows->pluck('value', 'tracking_id')->all())->toBe(['customer-a' => 10, '' => 90]);
 });
 
 it('looks every hash of a batch up in one round trip', function () {
@@ -263,13 +308,13 @@ it('looks every hash of a batch up in one round trip', function () {
         TrackingRegistry::cacheKey($b) => 'customer-b',
     ]);
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $a],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $a],
-        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $b],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 5, 'zone' => 'play', 'token_hash' => $b],
     ]);
 
-    expect(array_column($rows, COL['tracking']))->toBe(['customer-a', 'customer-a', 'customer-b']);
+    expect($rows->pluck('value', 'tracking_id')->all())->toBe(['customer-b' => 5, 'customer-a' => 20]);
 });
 
 it('attributes every row to the project that owns the video', function () {
@@ -278,12 +323,12 @@ it('attributes every row to the project that owns the video', function () {
     // the video like the account is, off the same lookup, so it is no more forgeable.
     $video = videoOwnedBySomeone('cliente-77');
 
-    $rows = insertedRows([
+    $rows = storedRows([
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play'],
         ['video_ulid' => $video->ulid, 'ip' => '5.6.7.8', 'bytes' => 20, 'zone' => 'download'],
     ]);
 
-    expect(array_column($rows, COL['project']))->toBe([$video->project_id, $video->project_id]);
+    expect($rows->pluck('project_id')->all())->toBe([$video->project_id, $video->project_id]);
 });
 
 it('leaves the project empty for traffic it cannot attribute', function () {
@@ -291,12 +336,11 @@ it('leaves the project empty for traffic it cannot attribute', function () {
     // operator's cost, and must not fall inside any tenant's project-scoped read.
     $video = videoOwnedBySomeone();
 
-    $gone = insertedRows([['video_ulid' => OTHER_ULID, 'ip' => '1.2.3.4', 'bytes' => 42, 'zone' => 'play']]);
-    $origin = insertedRows([
+    $rows = storedRows([
+        ['video_ulid' => OTHER_ULID, 'ip' => '1.2.3.4', 'bytes' => 42, 'zone' => 'play'],
         ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'node' => 3, 'cache' => 'MISS', 'origin' => 99],
     ]);
 
-    expect($gone[0][COL['project']])->toBe(0)
-        ->and($origin[1][COL['project']])->toBe(0)
-        ->and($origin[1][COL['metric']])->toBe(IngestBandwidthJob::ORIGIN_METRIC);
+    expect($rows->firstWhere('video_ulid', OTHER_ULID)['project_id'])->toBe(0)
+        ->and($rows->firstWhere('metric', IngestBandwidthJob::ORIGIN_METRIC)['project_id'])->toBe(0);
 });

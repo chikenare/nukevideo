@@ -61,7 +61,7 @@ onMounted(async () => {
       edges.value[edge.nodeId] = edge
     }
   } catch {
-    // The column simply stays empty; ClickHouse being down is not a nodes-page problem.
+    // The column simply stays empty; a failed analytics read is not a nodes-page problem.
   }
 })
 

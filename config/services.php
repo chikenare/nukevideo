@@ -28,6 +28,14 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // GeoLite2 credentials. Optional: without them no country database is downloaded and the
+    // `country` column of `usage_daily` stays empty ({@see \App\Services\GeoIp}).
+    'maxmind' => [
+        'account_id' => env('MAXMIND_ACCOUNT_ID'),
+        'license_key' => env('MAXMIND_LICENSE_KEY'),
+        'database' => env('MAXMIND_DATABASE', storage_path('app/geoip/GeoLite2-Country.mmdb')),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

@@ -102,32 +102,6 @@ services:
     environment:
       ADMINER_DESIGN: filamentish
 
-  clickhouse:
-    image: clickhouse/clickhouse-server
-    restart: always
-    volumes:
-      - clickhouse_data:/var/lib/clickhouse/
-      - clickhouse_logs:/var/log/clickhouse-server/
-    environment:
-      CLICKHOUSE_DB: ${CLICKHOUSE_DATABASE}
-      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
-      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
-    ports:
-      - ${CLICKHOUSE_PORT-8123}:8123
-    ulimits:
-      nofile:
-        soft: 262144
-        hard: 262144
-  clickhouse-ui:
-    image: ghcr.io/caioricciuti/ch-ui:latest
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.clickhouse.rule=Host(`ch.nukevideo.localhost`)"
-      - "traefik.http.services.clickhouse.loadbalancer.server.port=3488"
-      - "traefik.http.routers.clickhouse.service=clickhouse"
-    environment:
-      CLICKHOUSE_URL: http://clickhouse:8123
-
   rustfs:
     image: rustfs/rustfs:1.0.0-beta.8
     restart: unless-stopped
@@ -176,5 +150,3 @@ volumes:
   rustfs-data:
   redis-data:
   redisinsight:
-  clickhouse_data:
-  clickhouse_logs:

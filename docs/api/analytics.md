@@ -1,9 +1,9 @@
 # Analytics
 
-Delivery bandwidth, viewer IPs, encoding time and account consumption, read from ClickHouse. This is
+Delivery bandwidth, viewer IPs, encoding time and account consumption, read from the `usage_daily` table. This is
 the read side of the CDN access logs: the self-hosted edges ship them through Vector and Bunny pull
 zones are polled by `bunny:ingest-logs` ([CDN & Delivery](/guide/cdn#how-the-log-ingestion-works)),
-and both land in the same `usage` table.
+and both land in that table.
 
 Everything on this page is readable with **any authenticated token** — a personal access token or a
 [project API key](/api/authentication) — except [per-node delivery](#per-node-delivery), which is
@@ -193,7 +193,7 @@ POST /api/metrics
 
 ### Dimensions, and what each one requires
 
-The dimensions of `usage` are **not equally shareable**, and that is what the rules below are about.
+The dimensions of `usage_daily` are **not equally shareable**, and that is what the rules below are about.
 The table is shared across the installation, so each dimension can only be offered as far as it can
 be scoped.
 
@@ -204,6 +204,7 @@ be scoped.
 | `external_user_id` | anyone | Pins the whole query to your account, automatically |
 | `video` | anyone | Project context **or** a `videos` list of your own titles |
 | `ip` | anyone | Project context **or** a `videos` list |
+| `country` | anyone | Project context **or** a `videos` list. ISO 3166-1 alpha-2; `""` when unknown or when no [country database](/guide/configuration#viewer-country) is configured |
 | `tracking_id` | anyone | Project context **or** a `trackingIds` list |
 | `node_id` | anyone | Project context — no list can stand in |
 | `cache` | anyone | Project context — no list can stand in |
@@ -256,7 +257,7 @@ with zero:
 
 That is shape, not presentation — there are no labels, formats or colours anywhere in this API. It
 is what a charting library asks for: one accessor per series, and a dense x axis, because a line
-drawn across a day ClickHouse simply omitted interpolates traffic that never happened. A field
+drawn across a day the query simply omitted interpolates traffic that never happened. A field
 missing from a row means zero.
 
 Zero fill only applies to series that appear at all: a tracking id with no traffic anywhere in the
@@ -378,7 +379,7 @@ instance.
 
 ## Queue
 
-How many videos are waiting, running or failed right now. Not a ClickHouse read — it counts rows in
+How many videos are waiting, running or failed right now. Not a metrics read — it counts rows in
 the videos table, instance-wide.
 
 ```
@@ -469,7 +470,7 @@ interchangeable:
 | Can it be lost? | No — nothing about it travels in the URL | Yes — a mapping that has expired leaves the traffic in the unattributed bucket |
 | Grain | Per customer | Per link, so per viewer or per session |
 | Scope | Your account | Instance-wide; you name the ids |
-| Cost in ClickHouse | Hits the table's primary key, so it is a prefix scan | Scans the range's partitions |
+| Cost of the read | Indexed by account and date | Indexed by tracking id and date |
 
 **Ask which one names the person you are billing.** `external_user_id` is resolved from the video, so
 it names whoever your system attached to the *upload*. That is the right axis only when the uploader

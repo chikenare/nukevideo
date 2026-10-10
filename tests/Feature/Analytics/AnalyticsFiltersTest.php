@@ -3,12 +3,12 @@
 /**
  * The bandwidth series can be narrowed to one video and/or one download tracking id, which is how
  * an external integrator reads back the tracking id it minted its links with
- * ({@see DownloadStreamData}). Both values are matched against ClickHouse
+ * ({@see DownloadStreamData}). Both values are matched against
  * columns written from CDN access logs, so their shape is validated here and bound — never
  * interpolated — in the service.
  *
- * The service is stubbed: what these cases pin is the plumbing from request to query, not
- * ClickHouse, which the suite has no fixture for.
+ * The service is stubbed: what these cases pin is the plumbing from request to query, not the
+ * query itself ({@see AnalyticsServiceTest}).
  */
 
 use App\Data\Stream\DownloadStreamData;
@@ -23,7 +23,7 @@ uses(RefreshDatabase::class);
 
 const VIDEO_ULID = '01HZXW3V5N8Q9R2T4Y6B8D0F1G';
 
-// Every query that reads delivery metrics out of `usage`. A series that quietly dropped the
+// Every query that reads delivery metrics out of `usage_daily`. A series that quietly dropped the
 // filter would put one
 // customer's chart next to everyone else's totals.
 const BANDWIDTH_QUERIES = ['summary', 'bandwidthOverTime', 'topIps', 'topVideos', 'bandwidthByTrackingId', 'bandwidthByVideo'];
@@ -118,7 +118,7 @@ it('rejects a filter that could not have come out of the log columns', function 
     'a metric that is not a delivery metric' => 'metric=encoding_cpu',
     'a metric that does not exist' => 'metric=made_up',
     // The name the endpoint reads: a rule on `video_series_limit` checked a key nobody sends, and
-    // let any series length through to ClickHouse.
+    // let any series length through to the query.
     'a video series longer than the cap' => 'videoSeriesLimit=500',
     'a video series of nothing' => 'videoSeriesLimit=0',
 ]);

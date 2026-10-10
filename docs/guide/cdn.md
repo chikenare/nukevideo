@@ -14,10 +14,10 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Reads the pre-packaged CMAF segments from S3 using AWS authentication.
 - Caches segments on the node's own disk pool so repeat requests don't hit S3 every time; **manifests bypass the cache** to stay fresh, and **downloads never enter it** (they are whole files, fetched once, and must keep supporting `Range` resumes). See [Cache disks](/guide/nodes#cache-disks).
 - Embeds the token a manifest was requested with into the segment URLs it rewrites, rather than minting one per manifest, so every request of a playback session carries the same token — the one the API recorded a caller's tracking id against. The token is logged and hashed on the node; nothing downstream sees it. See [Requesting a Playback URL](/guide/streaming#requesting-a-playback-url).
-- Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` in ClickHouse — the operator's cost, never a customer's usage.
+- Logs, per request, what its cache did and what it fetched from the origin; the nodes page turns that into a hit ratio per node. Origin bytes are recorded under the `origin_bytes` metric and account `0` — the operator's cost, never a customer's usage.
 - Answers CORS itself, for any origin: the bucket's CORS rules play no part in self-hosted delivery, and one cached copy of a segment serves every embedding site.
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
-- Ships access-log bandwidth to ClickHouse through a Vector.dev pipeline.
+- Ships access-log bandwidth to the API through a Vector.dev pipeline.
 
 Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, stream/query token expiry). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
 
@@ -43,7 +43,7 @@ Configure it in the admin panel under **CDN Settings** with the `bunny` provider
 
 Bunny is configured entirely from the panel (stored in the database); it does not use `.env` variables.
 
-With the API key and pull zone ID set, the scheduler polls Bunny's [Logging API](https://bunny.net/docs/cdn/logging) every five minutes (`bunny:ingest-logs`) and feeds per-video bandwidth into the same ClickHouse analytics the self-hosted edges use.
+With the API key and pull zone ID set, the scheduler polls Bunny's [Logging API](https://bunny.net/docs/cdn/logging) every five minutes (`bunny:ingest-logs`) and feeds per-video bandwidth into the same analytics the self-hosted edges use.
 
 ### How the log ingestion works
 
@@ -94,6 +94,6 @@ php artisan bunny:ingest-logs --from=2026-08-20T10:00:00Z
 | Token scheme | Akamai-style HMAC | HMAC-SHA256, directory mode |
 | IP binding | Not IP-bound (the token carries the IP, the edge never checks it) | Not IP-bound |
 | Edge caching | Local nginx cache per node | Bunny global edge |
-| Bandwidth analytics | Built-in (Vector → ClickHouse) | Built-in (Logging API poll → ClickHouse) |
+| Bandwidth analytics | Built-in (Vector → API) | Built-in (Logging API poll) |
 
 Both serve identical CMAF, so you can start with one and switch by changing the CDN Settings provider — no re-packaging required.

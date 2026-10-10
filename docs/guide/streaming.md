@@ -77,4 +77,4 @@ The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repe
 
 ## Bandwidth Monitoring
 
-On self-hosted proxy nodes a Vector.dev pipeline parses the access logs and ships bandwidth data to the API (`POST /api/internal/bandwidth`, secured by a shared internal secret), which writes per-video, per-IP usage rows to ClickHouse for analytics.
+On self-hosted proxy nodes a Vector.dev pipeline parses the access logs and ships bandwidth data to the API (`POST /api/internal/bandwidth`, secured by a shared internal secret), which sums them into per-video, per-IP daily usage rows for analytics.
