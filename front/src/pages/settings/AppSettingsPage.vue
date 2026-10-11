@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,8 +17,10 @@ import {
 } from '@/components/ui/alert-dialog'
 import Spinner from '@/components/ui/spinner/Spinner.vue'
 import AppSettingsService from '@/services/AppSettingsService'
+import { ApiException } from '@/exceptions/ApiException'
 import { ValidationException } from '@/exceptions/ValidationException'
 import { Copy, Check, RefreshCw, KeyRound, Upload } from '@lucide/vue'
+import { toast } from 'vue-sonner'
 
 type Settings = App.Data.AppSettingsData
 type Rotation = App.Data.AppSettings.SshKeyRotationData
@@ -31,10 +35,63 @@ const importing = ref(false)
 const privateKey = ref('')
 const rotation = ref<Rotation | null>(null)
 
+// The token is write-only: the panel is told whether one is stored, never what it is.
+const cloudflareToken = ref('')
+const cloudflareProxied = ref(false)
+const cloudflareBusy = ref(false)
+const cloudflareZones = ref<string[]>([])
+const cloudflareZonesError = ref<string | null>(null)
+
+async function fetchCloudflareZones() {
+  cloudflareZones.value = []
+  cloudflareZonesError.value = null
+  if (!settings.value?.cloudflareConfigured) return
+  try {
+    cloudflareZones.value = await AppSettingsService.cloudflareZones()
+  } catch (error) {
+    cloudflareZonesError.value = error instanceof ApiException ? error.message : 'Could not reach Cloudflare.'
+  }
+}
+
+async function saveCloudflare() {
+  cloudflareBusy.value = true
+  errors.value = {}
+  try {
+    settings.value = await AppSettingsService.setCloudflare({
+      ...(cloudflareToken.value ? { apiToken: cloudflareToken.value } : {}),
+      proxied: cloudflareProxied.value,
+    })
+    cloudflareToken.value = ''
+    toast.success('Cloudflare settings saved')
+    await fetchCloudflareZones()
+  } catch (error) {
+    if (error instanceof ValidationException) errors.value = error.errors
+    else if (error instanceof ApiException) toast.error(error.message)
+  } finally {
+    cloudflareBusy.value = false
+  }
+}
+
+async function removeCloudflare() {
+  cloudflareBusy.value = true
+  errors.value = {}
+  try {
+    settings.value = await AppSettingsService.removeCloudflare()
+    cloudflareProxied.value = false
+    cloudflareToken.value = ''
+    await fetchCloudflareZones()
+  } finally {
+    cloudflareBusy.value = false
+  }
+}
+
 async function fetchSettings() {
   try {
     loading.value = true
     settings.value = await AppSettingsService.get()
+    cloudflareProxied.value = settings.value.cloudflareProxied
+    // Not awaited: the page does not wait on a third party to show the SSH key.
+    fetchCloudflareZones()
   } finally {
     loading.value = false
   }
@@ -202,6 +259,77 @@ onMounted(fetchSettings)
         <div class="flex gap-2">
           <Button type="submit" size="sm" :disabled="busy">{{ busy ? 'Importing...' : 'Import key' }}</Button>
           <Button type="button" variant="ghost" size="sm" @click="importing = false">Cancel</Button>
+        </div>
+      </form>
+    </section>
+
+    <section v-if="!loading" class="flex flex-col gap-4 rounded-lg border p-4">
+      <div>
+        <h2 class="text-lg font-semibold">Cloudflare DNS</h2>
+        <p class="text-sm text-muted-foreground">
+          Optional. With a token, deploying a proxy node points its hostname at the node in Cloudflare, and
+          deleting the node removes the record. Only records created here are ever changed. The token needs
+          <code>Zone → Zone → Read</code> and <code>Zone → DNS → Edit</code> on the zones your proxies use.
+        </p>
+      </div>
+
+      <form class="grid gap-4" @submit.prevent="saveCloudflare">
+        <div class="grid gap-2">
+          <Label for="cloudflare_token">API token</Label>
+          <Input
+            id="cloudflare_token"
+            v-model="cloudflareToken"
+            type="password"
+            autocomplete="off"
+            class="font-mono"
+            :required="!settings?.cloudflareConfigured"
+            :placeholder="settings?.cloudflareConfigured ? 'Stored. Leave empty to keep it' : 'Cloudflare API token'"
+          />
+          <p v-if="errors.apiToken" class="text-sm text-destructive">{{ errors.apiToken[0] }}</p>
+        </div>
+
+        <div class="flex items-start justify-between gap-4">
+          <div class="grid gap-1">
+            <Label for="cloudflare_proxied">Proxy through Cloudflare</Label>
+            <p class="text-xs text-muted-foreground">
+              Off, records are DNS only and viewers reach the node directly. On, traffic goes through
+              Cloudflare: check that its terms allow your video traffic, and that the zone's SSL mode lets
+              the node's certificate be issued over HTTP. This is the default: a node can choose for itself
+              in its own settings. Applies to each proxy at its next deploy.
+            </p>
+          </div>
+          <Switch id="cloudflare_proxied" v-model="cloudflareProxied" />
+        </div>
+
+        <div v-if="settings?.cloudflareConfigured" class="text-sm">
+          <p v-if="cloudflareZonesError" class="text-destructive">{{ cloudflareZonesError }}</p>
+          <p v-else-if="cloudflareZones.length" class="text-muted-foreground">
+            Zones this token covers: <span class="text-foreground">{{ cloudflareZones.join(', ') }}</span>
+          </p>
+          <p v-else class="text-muted-foreground">This token sees no zones yet, so no hostname will be covered.</p>
+        </div>
+
+        <div class="flex gap-2">
+          <Button type="submit" size="sm" :disabled="cloudflareBusy">{{ cloudflareBusy ? 'Saving...' : 'Save' }}</Button>
+          <AlertDialog v-if="settings?.cloudflareConfigured">
+            <AlertDialogTrigger as-child>
+              <Button type="button" variant="ghost" size="sm" :disabled="cloudflareBusy">Remove token</Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Remove the Cloudflare token?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The DNS records already created stay as they are, so the fleet keeps serving. From then on
+                  they are yours to maintain: deploys stop updating them and deleting a node no longer
+                  removes its record.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction @click="removeCloudflare">Remove</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </form>
     </section>

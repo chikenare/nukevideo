@@ -37,6 +37,7 @@ const newNode = ref({
   hostname: '',
   type: 'worker' as 'worker' | 'proxy',
   accel: 'none' as 'none' | 'intel' | 'nvidia',
+  cloudflare: 'default' as 'default' | 'proxied' | 'dns',
 })
 
 const handleCreate = async () => {
@@ -51,8 +52,9 @@ const handleCreate = async () => {
       type: newNode.value.type,
       accel: newNode.value.type === 'worker' && newNode.value.accel !== 'none' ? newNode.value.accel : null,
       hostname: newNode.value.type === 'proxy' && newNode.value.hostname ? newNode.value.hostname : null,
+      cloudflareProxied: newNode.value.type !== 'proxy' || newNode.value.cloudflare === 'default' ? null : newNode.value.cloudflare === 'proxied',
     })
-    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none' }
+    newNode.value = { name: '', user: '', ipAddress: '', hostname: '', type: 'worker', accel: 'none', cloudflare: 'default' }
     dialogOpen.value = false
     emit('created')
   } catch (error) {
@@ -125,6 +127,20 @@ const handleCreate = async () => {
           <Label for="node_hostname">Hostname</Label>
           <Input id="node_hostname" v-model="newNode.hostname" placeholder="e.g. cdn.example.com" required />
           <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
+        </div>
+        <div v-if="newNode.type === 'proxy'" class="grid gap-2">
+          <Label for="node_cloudflare">Cloudflare proxy</Label>
+          <Select v-model="newNode.cloudflare">
+            <SelectTrigger id="node_cloudflare">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">Installation default</SelectItem>
+              <SelectItem value="proxied">Proxied</SelectItem>
+              <SelectItem value="dns">DNS only</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">How this node's DNS record is created when a Cloudflare token is stored under Settings. Takes effect at the next deploy.</p>
         </div>
         <div v-if="newNode.type === 'proxy'" class="flex items-center justify-between">
           <div>

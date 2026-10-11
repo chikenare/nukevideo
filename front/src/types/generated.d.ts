@@ -25,6 +25,8 @@ token?: string,
 export type AppSettingsData = {
 sshPublicKey: string | null,
 sshFingerprint: string | null,
+cloudflareConfigured: boolean,
+cloudflareProxied: boolean,
 };
 export type BunnyConfigData = {
 host: string,
@@ -62,6 +64,7 @@ ipAddress: string,
 type: App.Enums.NodeType,
 accel: App.Enums.NodeAccel | null,
 hostname: string | null,
+cloudflareProxied: boolean | null,
 isActive: boolean,
 isDraining: boolean,
 isHealthy: boolean,
@@ -310,6 +313,10 @@ export type SshKeyRotationData = {
 rotated: boolean,
 nodes: App.Data.AppSettings.NodeRotationData[],
 };
+export type UpdateCloudflareData = {
+apiToken: string | null,
+proxied: boolean,
+};
 export type UpdateSshKeyData = {
 privateKey: string | null,
 };
@@ -340,12 +347,14 @@ type: string,
 accel: string | null,
 user?: string,
 hostname: string | null,
+cloudflareProxied: boolean | null,
 };
 export type UpdateNodeData = {
 name?: string,
 user?: string | null,
 ipAddress?: string,
 hostname?: string | null,
+cloudflareProxied?: boolean | null,
 isDraining?: boolean,
 accel?: string | null,
 env?: string | null,

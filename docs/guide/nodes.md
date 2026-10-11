@@ -126,6 +126,11 @@ anyone in it can start a privileged container over the host filesystem — so a 
 buys no isolation over root here; it only satisfies a "no root login" policy. The script checks
 `sudo -n` first and aborts with the fix if the host would have prompted.
 
+**The packages.** The deploy installs what it needs and the host lacks — Docker, `curl`, and on a
+proxy `mdadm`, `xfsprogs` and `fdisk` for the cache disks — with `apt-get`, refreshing the package
+lists first, so a fresh Debian or Ubuntu image needs nothing prepared. On any other distribution
+install those yourself: the deploy stops and names what is missing rather than going on without it.
+
 **The images.** A node never builds; it pulls `nukevideo-api` / `nukevideo-proxy` at the tag the
 panel decides: the released version in production, `node-dev` from `DOCKER_REGISTRY` in
 development. For a development node, build and push that tag from the checkout first —
@@ -151,6 +156,37 @@ POST /api/nodes
 ```
 
 A proxy also needs a `hostname`: it is the address playback links point at. See [Create Node](/api/nodes#create-node) for every field.
+
+### DNS with Cloudflare
+
+That hostname has to resolve to the node. If the domain is on Cloudflare the panel can do it for
+you: store an API token under **Settings → App → Cloudflare DNS** and every proxy deploy creates,
+or corrects, an address record `hostname → ipAddress` before it touches the node, so the record
+is there when the certificate is requested. Deleting the node, or changing its hostname, removes
+the record it had.
+
+- **The token** needs `Zone → Zone → Read` and `Zone → DNS → Edit` on the zones your proxies
+  use. It is stored encrypted in the application settings — not in `.env` — and never shown
+  again. No zone is configured: the one a hostname belongs to is found among those the token
+  can see, so proxies may live under several domains.
+- **Only its own records.** Every record it creates carries the comment `Managed by NukeVideo`,
+  and nothing without that comment is ever changed or deleted. If the hostname already has a
+  record pointing somewhere else, the deploy stops and says so; one that already points at the
+  node is left as it is.
+- **What it skips.** A hostname in no zone the token can see, and a node whose `ipAddress` is a
+  private one, are deployed as before with a line in the log saying the record is yours to
+  create. The address published is the one the panel reaches the node by over SSH.
+- **DNS only or proxied.** Records are DNS only by default: viewers reach the edge directly,
+  which is already the cache. Switching **Proxy through Cloudflare** on creates them proxied
+  instead, from each proxy's next deploy. That switch is the fleet's default: each proxy has
+  its own **Cloudflare proxy** choice (`cloudflareProxied` — *Installation default*, *Proxied*
+  or *DNS only*), so one edge can sit behind Cloudflare while the rest are reached directly.
+  A proxied node's Traefik is deployed trusting Cloudflare's address ranges for
+  `X-Forwarded-For`, so the edge still logs and geolocates the viewer rather than Cloudflare.
+  Before you proxy one: check that Cloudflare's terms cover
+  your video traffic; exempt `/healthz` from WAF, bot and Access rules (see Health, above); and
+  mind the certificate — the node still obtains it with an HTTP challenge, which a zone on
+  *Full (strict)* with *Always Use HTTPS* can keep from ever completing the first time.
 
 A worker that cannot be reached over SSH (behind NAT, say) can install itself instead: **Setup → Install**
 in the node's menu generates a one-time `curl … | bash` command to run on the machine — see

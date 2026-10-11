@@ -2,11 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Data\AppSettings\UpdateCloudflareData;
 use App\Data\AppSettings\UpdateSshKeyData;
 use App\Data\AppSettingsData;
 use App\Http\Controllers\Controller;
+use App\Services\CloudflareDns;
 use App\Services\SshKeyService;
 use App\Settings\AppSettings;
+use App\Settings\CloudflareSettings;
 use Illuminate\Http\JsonResponse;
 
 class AppSettingsController extends Controller
@@ -26,5 +29,46 @@ class AppSettingsController extends Controller
     public function rotateSshKey(): JsonResponse
     {
         return response()->json(['data' => $this->sshKeys->rotate()]);
+    }
+
+    public function updateCloudflare(UpdateCloudflareData $data, CloudflareSettings $cloudflare, AppSettings $settings): JsonResponse
+    {
+        if ($data->apiToken !== null) {
+            $cloudflare->api_token = $data->apiToken;
+        }
+        $cloudflare->proxied = $data->proxied;
+        $cloudflare->save();
+
+        return response()->json(['data' => AppSettingsData::fromSettings($settings)]);
+    }
+
+    /**
+     * Forgets the token. The records it created stay where they are: they are what the fleet is
+     * being served through, and removing the integration is not a request to take it offline.
+     */
+    public function destroyCloudflare(CloudflareSettings $cloudflare, AppSettings $settings): JsonResponse
+    {
+        $cloudflare->api_token = '';
+        $cloudflare->proxied = false;
+        $cloudflare->save();
+
+        return response()->json(['data' => AppSettingsData::fromSettings($settings)]);
+    }
+
+    /**
+     * The zones the stored token can see, asked of Cloudflare each time: it is how the panel
+     * shows that a token saved months ago still works, and which hostnames it will cover.
+     */
+    public function cloudflareZones(CloudflareDns $dns): JsonResponse
+    {
+        if (! $dns->configured()) {
+            return response()->json(['data' => []]);
+        }
+
+        try {
+            return response()->json(['data' => $dns->zones()]);
+        } catch (\RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 502);
+        }
     }
 }

@@ -197,6 +197,25 @@ describe('a production proxy deploy', function () {
 
         expect(strpos($script, 'cannot sudo without a password'))->toBeLessThan(strpos($script, 'set -e'));
     });
+
+    it('installs every tool through the one helper, which fetches the package lists first', function () {
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        // Defined before the first section that calls it.
+        expect(strpos($script, 'ensure_commands()'))->toBeLessThan(strpos($script, 'ensure_commands "curl=curl ca-certificates"'))
+            ->and($script)->toContain('ensure_commands mdadm=mdadm mkfs.xfs=xfsprogs')
+            ->and($script)->toContain('ensure_commands sfdisk=fdisk ||');
+
+        // An install of its own, against lists nobody refreshed, is how a first deploy went on
+        // without sfdisk.
+        foreach (['common', 'cache-disks', 'proxy', 'worker', 'vector'] as $section) {
+            expect(NodeService::deployScript($section))->not->toContain('apt-get install -y -qq fdisk')
+                ->and(NodeService::deployScript($section))->not->toContain('apt-get install -y -qq mdadm');
+        }
+
+        $packages = NodeService::deployScript('packages');
+        expect(strpos($packages, ' update -qq'))->toBeLessThan(strpos($packages, 'install -y -qq'));
+    });
 });
 
 describe('a development proxy deploy', function () {
@@ -245,6 +264,28 @@ describe('the disk inventory', function () {
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
         $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.preselect', true);
+    });
+
+    it('installs sfdisk before listing, so a first setup is offered its system disks', function () {
+        // Nothing has been deployed on a host the first time its disks are listed, so nothing
+        // has installed the tool that finds a system disk's unpartitioned space either.
+        inProduction();
+        $input = '';
+        $ssh = Mockery::mock(SSHService::class);
+        $ssh->shouldReceive('run')->once()->andReturnUsing(function (...$args) use (&$input) {
+            $input = $args['input'] ?? $args[5];
+
+            return '';
+        });
+        app()->instance(SSHService::class, $ssh);
+
+        $node = cacheNode();
+        app(ProxyCacheService::class)->inventory($node);
+
+        // Off stdout, which is the listing; and never able to fail it.
+        expect($input)->toContain('ensure_commands sfdisk=fdisk >&2 || true')
+            ->and(strpos($input, 'ensure_commands()'))->toBeLessThan(strpos($input, 'ensure_commands sfdisk=fdisk >&2'))
+            ->and(strpos($input, 'cannot sudo without a password'))->toBeLessThan(strpos($input, 'ensure_commands()'));
     });
 
     it('is written by the script in the six fields the parser reads', function () {

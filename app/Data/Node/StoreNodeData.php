@@ -17,6 +17,9 @@ class StoreNodeData extends RequestData
         public ?string $accel,
         public string|Optional $user,
         public ?string $hostname,
+        /** A proxy's own answer to "behind Cloudflare's proxy?"; null follows the installation's. */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?bool $cloudflareProxied = null,
     ) {}
 
     public static function rules(): array
@@ -34,6 +37,7 @@ class StoreNodeData extends RequestData
             'ipAddress' => 'required|ip',
             'type' => 'required|string|in:worker,proxy',
             'accel' => 'nullable|string|in:intel,nvidia',
+            'cloudflareProxied' => 'nullable|boolean',
         ];
     }
 }

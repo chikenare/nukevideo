@@ -54,8 +54,8 @@ const idleDisks = computed(() =>
   hasPool.value ? cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)) : [],
 )
 const needsDiskConfirmation = computed(() => offeredDisks.value.length > 0 && !disksConfirmed.value)
-// The listing installs nothing, so on a host without sfdisk it cannot tell whether a system
-// disk has room to share. The script says so in that disk's detail.
+// The listing installs sfdisk when the host lacks it; where that failed it cannot tell whether
+// a system disk has room to share. The script says so in that disk's detail.
 const sfdiskMissing = computed(() =>
   cacheDisks.value.some(d => d.state === 'system' && d.detail.includes('sfdisk missing')),
 )
@@ -315,7 +315,7 @@ defineExpose({ show })
           <div v-if="sfdiskMissing && !hasPool" class="flex items-start gap-2 text-xs text-muted-foreground">
             <AlertTriangle class="h-4 w-4 shrink-0 text-yellow-500" />
             <span>
-              <code>sfdisk</code> is not installed on this host, so its system disks could not be checked for unpartitioned space to share. Install the <code>fdisk</code> package and reopen this dialog if one of them should be.
+              <code>sfdisk</code> is missing on this host and could not be installed, so its system disks could not be checked for unpartitioned space to share. Install the <code>fdisk</code> package and reopen this dialog if one of them should be.
             </span>
           </div>
 
