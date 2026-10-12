@@ -15,6 +15,9 @@ class UpdateNodeData extends RequestData
         #[MapInputName(CamelCaseMapper::class)]
         public string|Optional $ipAddress,
         public string|Optional|null $hostname,
+        /** Null goes back to following the installation's setting; absent leaves it as it is. */
+        #[MapInputName(CamelCaseMapper::class)]
+        public bool|Optional|null $cloudflareProxied,
         #[MapInputName(CamelCaseMapper::class)]
         public bool|Optional $isDraining,
         public string|Optional|null $accel,
@@ -32,6 +35,7 @@ class UpdateNodeData extends RequestData
             'ipAddress' => 'sometimes|ip',
             // A DNS name only; see StoreNodeData for where it ends up.
             'hostname' => ['nullable', 'string', 'max:255', 'regex:/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i'],
+            'cloudflareProxied' => 'nullable|boolean',
             'isDraining' => 'sometimes|boolean',
             'accel' => 'nullable|string|in:intel,nvidia',
             'env' => 'nullable|string|max:10000',

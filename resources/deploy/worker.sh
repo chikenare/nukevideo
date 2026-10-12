@@ -17,6 +17,7 @@ case "$NODE_ACCEL" in
         nvidia-smi --query-gpu=name --format=csv,noheader
         if ! command -v nvidia-ctk &>/dev/null; then
             echo "Installing NVIDIA container toolkit"
+            ensure_commands gpg=gnupg
             curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | $SUDO gpg --dearmor --yes -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
             curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
                 | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
@@ -48,6 +49,7 @@ run_container "$RUN_ARGS"
 # another address than the private one the workers use. Every worker resolves it: one that
 # cannot would fail on its first chunk instead of here.
 echo "=== Chunk store ==="
+ensure_commands hostname=hostname
 CHUNK_STORE_IP=$(getent ahostsv4 "$CHUNK_STORE_HOST" | awk 'NR==1 { print $1 }')
 if [ -z "$CHUNK_STORE_IP" ]; then
     echo "The chunk store address $CHUNK_STORE_HOST does not resolve on this node"; exit 1

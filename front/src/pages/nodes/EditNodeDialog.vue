@@ -33,6 +33,8 @@ type EditableNode = Omit<Node, 'accel'> & {
   user: string
   hostname: string
   accel: string
+  // The node's tri-state as the select spells it: null on the wire is `default` here.
+  cloudflare: 'default' | 'proxied' | 'dns'
 }
 const node = ref<EditableNode>({} as EditableNode)
 
@@ -43,6 +45,7 @@ const show = (initialNode: Node) => {
     user: raw.user ?? '',
     hostname: raw.hostname ?? '',
     accel: raw.accel ?? 'none',
+    cloudflare: raw.cloudflareProxied === null ? 'default' : raw.cloudflareProxied ? 'proxied' : 'dns',
   }
   errors.value = {}
   dialogOpen.value = true
@@ -59,6 +62,7 @@ const handleUpdate = async () => {
       // A hostname is a proxy's public address; a worker has no use for one and an empty string
       // would be stored as a hostname of its own.
       hostname: node.value.type === 'proxy' && node.value.hostname ? node.value.hostname : null,
+      cloudflareProxied: node.value.cloudflare === 'default' ? null : node.value.cloudflare === 'proxied',
     })
     dialogOpen.value = false
     emit('updated', updated)
@@ -102,6 +106,20 @@ defineExpose({ show })
           <Input id="edit_node_hostname" v-model="node.hostname" placeholder="e.g. cdn.example.com" required />
           <p class="text-xs text-muted-foreground">The public address playback links point at. Redeploy after changing: Traefik's router and the certificate are issued for it.</p>
           <p v-if="errors.hostname" class="text-sm text-destructive">{{ errors.hostname[0] }}</p>
+        </div>
+        <div v-if="node.type === 'proxy'" class="grid gap-2">
+          <Label for="edit_node_cloudflare">Cloudflare proxy</Label>
+          <Select v-model="node.cloudflare">
+            <SelectTrigger id="edit_node_cloudflare">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="default">Installation default</SelectItem>
+              <SelectItem value="proxied">Proxied</SelectItem>
+              <SelectItem value="dns">DNS only</SelectItem>
+            </SelectContent>
+          </Select>
+          <p class="text-xs text-muted-foreground">How this node's DNS record is created when a Cloudflare token is stored under Settings. Takes effect at the next deploy.</p>
         </div>
         <div v-if="node.type === 'proxy'" class="grid gap-2">
           <div class="flex items-center justify-between">

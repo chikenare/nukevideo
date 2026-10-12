@@ -22,6 +22,7 @@ class NodeService
         private SSHService $ssh,
         private NodeSettings $nodeSettings,
         private CdnSettings $cdnSettings,
+        private CloudflareDns $cloudflare,
     ) {}
 
     public function index(): array
@@ -280,6 +281,13 @@ class NodeService
         $script = $this->buildDeployScript($node, $disks, $sharedDisks);
         $grace = $drain ? self::drainGrace() : 0;
 
+        // Before anything runs on the node: Traefik asks for the certificate the moment the edge
+        // is up, and the challenge is answered at the hostname. After the script is built, so a
+        // deploy refused for its own reasons has not already published a record.
+        if ($node->type === NodeType::PROXY && ($dns = $this->cloudflare->sync($node)) !== null) {
+            $onOutput("=== Cloudflare DNS ===\n{$dns}\n");
+        }
+
         // SSH timeout covers the worst case: the drain window plus image pull and startup.
         // The old flat 300s cut the session mid-drain and left no container at all.
         $this->ssh($node, 'bash -s'.($drain ? '' : ' -- --no-drain'), $grace + 600, $script, $onOutput);
@@ -355,7 +363,8 @@ class NodeService
         }
 
         // sudo.sh first: everything after it leans on $SUDO having been settled or the run aborted.
-        $sections = ['sudo', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $type, 'vector'];
+        // packages.sh next, for the same reason: it is how every later section installs a tool.
+        $sections = ['sudo', 'packages', 'common', $node->type === NodeType::PROXY ? 'cache-disks' : null, $type, 'vector'];
 
         return $header."\n".implode("\n", array_map(
             fn ($section) => self::deployScript($section),
@@ -546,7 +555,7 @@ class NodeService
             // the script reads each disk's state again, and what was agreed to for a disk —
             // format it, or only add a partition to it — must not depend on that reading.
             'CHOSEN_SHARED' => implode(' ', $sharedDisks),
-            ...$this->traefikVars($isProduction),
+            ...$this->traefikVars($isProduction, $this->cloudflare->proxies($node)),
         ];
     }
 
@@ -561,7 +570,7 @@ class NodeService
      * seconds — and replaces it otherwise. The image alone would not do: a development panel's
      * Traefik has no TLS and runs under the same name, and a flag change keeps the image tag.
      */
-    private function traefikVars(bool $tls): array
+    private function traefikVars(bool $tls, bool $behindCloudflare = false): array
     {
         $command = '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
             .' --entrypoints.web.address=:80';
@@ -570,6 +579,19 @@ class NodeService
             $command .= ' --entrypoints.websecure.address=:443'
                 .' --certificatesresolvers.le.acme.httpchallenge.entrypoint=web'
                 .' --certificatesresolvers.le.acme.storage=/certs/acme.json';
+        }
+
+        // Traefik replaces any `X-Forwarded-For` it is handed with the address that connected,
+        // unless told that address may be believed. Behind Cloudflare's proxy that address is
+        // Cloudflare's, so the edge logged — and GeoIP placed — every viewer in a Cloudflare
+        // data centre, whatever nginx trusts further in. Only for a node that is behind it:
+        // the flag is part of the hash below, and adding it everywhere would restart Traefik,
+        // and drop TLS for a few seconds, on every host of a fleet that never asked for this.
+        if ($behindCloudflare) {
+            $trusted = implode(',', CloudflareDns::proxyRanges());
+            foreach ($tls ? ['web', 'websecure'] : ['web'] as $entrypoint) {
+                $command .= " --entrypoints.{$entrypoint}.forwardedheaders.trustedips={$trusted}";
+            }
         }
 
         $options = [

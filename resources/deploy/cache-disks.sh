@@ -134,8 +134,9 @@ cache_disk_inventory() {
                     read -r _ sectors <<< "$(cache_free_region "$dev")"
                     free=$(( ${sectors:-0} * $(cat "/sys/block/$NAME/queue/logical_block_size" 2>/dev/null || echo 512) ))
                 fi
-                # Said rather than passed off as "no room": the listing installs nothing, and
-                # the panel shows this to whoever is wondering where the disk went.
+                # Said rather than passed off as "no room": it is still missing after the
+                # listing tried to install it, and the panel shows this to whoever is wondering
+                # where the disk went.
                 $SUDO sfdisk --version &>/dev/null || detail="$detail (sfdisk missing)"
             fi
             if [ "$free" -ge "$CACHE_SHARED_MIN_BYTES" ]; then
@@ -341,14 +342,10 @@ cache_mount_pool() {
 # side effect of an update: a spare disk next to an existing pool is reported, not absorbed.
 provision_cache_pool() {
     echo "=== Cache disks ==="
-    # Asked through sudo, whose PATH has the sbin directories: a non-root deploy user's does
-    # not, and `command -v` then reinstalled both on every deploy — one apt lock away from
-    # failing the redeploy of a host that had everything.
-    $SUDO mdadm --version &>/dev/null || { $SUDO apt-get update -qq && $SUDO apt-get install -y -qq mdadm xfsprogs; }
-    $SUDO mkfs.xfs -V &>/dev/null || $SUDO apt-get install -y -qq xfsprogs
+    ensure_commands mdadm=mdadm mkfs.xfs=xfsprogs
     # What reads and extends a system disk's partition table. Its absence only means such a
     # disk is not offered, so a host that cannot install it still deploys.
-    $SUDO sfdisk --version &>/dev/null || $SUDO apt-get install -y -qq fdisk || true
+    ensure_commands sfdisk=fdisk || echo "Continuing without sfdisk: no system disk will be offered for sharing"
 
     INVENTORY=$(cache_disk_inventory)
     echo "$INVENTORY" | awk -F'\t' '{ printf "  %-14s %8.0f GB  %-9s %s %s%s\n", $1, $2/1e9, $4, $3, $5, ($6 > 0 ? sprintf(" (%.0f GB)", $6/1e9) : "") }'

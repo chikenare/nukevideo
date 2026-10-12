@@ -71,6 +71,7 @@ POST /api/nodes
 | `type` | string | Yes | `worker` or `proxy` |
 | `user` | string | No | SSH username, a POSIX login name. Defaults to `root` |
 | `hostname` | string | No | DNS name the edge is served at. Needed for a proxy to receive playback links |
+| `cloudflareProxied` | boolean \| null | No | A proxy's own choice for its [Cloudflare DNS](#cloudflare-dns) record: `true` proxied, `false` DNS only, `null` (the default) follows the installation's setting |
 | `accel` | string | No | `intel` or `nvidia` for a GPU worker; omit (or `null`) for CPU |
 
 **Response:** `{ "data": { /* Node */ } }`. Creating a node does not deploy it: that is a
@@ -82,7 +83,8 @@ separate [deploy](#deploy-a-node).
 PUT /api/nodes/{id}
 ```
 
-`PATCH` works too. Every field is optional: `name`, `user`, `ipAddress`, `hostname`, `accel`,
+`PATCH` works too. Every field is optional: `name`, `user`, `ipAddress`, `hostname`,
+`cloudflareProxied`, `accel`,
 plus:
 
 | Field | Type | Description |
@@ -354,4 +356,62 @@ tried but cannot block the rotation, since it may be gone for good.
 
 ::: warning
 The private key is stored encrypted and never returned by any endpoint.
+:::
+
+## Cloudflare DNS
+
+Optional. With a Cloudflare API token stored, deploying a proxy points its `hostname` at its
+`ipAddress` in Cloudflare, and deleting the node removes that record — see
+[DNS with Cloudflare](/guide/nodes#dns-with-cloudflare). `GET /api/app-settings` reports it as
+`cloudflareConfigured` and `cloudflareProxied`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `PUT` | `/api/app-settings/cloudflare` | Store the token and the record mode |
+| `DELETE` | `/api/app-settings/cloudflare` | Forget the token |
+| `GET` | `/api/app-settings/cloudflare/zones` | The zones the stored token can see |
+
+### Set the Cloudflare Token
+
+```
+PUT /api/app-settings/cloudflare
+```
+
+**Request Body:**
+
+```json
+{ "apiToken": "…", "proxied": false }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `apiToken` | string | The first time | Needs `Zone → Zone → Read` and `Zone → DNS → Edit`. Checked against Cloudflare before it is stored; a token Cloudflare refuses is a `422` carrying its reason. Omit it to keep the stored one |
+| `proxied` | boolean | No | Create the records behind Cloudflare's proxy instead of DNS only. Defaults to `false`; applies to each proxy at its next deploy. A node's own `cloudflareProxied` overrides it |
+
+The response is the `GET /api/app-settings` shape.
+
+### Remove the Cloudflare Token
+
+```
+DELETE /api/app-settings/cloudflare
+```
+
+Forgets the token and resets `proxied`. The records already created are left in place.
+
+### List the Zones
+
+```
+GET /api/app-settings/cloudflare/zones
+```
+
+```json
+{ "data": ["example.com", "example.org"] }
+```
+
+Asked of Cloudflare on every call, so it doubles as a check that the stored token still works:
+a token that no longer does is a `502` with Cloudflare's reason in `message`. Empty when no
+token is stored.
+
+::: warning
+The token is stored encrypted and never returned by any endpoint.
 :::

@@ -1,6 +1,6 @@
 # Shared by every node deploy. Runs on the node over SSH, after the header the API prepends
 # (one assignment per variable, nothing else — the PHP side composes, the shell side acts) and
-# after sudo.sh, which has already settled $SUDO or aborted.
+# after sudo.sh, which has already settled $SUDO or aborted, and packages.sh.
 set -e
 
 # Seconds the old worker gets to finish in-flight jobs before it is killed. The default covers
@@ -28,6 +28,10 @@ pull_image() {
 run_container() {
     eval "docker run -d $1"
 }
+
+# What the rest of the deploy takes for granted on any host. A minimal cloud image ships
+# without curl, and the Docker install below was the first thing to find out.
+ensure_commands "curl=curl ca-certificates" awk=mawk
 
 echo "=== Installing Docker ==="
 if ! command -v docker &>/dev/null; then

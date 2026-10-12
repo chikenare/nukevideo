@@ -89,7 +89,13 @@ class ProxyCacheService
     }
 
     /**
-     * What a deploy would do to the node's disks, read over SSH without changing anything.
+     * What a deploy would do to the node's disks, read over SSH without changing any of them.
+     *
+     * It does install sfdisk when the host lacks it. The listing used to install nothing, and
+     * on a first setup — the one time nothing has been deployed there yet — that meant a system
+     * disk with room to share was never offered, with a note asking the operator to install a
+     * package by hand and come back. A short apt lock wait rather than the deploy's: somebody
+     * is looking at a spinner. Failing to install it is not failing to list.
      *
      * @return array<int, array{device: string, size: int, model: string, state: string, detail: string, free: int}>
      */
@@ -100,12 +106,21 @@ class ProxyCacheService
             user: $node->user,
             privateKey: $this->sshKeys->privateKey(),
             command: 'bash -s',
-            timeout: 30,
+            timeout: 120,
             // `blkid -p` reads the raw device, which needs root; without it a partitioned disk
             // with no filesystem would pass for an empty one. The deploy's own sudo preamble
             // goes first, so a user whose sudo wants a password fails here, loudly and with the
             // same fix message, instead of the inventory quietly calling that disk `empty`.
-            input: NodeService::deployScript('sudo')."\n".NodeService::deployScript('cache-disks')."\ncache_disk_inventory\n",
+            input: implode("\n", [
+                NodeService::deployScript('sudo'),
+                'APT_LOCK_TIMEOUT=20',
+                NodeService::deployScript('packages'),
+                NodeService::deployScript('cache-disks'),
+                // Onto stderr: stdout is the listing, and only the listing.
+                'ensure_commands sfdisk=fdisk >&2 || true',
+                'cache_disk_inventory',
+                '',
+            ]),
         );
 
         $disks = [];

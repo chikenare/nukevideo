@@ -19,6 +19,7 @@ class Node extends Model
         'type',
         'accel',
         'hostname',
+        'cloudflare_proxied',
         'is_active',
         'is_draining',
         // Written by the probe and the deploy, never by the API: the Data objects do not expose them.
@@ -33,6 +34,8 @@ class Node extends Model
         return [
             'type' => NodeType::class,
             'accel' => NodeAccel::class,
+            // Nullable on purpose: null is "as the installation says" (CloudflareSettings).
+            'cloudflare_proxied' => 'boolean',
             'is_active' => 'boolean',
             'is_draining' => 'boolean',
             'last_healthy_at' => 'datetime',
