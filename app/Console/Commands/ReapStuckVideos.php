@@ -80,7 +80,7 @@ class ReapStuckVideos extends Command
      * only beat the heartbeat while they execute, and every CPU node drains one shared FIFO list,
      * so a video dispatched behind a long one has its jobs sitting in the queue, untouched and
      * silent, for as long as the one ahead takes. That is a healthy video waiting its turn, and
-     * failing it deletes the user's source 24h later ({@see PruneStaleVideos}).
+     * failing it deletes the user's source a week later ({@see PruneStaleVideos}).
      *
      * An unfinished batch with pending jobs is the difference: the queue owns the recovery there,
      * including redelivering whatever a dead worker dropped. The reaper's real job is the case the

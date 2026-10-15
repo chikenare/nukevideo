@@ -59,7 +59,7 @@ function videoWithRendition(string $codec): Video
 
 /**
  * Missing hardware defers a video, it does not fail it: a terminally-failed video is deleted by
- * `videos:prune` 24h later along with its source — the user's only copy — and the usual cause is a
+ * `videos:prune` a week later along with its source — the user's only copy — and the usual cause is a
  * node rebooting. Returning it to PENDING costs nothing, and `videos:dispatch` skips it (rather
  * than claiming it) until the hardware is back, so it blocks nothing while it waits.
  */

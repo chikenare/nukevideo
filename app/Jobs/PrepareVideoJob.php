@@ -293,7 +293,7 @@ class PrepareVideoJob implements ShouldQueue
      *
      * Hands the video back to PENDING rather than failing it. A missing node is nearly always a
      * reboot or a redeploy, and a terminally-failed video is deleted — with its source, the user's
-     * only copy — by `videos:prune` 24 hours later. Returned to the queue it simply waits, and the
+     * only copy — by `videos:prune` a week later. Returned to the queue it simply waits, and the
      * dispatcher skips it until the hardware is back, so it blocks nothing meanwhile.
      */
     private function releasedForMissingCapacity(Video $video): bool

@@ -9,7 +9,11 @@ use Illuminate\Console\Command;
 
 class PruneStaleVideos extends Command
 {
-    protected $signature = 'videos:prune {--hours=24 : Hours before a failed video is considered stale}';
+    // A week, not a day. Most failures are transient infrastructure (a database that crawled for an
+    // hour, a chunk store mid-restart, a refused S3 write), and the failure reason cannot tell them
+    // from a broken file. Deleting takes the user's source with it, so the window is how long
+    // somebody has to notice and retry before a passing outage becomes permanent data loss.
+    protected $signature = 'videos:prune {--hours=168 : Hours before a failed video is considered stale}';
 
     protected $description = 'Remove videos that have been in a failed state for too long';
 

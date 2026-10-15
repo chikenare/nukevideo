@@ -40,7 +40,7 @@ trait RecordsEncodeRate
         // This is a measurement, not a decision: two of the three callers already run inside a
         // catch that keeps a failed probe from failing the video, but {@see RenditionPreflight}
         // does not — it is on the critical path, and a video it fails is one `videos:prune` deletes
-        // with the user's only source 24 hours later. Nothing here is worth that.
+        // with the user's only source a week later. Nothing here is worth that.
         try {
             $stream->update(['meta' => [...$stream->meta ?? [], 'encode_rate' => $rate]]);
         } catch (Throwable $e) {

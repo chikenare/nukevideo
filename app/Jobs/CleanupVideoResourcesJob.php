@@ -52,7 +52,7 @@ class CleanupVideoResourcesJob implements ShouldQueue
         }
 
         // The uploaded source is only reclaimed after a SUCCESSFUL run. A FAILED video keeps it
-        // for the PruneStaleVideos window (24h) — same policy as reaper/chunk failures — so the
+        // for the PruneStaleVideos window (a week) — same policy as reaper/chunk failures — so the
         // user's only copy isn't destroyed the moment packaging hiccups.
         if ($video?->status !== VideoStatus::COMPLETED->value) {
             return;
