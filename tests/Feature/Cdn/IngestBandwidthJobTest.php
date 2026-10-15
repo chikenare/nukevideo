@@ -6,7 +6,7 @@
  * ingest runs on a timer, so a batch that straddles midnight used to book the tail of one day to
  * the next; the events now carry the day the traffic actually happened. This pins that, the metric
  * each zone lands under, the attribution resolved from the video, the input filtering, and the
- * folding that replaced what ClickHouse used to do in the background.
+ * folding of rows that share their dimensions.
  */
 
 use App\Jobs\IngestBandwidthJob;
@@ -127,8 +127,8 @@ it('drops an unusable row and keeps the rest of the batch', function () {
 });
 
 it('sums events that share every dimension into one row, and counts them', function () {
-    // What ClickHouse did while merging happens at write time now: a session flushed once a minute
-    // names the same row every time, and the table holds one row for it, not one per flush.
+    // Rows are folded at write time: a session flushed once a minute names the same row every
+    // time, and the table holds one row for it, not one per flush.
     $video = videoOwnedBySomeone();
     $event = ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 100, 'date' => '2026-08-13', 'zone' => 'play'];
 
