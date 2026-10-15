@@ -81,7 +81,7 @@ class DispatchPendingVideosCommand extends Command
         // queue nobody drains and it would hang until the reaper. Skipping leaves it
         // PENDING at no cost, and the next tick offers it again the moment the node is
         // back — where failing it would hand it to `videos:prune`, which deletes the video
-        // and the user's only copy 24h later, over what is usually a reboot. Skipped
+        // and the user's only copy a week later, over what is usually a reboot. Skipped
         // rather than stopping so one waiting GPU video cannot block the CPU queue
         // behind it.
         if ($video->template?->missingCapacity()) {

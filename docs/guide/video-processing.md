@@ -159,5 +159,5 @@ not failed — and is picked up as soon as such a node comes back.
 - **Retry**: a failed video can be requeued with [Retry Video](/api/videos#retry-video) or
   `php artisan videos:retry`. The mirrored source and every staged chunk survive a failure, so a
   retry resumes instead of starting over.
-- **Pruning**: `videos:prune` deletes videos that have been `failed` for more than 24 hours, their
+- **Pruning**: `videos:prune` deletes videos that have been `failed` for more than 7 days, their
   source included. Retry within that window.

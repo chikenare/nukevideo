@@ -6,10 +6,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * The metrics table, moved out of ClickHouse. One row per day per combination of dimensions, which
- * is the grain `usage` already had there: nothing ever read it finer than a day, so the only thing
- * the column store was doing was folding rows in the background — and an upsert does that at write
- * time ({@see UsageService::add()}), in the database every worker already holds a connection to.
+ * The metrics table. One row per day per combination of dimensions: nothing reads it finer than a
+ * day, so rows are folded into their day's total at write time by an upsert
+ * ({@see UsageService::add()}), in the database every worker already holds a connection to.
  *
  * Named `usage_daily` rather than `usage`: USAGE is a keyword in MariaDB, and the grain belongs in
  * the name anyway.

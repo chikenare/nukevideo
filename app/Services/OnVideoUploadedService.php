@@ -56,7 +56,7 @@ class OnVideoUploadedService
         // Missing worker capacity is deliberately NOT checked here. It is usually transient (a
         // reboot, a redeploy), the video costs nothing while it waits, and `videos:dispatch`
         // picks it up the moment a node returns. Failing it here would hand it to `videos:prune`,
-        // which deletes a terminally-failed video and its source after 24h — the user's only copy,
+        // which deletes a terminally-failed video and its source after a week — the user's only copy,
         // thrown away over a node restart. A fleet that genuinely lacks the template's hardware is
         // never claimed at all: DispatchPendingVideosCommand skips a video whose hardware is
         // missing, so it waits in PENDING instead of failing.

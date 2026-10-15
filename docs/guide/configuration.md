@@ -123,26 +123,6 @@ Traffic ingested before the database was there keeps an empty country unless the
 returns that day. If you show these numbers publicly, MaxMind's licence asks for the attribution
 "This product includes GeoLite2 data created by MaxMind, available from https://www.maxmind.com".
 
-### Upgrading from a release that used ClickHouse
-
-Earlier releases kept this table in ClickHouse. After upgrading, new traffic is written to MariaDB
-and the history stays behind until it is imported — once, with the old ClickHouse container still
-running:
-
-```bash
-docker compose exec nukevideo-api php artisan migrate --force
-docker compose exec nukevideo-api php artisan usage:import-clickhouse \
-    --url=http://clickhouse:8123 --user=default --password=... --database=default
-```
-
-`docker-compose.yml` no longer defines the `clickhouse` service, so `docker compose up -d` leaves
-the old container running as an orphan, still reachable by that name. **Do not pass
-`--remove-orphans` until the import has finished.** The import adds to what MariaDB already holds,
-is resumable (a day that finished is skipped on the next run) and must not be forced a second time.
-Set `MAXMIND_LICENSE_KEY` first if you want the history tagged with the [viewer's
-country](#viewer-country): the import resolves it as it copies, and cannot add it afterwards.
-Once it reports every day, the container, its volume and the `CLICKHOUSE_*` variables can go.
-
 ## Monitoring
 
 | Variable | Default | Used in | Description |

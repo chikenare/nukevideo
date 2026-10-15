@@ -58,7 +58,7 @@ class UsageService
     /**
      * Adds rows to the daily totals: a row whose dimensions already exist is summed into it.
      *
-     * This is the whole replacement for ClickHouse's SummingMergeTree, done at write time. Three
+     * The aggregation happens here, at write time, rather than in a background merge. Three
      * things it takes care of so that no caller has to:
      *
      * - Rows sharing their dimensions are folded here first. One statement must not name the same

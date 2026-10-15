@@ -2,8 +2,7 @@
 
 /**
  * The reads over `usage_daily`, run for real. Every other analytics test stubs this service to pin
- * what the endpoints let through; these pin what the queries answer, which had no test at all while
- * the table lived in a ClickHouse the suite could not reach.
+ * what the endpoints let through; these pin what the queries answer.
  *
  * The properties that matter are the ones that fail silently: a sum that crosses from delivered
  * bytes into encoding seconds, a read that leaks past its project, a distinct count that is really
