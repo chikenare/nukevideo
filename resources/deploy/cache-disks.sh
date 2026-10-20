@@ -279,7 +279,11 @@ cache_create_pool() {
     else
         fs_device=$POOL_DEVICES
     fi
-    $SUDO mkfs.xfs -q -f -L "$CACHE_POOL_LABEL" "$fs_device"
+    # `-K`: no discard of the whole device first. On a thin-provisioned virtual disk the TRIM
+    # runs at the backend's pace — 0.2 GB/s on an 11 TB volume, fourteen hours — and the SSH
+    # session of the deploy gives up long before; the blocks are about to be filled with cache
+    # anyway, so handing them back to the host first buys nothing.
+    $SUDO mkfs.xfs -q -f -K -L "$CACHE_POOL_LABEL" "$fs_device"
 }
 
 # The array's members as devices, which is not the inventory's list of disks: a member may be
@@ -309,7 +313,7 @@ cache_assemble_pool() {
     fi
     if [ -e "$CACHE_POOL_MD" ] && [ -z "$($SUDO blkid -p -o value -s TYPE "$CACHE_POOL_MD" 2>/dev/null)" ]; then
         echo "The array was never formatted — finishing what an earlier deploy started"
-        $SUDO mkfs.xfs -q -L "$CACHE_POOL_LABEL" "$CACHE_POOL_MD"
+        $SUDO mkfs.xfs -q -K -L "$CACHE_POOL_LABEL" "$CACHE_POOL_MD"
     fi
 }
 
