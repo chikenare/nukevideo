@@ -36,10 +36,12 @@ echo "=== Deploying worker ==="
 # Drain before replacing: give Horizon time to finish in-flight encodes, or they sit reserved
 # in Redis for ~31 minutes with the new container idle. Returns as soon as Horizon exits — the
 # cap only bites with a job mid-flight. `-t`, not `--time`/`--timeout`: the long forms flipped
-# between docker CLI generations, the short one never did.
+# between docker CLI generations, the short one never did. `-s SIGTERM` because a worker raised
+# before its run args named the signal still carries the image's SIGQUIT, which Horizon (PID 1,
+# no handler for it) never sees — the stop waited out the cap and then killed it mid-job.
 if [ "$DRAIN" -gt 0 ] && docker inspect "$SERVICE_CONTAINER" &>/dev/null; then
     echo "Draining running jobs (up to ${DRAIN}s)..."
-    docker stop -t "$DRAIN" "$SERVICE_CONTAINER" || true
+    docker stop -s SIGTERM -t "$DRAIN" "$SERVICE_CONTAINER" || true
 fi
 docker rm -f "$SERVICE_CONTAINER" 2>/dev/null || true
 run_container "$RUN_ARGS"

@@ -159,6 +159,24 @@ it('stops only the node\'s own containers, gracefully or not', function (bool $f
         ->and($command)->not->toContain('nukevideo_storage_');
 })->with([[false, 'stop'], [true, 'kill']]);
 
+it('stops a worker with the one signal Horizon drains on', function () {
+    // The image's STOPSIGNAL is SIGQUIT, and Horizon as PID 1 has no handler for it: the kernel
+    // drops it, the stop waits out the whole grace with jobs still being taken, then SIGKILLs.
+    $node = opsNode();
+    $command = null;
+    $ssh = Mockery::mock(SSHService::class);
+    $ssh->shouldReceive('run')->andReturnUsing(function (...$args) use (&$command) {
+        $command = $args['command'] ?? $args[3];
+
+        return '';
+    });
+    app()->instance(SSHService::class, $ssh);
+
+    app(NodeService::class)->stopServices($node, false, fn () => null);
+
+    expect($command)->toStartWith("docker stop -s SIGTERM nukevideo_worker_{$node->id}");
+});
+
 it('keeps one clean line per line of output', function () {
     // SSH hands over whatever the remote wrote, CRLF included; a stray \r shows up in the panel.
     $node = opsNode();

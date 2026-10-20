@@ -314,11 +314,19 @@ class NodeService
      * Graceful by default: the worker was created with `--stop-timeout` WORKER_STOP_GRACE, so a
      * plain `docker stop` is Horizon finishing its in-flight jobs first. `$force` kills — those
      * jobs redeliver after QUEUE_RETRY_AFTER instead.
+     *
+     * A worker's signal is named here as well as at `docker run`: a container keeps the signal it
+     * was created with, and one raised before {@see workerVars()} set it still has the image's
+     * SIGQUIT, which Horizon ignores. A proxy keeps its own, SIGQUIT, nginx's graceful stop.
      */
     public function stopServices(Node $node, bool $force, \Closure $onOutput): void
     {
         $containers = implode(' ', $node->deployedContainerNames());
-        $verb = $force ? 'kill' : 'stop';
+        $verb = match (true) {
+            $force => 'kill',
+            $node->type === NodeType::WORKER => 'stop -s SIGTERM',
+            default => 'stop',
+        };
         $this->ssh($node, "docker {$verb} {$containers} 2>&1 || true", self::WORKER_STOP_GRACE + 60, onOutput: $onOutput);
     }
 
@@ -413,6 +421,11 @@ class NodeService
             'sysctls' => self::WORKER_SYSCTLS,
             // So a plain `docker stop` (host reboot included) also drains instead of killing at 10s.
             'stop_timeout' => self::WORKER_STOP_GRACE,
+            // The base image declares STOPSIGNAL SIGQUIT, which is php-fpm's graceful stop. Horizon
+            // only traps SIGTERM and SIGINT, and as PID 1 an untrapped signal is dropped by the
+            // kernel: every stop sat out the whole grace with Horizon still taking work, then
+            // SIGKILLed it mid-job.
+            'stop_signal' => 'SIGTERM',
             'command' => 'php /var/www/html/artisan horizon',
             'healthcheck' => 'healthcheck-horizon',
             'cpuset' => $dockerFlags['DOCKER_CPUSET_CPUS'] ?? null,
