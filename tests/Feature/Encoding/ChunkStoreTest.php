@@ -59,6 +59,14 @@ describe('where the chunk store lives', function () {
 });
 
 describe('what the workers are told', function () {
+    it('raises the worker to drain on docker stop', function () {
+        // Horizon traps SIGTERM only; the base image's SIGQUIT never reaches it.
+        $script = app(NodeService::class)->buildDeployScript(storeNode());
+
+        expect($script)->toContain('--stop-signal SIGTERM')
+            ->and($script)->toContain('--stop-timeout '.NodeService::WORKER_STOP_GRACE);
+    });
+
     it('points every worker at the chunk store', function () {
         storeNode(['ip_address' => '10.0.0.20']);
 
