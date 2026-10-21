@@ -9,6 +9,7 @@ use App\Exceptions\NoCdnNodeAvailableException;
 use App\Models\Node;
 use App\Models\Video;
 use App\Settings\CdnSettings;
+use App\Support\SpeedLimit;
 
 /**
  * Our own CDN: the URL points at a per-video proxy node (edge nginx) and carries an Akamai
@@ -26,7 +27,7 @@ class SelfHostedProvider implements CdnProvider
         private ProxyRing $ring,
     ) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink
     {
         $node = $this->ring->for($video->ulid);
 
@@ -36,7 +37,7 @@ class SelfHostedProvider implements CdnProvider
 
         $url = Node::proxyScheme($local)."{$node->hostname}/".ltrim($path, '/');
 
-        return $this->sign($url, $ip);
+        return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps);
     }
 
     public function assetUrl(string $videoUlid, string $key, bool $local): string
@@ -56,7 +57,7 @@ class SelfHostedProvider implements CdnProvider
      * against the running edge — the same token on a sibling rendition returns 403, which is the
      * whole point, since the renditions of one video are neighbours in `download/video/`.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink
     {
         $node = $this->ring->for($videoUlid);
 
@@ -70,19 +71,39 @@ class SelfHostedProvider implements CdnProvider
             Node::proxyScheme($local).$node->hostname.$path,
             ip: null,
             acl: $path,
+            speedLimitKbps: $speedLimitKbps,
         );
+    }
+
+    /**
+     * Only a signed link can carry one: the limit is a field of the token, and with no secret
+     * there is no token to put it in.
+     */
+    public function supportsSpeedLimit(): bool
+    {
+        return SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? [])->tokenSecret !== '';
     }
 
     /**
      * The token handed back is the whole `__hdnea__` value (`exp=…~acl=…~hmac=…`), exactly as it
      * sits in the URL and in the edge's log — that is what the ingest will hash to look the
      * link up, so the two sides must agree on the bytes.
+     *
+     * A speed limit rides as a `limit` field — the name Bunny gives its own — in bytes per second. The edge's validator ignores
+     * fields it does not know but signs everything before `~hmac=`, so the field is tamper-proof
+     * without the module knowing about it, and the edge reads it back out of the token with a
+     * `map` ({@see vod/nginx/nginx.conf.template}). An edge that predates the map still validates
+     * the token and simply serves it unlimited.
      */
-    private function sign(string $url, ?string $ip, ?string $acl = null): SignedLink
+    private function sign(string $url, ?string $ip, ?string $acl = null, ?int $speedLimitKbps = null): SignedLink
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);
 
         if ($config->tokenSecret === '') {
+            if ($speedLimitKbps !== null) {
+                throw new \LogicException('An unsigned link cannot carry a speed limit.');
+            }
+
             return new SignedLink($url, null);
         }
 
@@ -94,6 +115,10 @@ class SelfHostedProvider implements CdnProvider
         $authString = $ip === null
             ? "exp={$exp}~acl={$acl}"
             : "exp={$exp}~acl={$acl}~ip={$ip}";
+
+        if ($speedLimitKbps !== null) {
+            $authString .= '~limit='.SpeedLimit::toBytesPerSecond($speedLimitKbps);
+        }
         $hmac = hash_hmac('sha256', $authString, pack('H*', $config->tokenSecret));
         $token = "{$authString}~hmac={$hmac}";
 

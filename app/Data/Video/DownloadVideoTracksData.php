@@ -5,6 +5,7 @@ namespace App\Data\Video;
 use App\Data\RequestData;
 use App\Data\Stream\DownloadStreamData;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\SpeedLimit;
 use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Mappers\CamelCaseMapper;
@@ -40,6 +41,13 @@ class DownloadVideoTracksData extends RequestData
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?string $trackingId = null,
+        /**
+         * Caps the transfer rate of each link in the batch, one request at a time — a download
+         *  manager opening several ranged connections gets this per connection, in kilobits per second ({@see SpeedLimit}). Signed into
+         * the token, so the viewer cannot lift it by editing the URL. Omit it for no limit.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?int $speedLimitKbps = null,
     ) {}
 
     /**
@@ -59,6 +67,7 @@ class DownloadVideoTracksData extends RequestData
     {
         return [
             'trackingId' => TrackingId::rules(),
+            'speedLimitKbps' => SpeedLimit::rules(),
             'streamUlids' => ['nullable', 'array', 'max:'.self::MAX_TRACKS],
             'streamUlids.*' => ['string', 'size:26'],
         ];

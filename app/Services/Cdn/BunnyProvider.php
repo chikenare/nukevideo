@@ -7,6 +7,7 @@ namespace App\Services\Cdn;
 use App\Data\BunnyConfigData;
 use App\Models\Video;
 use App\Settings\CdnSettings;
+use App\Support\SpeedLimit;
 use Illuminate\Support\Facades\Cache;
 
 /**
@@ -20,11 +21,18 @@ use Illuminate\Support\Facades\Cache;
  * IP is not folded into the signature: pull-zone IP validation is off, and a signed IP Bunny
  * doesn't check just fails validation.
  *
- * The URL never names the viewer. A directory token refuses extra signed parameters (verified
- * against the edge: `tid=`, `nonce=`, even the documented `limit=` answer 403), an unsigned one
- * would be viewer-editable, and a query would not be inherited by the segments anyway. The token
- * is the carrier instead — it reaches the log on every segment — and the mint records what it
- * means ({@see TrackingRegistry}).
+ * The URL never names the viewer. A directory token refuses parameters Bunny does not define
+ * (verified against the edge: `tid=` and `nonce=` answer 403), an unsigned one would be
+ * viewer-editable, and a query would not be inherited by the segments anyway. The token is the
+ * carrier instead — it reaches the log on every segment — and the mint records what it means
+ * ({@see TrackingRegistry}).
+ *
+ * The one extra parameter signed is Bunny's own speed limit, `limit`, in kB/s, placed exactly as
+ * the reference does: sorted in with `token_path`, so in directory mode it rides the
+ * `/bcdn_token=…` prefix the segments inherit. That same test once recorded a 403 for `limit=`
+ * too, but it left no trace of how it was signed, and the reference and the documentation both
+ * say it is a signed parameter like any other — so it is signed the documented way, and the
+ * absence of a limit leaves the URL byte for byte what it was.
  */
 class BunnyProvider implements CdnProvider
 {
@@ -37,13 +45,13 @@ class BunnyProvider implements CdnProvider
 
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink
     {
         $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
         // Directory scope: the manifest and the relative segments it lists share a prefix, so one
         // token covers the whole session.
-        return $this->signed($urlPath, $this->directoryOf($urlPath));
+        return $this->signed($urlPath, $this->directoryOf($urlPath), $speedLimitKbps);
     }
 
     /**
@@ -52,35 +60,71 @@ class BunnyProvider implements CdnProvider
      * segments it lists share one token; it is a directory PREFIX, and using it here would scope a
      * download link to everything sharing that prefix instead of to the one object.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
         $urlPath = '/'.ltrim($key, '/');
 
         if ($config->tokenKey === '') {
+            $this->refuseUnsignedLimit($speedLimitKbps);
+
             return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
         $expires = now()->timestamp + $config->tokenWindow;
+        $parameters = $this->limitParameters($speedLimitKbps);
 
-        // Advanced token auth, no parameters and no IP: the hashable base is the signature path
-        // plus the expiry, and the token rides as a query parameter.
-        $token = $this->token($urlPath.$expires, $config->tokenKey);
+        // Advanced token auth with no IP: the hashable base is the signature path, the expiry and
+        // the sorted parameters (none, or the speed limit), and the token rides as a query
+        // parameter with the parameters between it and the expiry, as the reference builds it.
+        $token = $this->token($urlPath.$expires.$this->joinParams($parameters, rawEncode: false), $config->tokenKey);
+        $urlData = $parameters === [] ? '' : '&'.$this->joinParams($parameters, rawEncode: true);
 
-        return new SignedLink("https://{$config->host}{$urlPath}?token={$token}&expires={$expires}", $token);
+        return new SignedLink("https://{$config->host}{$urlPath}?token={$token}{$urlData}&expires={$expires}", $token);
     }
 
-    private function signed(string $urlPath, string $tokenPath): SignedLink
+    /**
+     * Only a signed zone: `limit` is a token parameter, and an unsigned zone has no token to put
+     * it in.
+     */
+    public function supportsSpeedLimit(): bool
+    {
+        return BunnyConfigData::from($this->settings->providers['bunny'] ?? [])->tokenKey !== '';
+    }
+
+    private function refuseUnsignedLimit(?int $speedLimitKbps): void
+    {
+        if ($speedLimitKbps !== null) {
+            throw new \LogicException('An unsigned Bunny link cannot carry a speed limit.');
+        }
+    }
+
+    /**
+     * Bunny's `limit`, which counts kB/s where the API counts kbps. Floored, never below 1: `0`
+     * is Bunny's spelling of "no limit", the opposite of what a tiny cap asked for.
+     *
+     * @return array<string, string>
+     */
+    private function limitParameters(?int $speedLimitKbps): array
+    {
+        return $speedLimitKbps === null
+            ? []
+            : ['limit' => (string) max(1, SpeedLimit::toKilobytesPerSecond($speedLimitKbps))];
+    }
+
+    private function signed(string $urlPath, string $tokenPath, ?int $speedLimitKbps = null): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
 
         if ($config->tokenKey === '') {
+            $this->refuseUnsignedLimit($speedLimitKbps);
+
             // No token, no identifier in the log: an unsigned zone cannot attribute playback.
             return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
-        // Bunny signs the alphabetically-sorted parameters; token_path is our only one.
-        $parameters = ['token_path' => $tokenPath];
+        // Bunny signs the alphabetically-sorted parameters: token_path, and `limit` when asked.
+        $parameters = ['token_path' => $tokenPath, ...$this->limitParameters($speedLimitKbps)];
         ksort($parameters);
 
         $signingData = $this->joinParams($parameters, rawEncode: false);

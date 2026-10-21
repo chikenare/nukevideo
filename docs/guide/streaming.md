@@ -53,6 +53,7 @@ unattributed.
 |-------|------|-------|
 | `resolution` | integer | Caps every output's ladder at this height. Nothing else in the body selects what comes back — every format each output serves is in the answer. |
 | `ip` | string | The viewer's address, when the link is minted from your backend; defaults to the caller's. Neither delivery layer enforces it today: the self-hosted token carries it but the edge never checks it, and Bunny tokens are not IP-bound, so a link plays from any address until it expires. |
+| `speedLimitKbps` | integer | Caps the transfer rate of every request the link produces, in kilobits per second. See [Speed limits](#speed-limits). |
 | `trackingId` | string | Your own tracking id for this viewer — a customer, a campaign. It never appears in the link: the mint records the link's token against your id server-side, so every request the link produces — the manifest, each segment — is attributed to it in the [bandwidth analytics](/api/analytics#bandwidth-by-tracking-id) when the CDN log is ingested. Up to 64 characters of `A-Z a-z 0-9 _ -`. The mapping is best-effort (it lives server-side, for the token's lifetime plus a margin). When omitted on a session or personal-token request the traffic is attributed to the ULID of the authenticated user — the admin panel's own playback stays attributed that way. A project key that omits it leaves the traffic unattributed: naming the viewer is the integrator's job. |
 
 ## Token-Based Access Control
@@ -70,6 +71,33 @@ The exact signing scheme depends on the delivery layer:
 
 Either way the token is what ties a session's traffic back to the link that was minted, which is
 how a `trackingId` is attributed without ever appearing in the URL.
+
+## Speed limits
+
+Every link mint — [playback](/api/videos#playback-urls), [a track](/api/streams#download-a-track)
+and [a video's tracks](/api/videos#download-tracks) — takes an optional `speedLimitKbps`: a cap on
+the transfer rate, in kilobits per second (`64` to `10000000`). Kilobits because that is the unit a
+rendition's bitrate is quoted in, so `3000` keeps a player below a 1080p rung that needs more; for
+a download, divide by 8 for kB/s.
+
+The limit is part of the signature, not a parameter next to it, so a viewer who edits or removes
+it gets a 403 rather than a faster link. Because the segments carry the manifest's token, one
+capped playback link caps the whole session.
+
+- **Proxy nodes** carry it as a `limit` field of the token, in bytes per second, which the edge reads back once the
+  HMAC has passed and applies to the response.
+- **Bunny CDN** gets its own [`limit` parameter](https://bunny.net/docs/cdn/security/token-authentication/advanced#speed-limits),
+  signed with the token. Bunny counts it in kB/s, so the API divides by 8 (never below `1`,
+  since `0` means "no limit" to Bunny).
+
+It is enforced **per request**. A player fetching two segments at once, or a download manager
+opening four ranged connections, gets the limit on each of them — it caps a connection, not a
+viewer.
+
+A limit needs a signed link: with no token secret (proxy nodes) or no token key (Bunny) there is
+nothing to sign it into, and the mint answers `422` rather than a link without the cap. A proxy
+node still running an older edge validates the token and serves it unlimited: redeploy the node
+to enforce it.
 
 ## Caching
 

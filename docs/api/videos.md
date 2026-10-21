@@ -218,7 +218,8 @@ POST /api/videos/{ulid}/play
 {
   "resolution": 720,
   "ip": "203.0.113.7",
-  "trackingId": "customer-42"
+  "trackingId": "customer-42",
+  "speedLimitKbps": 3000
 }
 ```
 
@@ -227,6 +228,7 @@ POST /api/videos/{ulid}/play
 | `resolution` | integer | Caps every output's ladder at this resolution, read as the short edge of the picture: `1080` is 1080p for a landscape 1920x1080 rendition and for a vertical 1080x1920 one alike. Each output resolves it against its own renditions: you get the largest packaged rendition at or below your ceiling, or the full ladder when the ceiling is already at or above the largest one. |
 | `ip` | string | The viewer's address, when the link is minted from your backend. |
 | `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
+| `speedLimitKbps` | integer | Caps the transfer rate of the whole session — the manifest and every segment — in kilobits per second, the unit renditions are quoted in: `64` to `10000000`. Signed into the token, so it cannot be lifted by editing the URL. An adaptive player measures it as its bandwidth and settles on the renditions that fit under it. Omit for no limit. See [Speed limits](/guide/streaming#speed-limits). |
 
 Nothing in the body selects *what* comes back. The answer carries every manifest the video can
 serve, and you pick from it.
@@ -308,7 +310,8 @@ POST /api/videos/{ulid}/downloads
 ```json
 {
   "streamUlids": ["01KZW4GN1K3B7Y4RFQBGM0KQF6"],
-  "trackingId": "customer-42"
+  "trackingId": "customer-42",
+  "speedLimitKbps": 8000
 }
 ```
 
@@ -316,6 +319,7 @@ POST /api/videos/{ulid}/downloads
 |-------|------|-------|
 | `streamUlids` | string[] \| null | Which tracks to mint. **Omit it to get every downloadable track of the video**, which is the usual call. An empty array is taken literally and returns nothing. Up to 200 entries. |
 | `trackingId` | string \| null | Your own tracking id, applied to every link in the batch. Same rules and same behaviour as the per-track mint. |
+| `speedLimitKbps` | integer \| null | Applied to each link on its own, not shared across the batch. Same rules as the per-track mint. |
 
 The links are the same ones the per-track endpoint returns, signed per object and expiring on the
 same window. Tracks that could not be minted do not fail the request — they come back in `skipped`

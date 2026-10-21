@@ -15,6 +15,7 @@ use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\SpeedLimit;
 
 /**
  * Mints a whole video's playback links in one pass.
@@ -53,16 +54,20 @@ class VodLinkService
      * video and of the fleet, under which nothing could have been served.
      *
      * @param  string  $ip  the address that will fetch the manifests
+     * @param  int|null  $speedLimitKbps  per-request cap on every manifest and segment of the session
      */
     public function forVideo(
         Video $video,
         ?int $resolution,
         string $ip,
         ?string $trackingId = null,
+        ?int $speedLimitKbps = null,
     ): VideoVodLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
         }
+
+        SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
 
         $sources = [];
         $signed = [];
@@ -82,7 +87,7 @@ class VodLinkService
             $audioCodec = $output->audioCodec();
 
             foreach ($formats as $format) {
-                $link = $this->sign($video, $output->manifestPath($format, $cap), $ip);
+                $link = $this->sign($video, $output->manifestPath($format, $cap), $ip, $speedLimitKbps);
                 $signed[] = $link;
 
                 $sources[] = new VodSourceData(
@@ -131,10 +136,10 @@ class VodLinkService
      * The node behind this is resolved once per request, not once per call ({@see ProxyRing}),
      * which is what makes signing in a loop cheap.
      */
-    private function sign(Video $video, string $path, string $ip): SignedLink
+    private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps): SignedLink
     {
         try {
-            return $this->cdn->manifestUrl($video, $path, $ip, app()->isLocal());
+            return $this->cdn->manifestUrl($video, $path, $ip, app()->isLocal(), $speedLimitKbps);
         } catch (NoCdnNodeAvailableException) {
             // The same answer the per-output mint gives: the video exists and the caller is
             // entitled to it, there is just nothing to serve it right now.

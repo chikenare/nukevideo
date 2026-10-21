@@ -15,6 +15,7 @@ use App\Services\Cdn\CdnProvider;
 use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\SpeedLimit;
 
 /**
  * Mints download links, for one track or for a video's worth of them.
@@ -49,17 +50,21 @@ class DownloadLinkService
      * in the controller: a stream looked up by ULID alone would hand one project's masters to
      * another.
      */
-    public function forStreamUlid(string $ulid, Project $project, ?string $trackingId = null): DownloadLinkData
-    {
+    public function forStreamUlid(
+        string $ulid,
+        Project $project,
+        ?string $trackingId = null,
+        ?int $speedLimitKbps = null,
+    ): DownloadLinkData {
         $stream = Stream::with('video')
             ->whereHas('video', fn ($query) => $query->where('project_id', $project->id))
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        return $this->forStream($stream, $trackingId);
+        return $this->forStream($stream, $trackingId, $speedLimitKbps);
     }
 
-    public function forStream(Stream $stream, ?string $trackingId = null): DownloadLinkData
+    public function forStream(Stream $stream, ?string $trackingId = null, ?int $speedLimitKbps = null): DownloadLinkData
     {
         if (! in_array($stream->type, self::DOWNLOADABLE, true)) {
             abort(422, "A {$stream->type} track cannot be downloaded.");
@@ -85,8 +90,10 @@ class DownloadLinkService
             abort(404, 'This track was not retained for download.');
         }
 
+        SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+
         $key = $stream->storedPath($video);
-        $link = $this->sign($video, $key);
+        $link = $this->sign($video, $key, $speedLimitKbps);
 
         // The id never enters the URL: the token does, on every request the link produces, and
         // the mint is the only moment anyone knows whose it is.
@@ -104,12 +111,19 @@ class DownloadLinkService
      * track could have been served either way.
      *
      * @param  list<string>|null  $ulids  the tracks to mint, or null for every downloadable one
+     * @param  int|null  $speedLimitKbps  applied to each link on its own, not shared across the batch
      */
-    public function forVideo(Video $video, ?array $ulids = null, ?string $trackingId = null): VideoDownloadLinksData
-    {
+    public function forVideo(
+        Video $video,
+        ?array $ulids = null,
+        ?string $trackingId = null,
+        ?int $speedLimitKbps = null,
+    ): VideoDownloadLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
         }
+
+        SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
 
         $streams = $video->streams()->get()->keyBy('ulid');
 
@@ -143,7 +157,7 @@ class DownloadLinkService
             }
 
             $key = $stream->storedPath($video);
-            $link = $this->sign($video, $key);
+            $link = $this->sign($video, $key, $speedLimitKbps);
 
             $signed[] = $link;
             $links[] = $this->toData($stream, $key, $link);
@@ -159,10 +173,10 @@ class DownloadLinkService
      * The node behind this is resolved once per request, not once per call
      * ({@see ProxyRing}), which is what makes signing in a loop cheap.
      */
-    private function sign(Video $video, string $key): SignedLink
+    private function sign(Video $video, string $key, ?int $speedLimitKbps): SignedLink
     {
         try {
-            return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal());
+            return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal(), $speedLimitKbps);
         } catch (NoCdnNodeAvailableException) {
             // Same answer playback gives ({@see VodLinkService}): the track
             // exists and the caller is entitled to it, there is just nothing to serve it right now.
