@@ -413,6 +413,26 @@ describe('pools on mixed hardware', function () {
             ->toContain('CACHE_POOL_MD=/dev/md/nukevideo-cache');
     });
 
+    it('sizes the cache chunks to the fast tier, under LVM\'s cap of a million', function () {
+        // LVM's default 64 KiB chunk makes it refuse any fast tier over ~61 GiB: a 1 TB SSD
+        // failed the deploy at the very last step.
+        $chunk = fn (int $gib) => (int) Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'KIB' => (string) ($gib * 1024 * 1024)])
+            ->run(['bash', '-c', 'SUDO=""; . "$SCRIPT"; cache_lvm() { echo "  $KIB.00"; }; cache_chunk_kib vg/fast'])
+            ->output();
+
+        expect($chunk(1))->toBe(64)
+            ->and($chunk(894))->toBe(1024)
+            ->and($chunk(1800))->toBe(2048)
+            ->and($chunk(15000))->toBe(16384);
+
+        foreach ([1, 61, 62, 894, 960, 1800, 3600, 15000] as $gib) {
+            expect(intdiv($gib * 1024 * 1024, $chunk($gib)))->toBeLessThan(1000000)
+                ->and($chunk($gib) % 32)->toBe(0);
+        }
+
+        expect(NodeService::deployScript('cache-disks'))->toContain('--chunksize "$(cache_chunk_kib "$CACHE_VG/fast")k"');
+    });
+
     it('never leaves a disk out: a kernel without dm-cache gets one pool of every disk', function () {
         $shell = NodeService::deployScript('cache-disks');
 

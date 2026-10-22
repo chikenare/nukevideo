@@ -411,6 +411,19 @@ cache_make_pv() {
     $SUDO pvcreate -q -y "$1" >/dev/null
 }
 
+# The dm-cache chunk size for a fast volume, in KiB: the smallest power of two from 64 KiB up
+# that keeps it under LVM's cap of a million chunks (allocation/cache_pool_max_chunks). LVM's
+# own default is 64 KiB whatever the size, which a 1 TB SSD — fifteen million chunks — makes it
+# refuse outright. A chunk of a megabyte or more costs nothing here: what is cached is
+# segments, megabytes each, read whole.
+cache_chunk_kib() {
+    local size chunk=64
+    size=$(cache_lvm lvs --noheadings --units k --nosuffix -o lv_size "$1" | tr -d ' ')
+    size=${size%%.*}
+    while [ $(( ${size:-0} / chunk )) -ge 1000000 ]; do chunk=$(( chunk * 2 )); done
+    echo "$chunk"
+}
+
 # The tiers over CACHE_BULK_DEVICE and CACHE_FAST_DEVICE, each step taken only when it is
 # missing, so a deploy that died halfway through is finished by the next one rather than left
 # as a pool that never mounts. LVM refuses to activate a cached volume without `cache_check`,
@@ -436,7 +449,8 @@ cache_build_tiers() {
     if [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" != "cache" ]; then
         cache_lvm lvs "$CACHE_VG/fast" >/dev/null \
             || $SUDO lvcreate -q -y -W y -n fast -l 100%PVS "$CACHE_VG" "$CACHE_FAST_DEVICE" >/dev/null
-        $SUDO lvconvert -q -y --type cache --cachevol "$CACHE_VG/fast" --cachemode writethrough "$CACHE_VG/$CACHE_LV" >/dev/null
+        $SUDO lvconvert -q -y --type cache --cachevol "$CACHE_VG/fast" --cachemode writethrough \
+            --chunksize "$(cache_chunk_kib "$CACHE_VG/fast")k" "$CACHE_VG/$CACHE_LV" >/dev/null
     fi
 
     cache_activate_data
