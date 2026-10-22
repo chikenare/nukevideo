@@ -294,6 +294,31 @@ it('resolves the tracking id from the token hash the edge sends', function () {
     expect($rows->pluck('value', 'tracking_id')->all())->toBe(['customer-a' => 10, '' => 90]);
 });
 
+it('books the segments of a playback link minted for offline viewing as downloads', function () {
+    $video = videoOwnedBySomeone();
+
+    // The same `play` files either way: only the mark the mint recorded against the token says
+    // the app was saving them rather than streaming them. A mark that is lost (expired, cache
+    // restart) books the bytes as streaming, never drops them, and it never moves bytes out of
+    // another zone.
+    $offline = hash('sha256', 'exp=1~acl=/offline/*~hmac=aa');
+    $streamed = hash('sha256', 'exp=1~acl=/streamed/*~hmac=bb');
+    Cache::put(TrackingRegistry::downloadKey($offline), true, 600);
+    Cache::put(TrackingRegistry::cacheKey($offline), 'customer-a', 600);
+
+    $rows = storedRows([
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 10, 'zone' => 'play', 'token_hash' => $offline],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 20, 'zone' => 'play', 'token_hash' => $streamed],
+        ['video_ulid' => $video->ulid, 'ip' => '1.2.3.4', 'bytes' => 30, 'zone' => 'assets', 'token_hash' => $offline],
+    ]);
+
+    expect($rows->map(fn (array $row) => [$row['metric'], $row['tracking_id'], $row['value']])->all())->toBe([
+        ['download_bytes', 'customer-a', 10],
+        ['streaming_bytes', '', 20],
+        ['asset_bytes', 'customer-a', 30],
+    ]);
+});
+
 it('looks every hash of a batch up in one round trip', function () {
     $video = videoOwnedBySomeone();
 

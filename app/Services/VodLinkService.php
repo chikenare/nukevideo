@@ -55,6 +55,7 @@ class VodLinkService
      *
      * @param  string  $ip  the address that will fetch the manifests
      * @param  int|null  $speedLimitKbps  per-request cap on every manifest and segment of the session
+     * @param  bool  $download  the links are for an offline download, booked as `download_bytes`
      */
     public function forVideo(
         Video $video,
@@ -62,6 +63,7 @@ class VodLinkService
         string $ip,
         ?string $trackingId = null,
         ?int $speedLimitKbps = null,
+        bool $download = false,
     ): VideoVodLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
@@ -101,7 +103,7 @@ class VodLinkService
         }
 
         // One cache round trip for the whole answer rather than one per manifest.
-        $this->tracking->recordMany($signed, $trackingId);
+        $this->tracking->recordMany($signed, $trackingId, $download);
 
         return new VideoVodLinksData(
             // Resolved once, and outside the loop: both are per-video and unsigned, the same two

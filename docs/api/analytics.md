@@ -35,8 +35,8 @@ Every number on this page comes out of one `value` column whose unit lives in th
 
 | Metric | Unit | Description |
 |--------|------|-------------|
-| `streaming_bytes` | bytes | Delivered to players — manifests and CMAF segments |
-| `download_bytes` | bytes | Delivered through [track download links](/api/streams#download-a-track) |
+| `streaming_bytes` | bytes | Delivered to players streaming — manifests and CMAF segments |
+| `download_bytes` | bytes | Delivered through [track download links](/api/streams#download-a-track), and the segments of [playback URLs](/api/videos#playback-urls) minted with `download: true` for offline viewing |
 | `asset_bytes` | bytes | Thumbnails and storyboards |
 | `bandwidth_bytes` | bytes | Delivery that predates the streaming/download split, or whose path zone could not be read |
 | `upload_bytes` | bytes | Source file size of uploaded videos |

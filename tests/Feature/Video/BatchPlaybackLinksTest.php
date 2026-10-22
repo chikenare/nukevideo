@@ -235,6 +235,33 @@ it('attributes every link in the answer to the tracking id', function () {
     }
 });
 
+it('marks every link in the answer as an offline download only when asked to', function () {
+    $video = playVideo();
+    playOutput($video);
+    playOutput($video, formats: ['dash']);
+
+    $hashes = function (array $body) use ($video) {
+        return collect($this->postJson("/api/videos/{$video->ulid}/play", $body)->assertOk()->json('data.sources'))
+            ->map(function (array $source) {
+                parse_str((string) parse_url($source['url'], PHP_URL_QUERY), $query);
+
+                return hash('sha256', $query['__hdnea__']);
+            })->all();
+    };
+    $marked = fn (array $hashes) => app(TrackingRegistry::class)->lookupMany($hashes)['downloads'];
+
+    $offline = $hashes(['download' => true]);
+    $this->travel(2)->seconds();
+    $streamed = $hashes([]);
+    $this->travel(2)->seconds();
+    $explicit = $hashes(['download' => false]);
+
+    expect($offline)->toHaveCount(3)
+        ->and(array_keys($marked($offline)))->toEqualCanonicalizing(array_unique($offline))
+        ->and($marked($streamed))->toBe([])
+        ->and($marked($explicit))->toBe([]);
+});
+
 it('does not query per output', function () {
     $video = playVideo();
     foreach (range(1, 6) as $i) {
@@ -283,4 +310,5 @@ it('validates the body it takes', function () {
     $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 12])->assertStatus(422);
     $this->postJson("/api/videos/{$video->ulid}/play", ['ip' => 'nope'])->assertStatus(422);
     $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'no spaces'])->assertStatus(422);
+    $this->postJson("/api/videos/{$video->ulid}/play", ['download' => 'maybe'])->assertStatus(422);
 });

@@ -37,6 +37,11 @@ class TrackingRegistry
         return "link-tracking:{$tokenHash}";
     }
 
+    public static function downloadKey(string $tokenHash): string
+    {
+        return "link-download:{$tokenHash}";
+    }
+
     /**
      * Attribute a freshly minted link. A link with no token, or a mint that names no viewer,
      * records nothing: there is nothing to resolve, and an empty mapping would only shadow a
@@ -52,19 +57,24 @@ class TrackingRegistry
      * {@see resolveMany}. A batch is one viewer fetching one video's pieces, so the whole batch
      * shares an id.
      *
+     * `$download` marks the links as an offline download, so the ingest books their bytes as
+     * `download_bytes` rather than `streaming_bytes`: the segments are the same files either way.
+     *
      * @param  list<SignedLink>  $links
      */
-    public function recordMany(array $links, ?string $trackingId): void
+    public function recordMany(array $links, ?string $trackingId, bool $download = false): void
     {
-        if ($trackingId === null || $trackingId === '') {
-            return;
-        }
-
         $mapping = [];
 
         foreach ($links as $link) {
-            if ($link->tokenHash !== null) {
+            if ($link->tokenHash === null) {
+                continue;
+            }
+            if ($trackingId !== null && $trackingId !== '') {
                 $mapping[self::cacheKey($link->tokenHash)] = $trackingId;
+            }
+            if ($download) {
+                $mapping[self::downloadKey($link->tokenHash)] = true;
             }
         }
 
@@ -88,21 +98,40 @@ class TrackingRegistry
      */
     public function resolveMany(array $tokenHashes): array
     {
+        return $this->lookupMany($tokenHashes)['tracking'];
+    }
+
+    /**
+     * The tracking ids and the offline-download marks of a batch, in one round trip.
+     *
+     * @param  list<string>  $tokenHashes
+     * @return array{tracking: array<string, string|null>, downloads: array<string, true>}
+     */
+    public function lookupMany(array $tokenHashes): array
+    {
         $tokenHashes = array_values(array_unique($tokenHashes));
 
         if ($tokenHashes === []) {
-            return [];
+            return ['tracking' => [], 'downloads' => []];
         }
 
-        $found = Cache::many(array_map(self::cacheKey(...), $tokenHashes));
-        $resolved = [];
+        $found = Cache::many([
+            ...array_map(self::cacheKey(...), $tokenHashes),
+            ...array_map(self::downloadKey(...), $tokenHashes),
+        ]);
+        $tracking = [];
+        $downloads = [];
 
         foreach ($tokenHashes as $hash) {
             $trackingId = $found[self::cacheKey($hash)] ?? null;
-            $resolved[$hash] = is_string($trackingId) && $trackingId !== '' ? $trackingId : null;
+            $tracking[$hash] = is_string($trackingId) && $trackingId !== '' ? $trackingId : null;
+
+            if (($found[self::downloadKey($hash)] ?? null) === true) {
+                $downloads[$hash] = true;
+            }
         }
 
-        return $resolved;
+        return ['tracking' => $tracking, 'downloads' => $downloads];
     }
 
     /**

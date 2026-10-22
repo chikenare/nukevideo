@@ -111,6 +111,7 @@ class VideoController extends Controller
                 $data->ip ?? $request->ip(),
                 TrackingId::resolve($data->trackingId, $request->user()),
                 $data->speedLimitKbps,
+                $data->download ?? false,
             ),
         ]);
     }
