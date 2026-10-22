@@ -75,9 +75,9 @@ class NodeController extends Controller
         }
 
         return response()->json(['data' => [
-            // Whether the panel ticks the spare disks by default. Not from a development panel,
-            // whose deploy target is often the developer's own machine. A disk shared with the
-            // system is never ticked for the operator, here or there: its list is opt-in.
+            // Whether the panel ticks every disk the cache can use by default — spare ones and
+            // the free space of system disks. Not from a development panel, whose deploy
+            // target is often the developer's own machine.
             'preselect' => ! app()->isLocal(),
             'disks' => CacheDiskData::collect($cache->inventory($node)),
         ]]);

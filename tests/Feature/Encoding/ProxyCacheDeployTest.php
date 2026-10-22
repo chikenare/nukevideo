@@ -399,6 +399,76 @@ describe('the scripts themselves', function () {
     });
 });
 
+describe('pools on mixed hardware', function () {
+    it('caches spinning disks with the fast ones instead of striping them together', function () {
+        // An SSD in a RAID 0 of HDDs serves at HDD speed; in front of them as dm-cache it serves
+        // the hot segments. Writethrough, so the fast tier never holds the only copy.
+        $shell = NodeService::deployScript('cache-disks');
+
+        expect($shell)->toContain('queue/rotational')
+            ->toContain('CACHE_FAST_MD=/dev/md/nukevideo-fast')
+            ->toContain('--type cache --cachevol')
+            ->toContain('--cachemode writethrough')
+            // The existing array keeps its name, so a pool built before tiers is still found.
+            ->toContain('CACHE_POOL_MD=/dev/md/nukevideo-cache');
+    });
+
+    it('never leaves a disk out: a kernel without dm-cache gets one pool of every disk', function () {
+        $shell = NodeService::deployScript('cache-disks');
+
+        expect($shell)->toContain('cache_has_dm_cache')
+            ->toContain('the SSD/NVMe disks join the spinning ones in a single pool');
+    });
+
+    it('stops rather than formats a volume that will not activate', function () {
+        // An inactive volume has no device node, and a missing device reads as one with no
+        // filesystem: the one answer that is never wrong is to stop.
+        $shell = NodeService::deployScript('cache-disks');
+
+        $guard = strpos($shell, 'if [ ! -b "$CACHE_LV_DEVICE" ]; then');
+        $format = strpos($shell, 'cache_format "$CACHE_LV_DEVICE"');
+
+        expect($guard)->not->toBeFalse()
+            ->and($guard)->toBeLessThan($format)
+            ->and($shell)->toContain('Nothing was formatted.');
+    });
+
+    it('never builds an array inside a command substitution, where set -e does not reach', function () {
+        // A failed `mdadm --create` there went unnoticed, and the next line force-formatted
+        // whatever already had the array's name.
+        $shell = NodeService::deployScript('cache-disks');
+
+        expect($shell)->not->toMatch('/\$\(cache_build_array/')
+            ->toContain('ERROR: could not create $md over $* (see above). Nothing was formatted.');
+    });
+
+    it('drops a dead fast tier but never the spinning one', function () {
+        // `vgreduce --removemissing` deletes what lived on the missing device: run only when that
+        // is the cache, which is writethrough and so holds nothing the spinning tier does not.
+        $shell = NodeService::deployScript('cache-disks');
+
+        $check = strpos($shell, 'the spinning tier of the cache pool is missing');
+        $reduce = strpos($shell, 'vgreduce -q --removemissing');
+
+        expect($check)->not->toBeFalse()
+            ->and($check)->toBeLessThan($reduce)
+            ->and($shell)->toContain('lvconvert -q -y --uncache --force');
+    });
+
+    it('leaves alone an LVM disk whose volume group it cannot read', function () {
+        // `foreign` is wiped when ticked, and an unreadable PV may be a tier of this very cache.
+        expect(NodeService::deployScript('cache-disks'))
+            ->toContain('devices { use_devicesfile = 0 }')
+            ->toContain('an LVM member whose volume group could not be read');
+    });
+
+    it('needs the tools a cached volume needs to come back at boot', function () {
+        // LVM refuses to activate a cached volume without cache_check.
+        expect(NodeService::deployScript('cache-disks'))
+            ->toContain('cache_check=thin-provisioning-tools');
+    });
+});
+
 describe('reaching the edge', function () {
     it('joins the network of a reverse proxy of the host\'s own, and names it', function () {
         // A development machine's Traefik holds port 80 and is not on nukevideo_default, so it

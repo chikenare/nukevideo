@@ -62,9 +62,10 @@ const sfdiskMissing = computed(() =>
 // A proxy whose disks could not be listed cannot be deployed from here: the deploy needs an
 // explicit list, and the only list this panel could send is one it never got to show.
 const disksUnknown = computed(() => node.value?.type === 'proxy' && disksError.value !== null)
-// Every spare disk is ticked by default; unticking is for the one that would only drag a
-// stripe down or is kept for something else. Untouched disks stay exactly as they are. A
-// shared one starts unticked: putting the cache's I/O on the system's disk is a choice.
+// Everything the cache can use is ticked by default — every spare disk and the unpartitioned
+// space of the system disks — so a deploy puts all of a node's storage to work. Unticking is
+// for a disk kept for something else; untouched disks stay exactly as they are. Sharing only
+// ever adds a partition over space nothing uses, so it is safe to offer on.
 const selectedDisks = ref<string[]>([])
 // The two fates travel as two lists. The node reads each disk's state again when the deploy
 // runs, and a disk ticked as shared must not be formatted because that reading changed.
@@ -142,7 +143,7 @@ const show = async (targetNode: Node) => {
       // A production panel ticks every spare disk; a development one ticks none, because its
       // deploy target is often the developer's own machine.
       selectedDisks.value = result.preselect
-        ? result.disks.filter(d => d.state === 'empty' || d.state === 'foreign').map(d => d.device)
+        ? result.disks.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)).map(d => d.device)
         : []
     } catch (err) {
       disksError.value = (err as Error).message
