@@ -56,6 +56,9 @@ class PlayVideoData extends RequestData
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?int $speedLimitKbps = null,
+        /** The links are for an offline download: their bytes count as `download_bytes`
+         *  instead of `streaming_bytes`. Omitted or null is streaming. */
+        public ?bool $download = null,
     ) {}
 
     /**

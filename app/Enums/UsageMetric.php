@@ -25,10 +25,11 @@ enum UsageMetric: string
     /** Encoding time, in SECONDS — the one metric here that is not bytes. */
     case ENCODING_CPU = 'encoding_cpu';
 
-    /** Delivered to players: manifests and CMAF segments. */
+    /** Delivered to players streaming: manifests and CMAF segments. */
     case STREAMING_BYTES = 'streaming_bytes';
 
-    /** Delivered through a minted track download link. */
+    /** Delivered through a minted track download link, or as the segments of a playback mint
+     *  made with `download: true` — a video saved to watch offline. */
     case DOWNLOAD_BYTES = 'download_bytes';
 
     /** Thumbnails and storyboards. */

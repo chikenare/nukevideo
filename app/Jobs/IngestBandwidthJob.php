@@ -78,17 +78,17 @@ class IngestBandwidthJob implements ShouldQueue
     public function __construct(public array $events) {}
 
     /**
-     * The tracking ids of a batch, keyed by token hash. A producer sends either `token_hash` (the
+     * The tracking ids and offline-download marks of a batch, keyed by token hash. A producer sends either `token_hash` (the
      * self-hosted edge: Vector hashes the token off the log line, and the mapping the mint
      * recorded is only reachable from here) or an already resolved `tracking_id` (a producer that
      * resolved it itself); an event with neither, or with a hash nothing was recorded under, is
-     * unattributed. One cache round trip per batch, not per row: a session is hundreds of lines
-     * under one token.
+     * unattributed. One cache round trip per batch, not per row: a
+     * session is hundreds of lines under one token.
      *
      * @param  list<array<string, mixed>>  $events
-     * @return array<string, string|null>
+     * @return array{tracking: array<string, string|null>, downloads: array<string, true>}
      */
-    private function resolveTrackingIds(array $events, TrackingRegistry $registry): array
+    private function lookupTokens(array $events, TrackingRegistry $registry): array
     {
         $hashes = [];
 
@@ -102,7 +102,7 @@ class IngestBandwidthJob implements ShouldQueue
             }
         }
 
-        return $hashes === [] ? [] : $registry->resolveMany($hashes);
+        return $hashes === [] ? ['tracking' => [], 'downloads' => []] : $registry->lookupMany($hashes);
     }
 
     /**
@@ -122,10 +122,21 @@ class IngestBandwidthJob implements ShouldQueue
         return TrackingId::isValid($id) ? $id : '';
     }
 
-    /** @param array<string, mixed> $event */
-    private function metric(array $event): string
+    /**
+     * By zone, except a `play` link minted with `download: true`, which counts as a download.
+     *
+     * @param  array<string, mixed>  $event
+     * @param  array<string, true>  $downloads
+     */
+    private function metric(array $event, array $downloads): string
     {
-        return self::ZONE_METRICS[(string) ($event['zone'] ?? '')] ?? self::FALLBACK_METRIC;
+        $zone = (string) ($event['zone'] ?? '');
+
+        if ($zone === 'play' && isset($downloads[(string) ($event['token_hash'] ?? '')])) {
+            return self::ZONE_METRICS['download'];
+        }
+
+        return self::ZONE_METRICS[$zone] ?? self::FALLBACK_METRIC;
     }
 
     /** @param array<string, mixed> $event */
@@ -151,7 +162,7 @@ class IngestBandwidthJob implements ShouldQueue
     {
         $valid = [];
         $ulids = [];
-        $resolved = $this->resolveTrackingIds($this->events, $registry);
+        $tokens = $this->lookupTokens($this->events, $registry);
 
         foreach ($this->events as $event) {
             $videoUlid = (string) ($event['video_ulid'] ?? '');
@@ -167,7 +178,7 @@ class IngestBandwidthJob implements ShouldQueue
             }
 
             $valid[] = [
-                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event, $resolved), $this->metric($event),
+                $videoUlid, $ip, $bytes, $this->eventDate($event), $this->trackingId($event, $tokens['tracking']), $this->metric($event, $tokens['downloads']),
                 $this->nodeId($event), $this->cacheStatus($event), max(0, (int) ($event['origin'] ?? 0)), $this->requests($event),
             ];
             $ulids[$videoUlid] = true;

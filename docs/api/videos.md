@@ -219,7 +219,8 @@ POST /api/videos/{ulid}/play
   "resolution": 720,
   "ip": "203.0.113.7",
   "trackingId": "customer-42",
-  "speedLimitKbps": 3000
+  "speedLimitKbps": 3000,
+  "download": false
 }
 ```
 
@@ -229,6 +230,7 @@ POST /api/videos/{ulid}/play
 | `ip` | string | The viewer's address, when the link is minted from your backend. |
 | `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
 | `speedLimitKbps` | integer | Caps the transfer rate of the whole session — the manifest and every segment — in kilobits per second, the unit renditions are quoted in: `64` to `10000000`. Signed into the token, so it cannot be lifted by editing the URL. An adaptive player measures it as its bandwidth and settles on the renditions that fit under it. Omit for no limit. See [Speed limits](/guide/streaming#speed-limits). |
+| `download` | boolean | `true` when the links are for saving the video to watch offline: your app downloads the manifest and its segments with the platform's own download manager (Media3 `DownloadManager` on Android, `AVAssetDownloadTask` on iOS, Shaka's offline storage on the web) instead of streaming them. Nothing about the links changes; their bytes are booked as `download_bytes` instead of `streaming_bytes` in [analytics](/api/analytics). Omitted or `null` is streaming. The links still expire at `expiresAt`, so a download that outlives it has to mint again and resume. |
 
 Nothing in the body selects *what* comes back. The answer carries every manifest the video can
 serve, and you pick from it.

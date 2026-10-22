@@ -449,6 +449,7 @@ resolution: number | null,
 ip: string | null,
 trackingId: string | null,
 speedLimitKbps: number | null,
+download: boolean | null,
 };
 export type UpdateVideoData = {
 name: string,
