@@ -117,7 +117,9 @@ describe('a production proxy deploy', function () {
         expect($production[1] ?? null)->not->toBeNull()
             ->and($development[1] ?? null)->not->toBe($production[1] ?? null)
             ->and($script)->toContain("nukevideo.config={$development[1]}")
-            ->and($script)->toContain('= "true $TRAEFIK_CONFIG"');
+            // The node appends the checksum of the tuning it found the host accepts: a Traefik
+            // created without BBR must not be kept once the kernel has it.
+            ->and($script)->toContain('= "true $TRAEFIK_CONFIG-$EDGE_TUNING_ID"');
     });
 
     it('keeps the shell and the application agreeing on the pool\'s names', function () {
@@ -333,7 +335,7 @@ describe('traefik in front of the edge', function () {
 
         expect($script)->toContain("TRAEFIK_RUN_ARGS='--name nukevideo_traefik")
             ->and($script)->not->toContain('certificatesresolvers')
-            ->and($script)->toContain("grep -q ':80->'");
+            ->and($script)->toContain("grep ':80->'")->and($script)->toContain('if [ -n "$HOST_PROXY" ]; then');
     });
 
     it('terminates TLS in production', function () {
@@ -341,6 +343,106 @@ describe('traefik in front of the edge', function () {
 
         expect(app(NodeService::class)->buildDeployScript(cacheNode()))
             ->toContain('--certificatesresolvers.le.acme.httpchallenge.entrypoint=web');
+    });
+
+    it('publishes no dashboard: the unauthenticated API on :8080 is gone', function () {
+        inProduction();
+        preg_match("/^TRAEFIK_RUN_ARGS='(.*)'$/m", app(NodeService::class)->buildDeployScript(cacheNode()), $traefik);
+
+        expect($traefik[1] ?? '')->toContain('-p 443:443')
+            ->not->toContain('8080')
+            ->not->toContain('api.insecure');
+    });
+
+    it('tunes both containers with only the flags this host accepted', function () {
+        // A single flag the host refuses makes `docker run` refuse the container, after the old
+        // one was removed: each is tried alone on the node and the refused ones are left out.
+        inProduction();
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        preg_match("/^TRAEFIK_RUN_ARGS='(.*)'$/m", $script, $traefik);
+        preg_match("/^RUN_ARGS='(.*)'$/m", $script, $edge);
+
+        foreach ([$traefik[1] ?? '', $edge[1] ?? ''] as $args) {
+            expect($args)->toContain('$EDGE_TUNING')
+                ->not->toContain('--sysctl')
+                ->not->toContain('--ulimit');
+        }
+
+        expect($script)->toContain('net.ipv4.tcp_slow_start_after_idle=0')
+            ->toContain('net.ipv4.tcp_notsent_lowat=131072')
+            ->toContain('net.ipv4.tcp_congestion_control=bbr')
+            ->toContain('--ulimit nofile=65535:65535')
+            ->toContain('docker run --rm --entrypoint true $flag "$IMAGE"')
+            ->toContain('refused by this host, left out')
+            ->and(strpos($script, 'EDGE_TUNING_ID=$('))->toBeLessThan(strpos($script, 'run_container "$RUN_ARGS"'));
+    });
+});
+
+describe('the scripts themselves', function () {
+    it('parses, every script on its own and the whole deploy the panel sends', function () {
+        // Nothing else here would catch a broken script. A sourced file runs command by command,
+        // so a syntax error halfway down still defines every function above it, and the tests
+        // that call those functions pass while the deploy itself dies at that line. A quote left
+        // open in cache-disks.sh did exactly that.
+        foreach (glob(resource_path('deploy/*.sh')) as $file) {
+            $result = Process::run(['bash', '-n', $file]);
+            expect($result->successful())->toBeTrue(basename($file).': '.$result->errorOutput());
+        }
+
+        $script = tempnam(sys_get_temp_dir(), 'deploy');
+        file_put_contents($script, app(NodeService::class)->buildDeployScript(cacheNode()));
+        $result = Process::run(['bash', '-n', $script]);
+        unlink($script);
+
+        expect($result->successful())->toBeTrue($result->errorOutput());
+    });
+});
+
+describe('reaching the edge', function () {
+    it('joins the network of a reverse proxy of the host\'s own, and names it', function () {
+        // A development machine's Traefik holds port 80 and is not on nukevideo_default, so it
+        // picked the edge's address there and timed out on every request.
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+        preg_match("/^RUN_ARGS='(.*)'$/m", $script, $edge);
+
+        expect($edge[1] ?? '')->toContain('${EDGE_PROXY_NETWORK:+-l')
+            ->toContain('traefik.docker.network=$EDGE_PROXY_NETWORK')
+            ->and($script)->toContain('docker network connect "$EDGE_PROXY_NETWORK" "$SERVICE_CONTAINER"')
+            // One fixed network, never one guessed off the proxy, decided before the edge exists.
+            ->and($script)->toContain("HOST_PROXY_NETWORK='traefik'")
+            ->and(strpos($script, 'EDGE_PROXY_NETWORK=$HOST_PROXY_NETWORK'))->toBeLessThan(strpos($script, 'run_container "$RUN_ARGS"'));
+    });
+});
+
+describe('tuning the host for a disk-backed cache', function () {
+    it('tunes the pool and the host before it creates the containers', function () {
+        // A new network namespace copies the host's TCP buffer sizes when it is created, so a
+        // container started before the sysctls would keep the old ones.
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        $tuned = strpos($script, '/etc/sysctl.d/90-nukevideo-edge.conf');
+        $pool = strpos($script, "    cache_tune_pool\n");
+        $deployed = strpos($script, 'echo "=== Deploying proxy ==="');
+
+        expect($tuned)->not->toBeFalse()
+            ->and($pool)->not->toBeFalse()
+            ->and($pool)->toBeLessThan($deployed)
+            ->and($tuned)->toBeLessThan($deployed);
+    });
+
+    it('writes the settings an IOPS-capped pool needs, and never fails the deploy over one', function () {
+        $script = app(NodeService::class)->buildDeployScript(cacheNode());
+
+        // Sized from the host's RAM on the node, never a fixed figure: proxies differ.
+        expect($script)->toContain('vm.dirty_bytes = $DIRTY_BYTES')
+            ->toContain('vm.vfs_cache_pressure = 50')
+            ->toContain('net.ipv4.tcp_wmem = 4096 65536 33554432')
+            ->toContain('sysctl -q -e -p /etc/sysctl.d/90-nukevideo-edge.conf || echo')
+            ->toContain('CACHE_READ_AHEAD_KB=4096')
+            ->toContain('ATTR{queue/scheduler}="mq-deadline"')
+            // Past 60-persistent-storage and 63-md-raid-arrays, which set the labels it matches.
+            ->toContain('/etc/udev/rules.d/99-nukevideo-cache.rules');
     });
 });
 

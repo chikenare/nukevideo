@@ -339,6 +339,68 @@ cache_mount_pool() {
     df -h "$CACHE_POOL_MOUNT" | tail -1 | awk '{ print "Cache pool: " $2 " total, " $4 " free, mounted at " $6 }'
 }
 
+# The block layer under the pool, tuned for what an edge does to it: whole segments read
+# start to end, by a cache that is also writing what it fetches.
+#
+#  - read_ahead_kb 4096: the kernel's 128 KB default split a multi-MB segment into dozens of
+#    reads, and a pool on cloud block storage is capped in operations per second, not bytes —
+#    at 200 IOPS, 128 KB reads are ~25 MB/s off a volume rated for 200. Readahead never reads
+#    past the end of a file, so the small audio and subtitle segments cost the same as before.
+#  - mq-deadline: reads are served ahead of writes (500 ms deadline against 5 s), so the cache
+#    filling with a miss cannot starve the viewers reading hits. Not on NVMe, where `none` is
+#    the better scheduler and there is no queue worth reordering.
+#
+# Applied now, and by a udev rule keyed on the pool's labels at every boot — numbered past 63,
+# because the labels it matches on are only known once 60-persistent-storage.rules (a disk's
+# filesystem) and 63-md-raid-arrays.rules (an array's) have run. A pool member that
+# is a partition shares its queue with the OS disk; the deploy tunes that disk now, but the
+# rule only matches whole devices, so after a reboot it waits for the next deploy.
+CACHE_UDEV_RULE=/etc/udev/rules.d/99-nukevideo-cache.rules
+CACHE_READ_AHEAD_KB=4096
+
+cache_tune_queue() {
+    local queue=/sys/block/$1/queue
+    [ -d "$queue" ] || return 0
+    echo "$CACHE_READ_AHEAD_KB" | $SUDO tee "$queue/read_ahead_kb" >/dev/null 2>&1 || true
+    case "$1" in
+        nvme*|md*|dm-*) ;;
+        *) grep -qw mq-deadline "$queue/scheduler" 2>/dev/null \
+               && { echo mq-deadline | $SUDO tee "$queue/scheduler" >/dev/null 2>&1 || true; } ;;
+    esac
+    local scheduler
+    scheduler=$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$queue/scheduler" 2>/dev/null)
+    echo "  $1: readahead $(cat "$queue/read_ahead_kb" 2>/dev/null) KB, scheduler ${scheduler:-none (array: its members schedule)}"
+}
+
+# The whole device a block device's queue lives on: itself for a disk or an array, the disk it
+# sits on for a partition.
+cache_queue_of() {
+    if [ -d "/sys/block/$1" ]; then echo "$1"; else lsblk -no PKNAME "/dev/$1" 2>/dev/null | head -n1; fi
+}
+
+cache_tune_pool() {
+    local source kname member
+    source=$(findmnt -n -o SOURCE --target "$CACHE_POOL_MOUNT" 2>/dev/null) || return 0
+    kname=$(lsblk -no KNAME "$source" 2>/dev/null | head -n1)
+    [ -n "$kname" ] || return 0
+
+    cache_tune_queue "$(cache_queue_of "$kname")"
+    for member in /sys/block/"$kname"/slaves/*; do
+        [ -e "$member" ] && cache_tune_queue "$(cache_queue_of "$(basename "$member")")"
+    done
+
+    # Not fatal: the queues are already tuned for this boot, and a pool must not fail its deploy
+    # over a rule that only matters at the next one.
+    $SUDO tee "$CACHE_UDEV_RULE" >/dev/null 2>&1 <<RULES || echo "WARNING: could not write $CACHE_UDEV_RULE"
+# Written by the nukevideo deploy (resources/deploy/cache-disks.sh); see cache_tune_pool there.
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_FS_LABEL}=="$CACHE_POOL_LABEL", ATTR{queue/read_ahead_kb}="$CACHE_READ_AHEAD_KB"
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_FS_LABEL}=="$CACHE_POOL_LABEL", KERNEL!="nvme*|md*|dm-*", ATTR{queue/scheduler}="mq-deadline"
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_FS_TYPE}=="linux_raid_member", ENV{ID_FS_LABEL}=="*$CACHE_POOL_NAME", ATTR{queue/read_ahead_kb}="$CACHE_READ_AHEAD_KB"
+ACTION=="add|change", SUBSYSTEM=="block", ENV{DEVTYPE}=="disk", ENV{ID_FS_TYPE}=="linux_raid_member", ENV{ID_FS_LABEL}=="*$CACHE_POOL_NAME", KERNEL!="nvme*", ATTR{queue/scheduler}="mq-deadline"
+RULES
+    $SUDO udevadm control --reload 2>/dev/null || true
+}
+
 # Leaves CACHE_MOUNT pointing at this node's directory on the pool, or empty when the host
 # has no disk, and no room on its system disks, to give — the caller then falls back to a docker volume. Idempotent on the pool:
 # a redeploy, which is how a node is updated, keeps the cache. Growing a RAID 0 means

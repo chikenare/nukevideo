@@ -24,7 +24,7 @@ Client → Delivery (proxy node or Bunny CDN) → S3 (CMAF) → Client
 1. The client requests a manifest with a signed token.
 2. The delivery layer validates the token.
 3. The manifest is served, then the client fetches the CMAF segments it references.
-4. Segments are cached at the edge; manifests bypass the cache so updates are picked up immediately.
+4. Segments are cached at the edge; manifests for 30 seconds, so an update is picked up within half a minute.
 
 There are two delivery paths — self-hosted **proxy nodes** or **Bunny CDN**. Both serve the same static CMAF from S3; only the front door differs. See [CDN & Delivery](/guide/cdn) for the full comparison and setup.
 
@@ -101,7 +101,7 @@ to enforce it.
 
 ## Caching
 
-The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests bypass the cache** to stay fresh. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
+The delivery layer caches CMAF **segments** locally (or at the CDN edge) so repeated requests don't hit S3 every time. **Manifests** are cached for 30 seconds: the cache keeps the bucket's copy and the edge writes each viewer's token into it on the way out, so a playback start skips the trip to S3 and still gets a token of its own. Manifests and subtitle cues are served gzip-compressed. A self-hosted proxy node caches into its own disk pool, sized automatically — see [Nodes: Cache disks](/guide/nodes#cache-disks).
 
 ## Bandwidth Monitoring
 

@@ -550,6 +550,11 @@ class NodeService
                 '-v "$CACHE_MOUNT:'.ProxyCacheService::CONTAINER_PATH.'"',
                 '${CACHE_MAX_SIZE:+-e "VOD_CACHE_MAX_SIZE=$CACHE_MAX_SIZE"}',
                 '${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}',
+                // What proxy.sh found this host accepts out of EDGE_TUNING_FLAGS.
+                '$EDGE_TUNING',
+                // Set by proxy.sh when the host's own reverse proxy holds port 80: the network the
+                // edge joins to be reachable from it, named so that proxy routes over that one.
+                '${EDGE_PROXY_NETWORK:+-l "traefik.docker.network=$EDGE_PROXY_NETWORK"}',
             ],
             'log_opts' => self::PROXY_LOG_OPTS,
             // nginx is PID 1, and SIGTERM is its fast shutdown: open connections are dropped.
@@ -568,6 +573,8 @@ class NodeService
             // the script reads each disk's state again, and what was agreed to for a disk —
             // format it, or only add a partition to it — must not depend on that reading.
             'CHOSEN_SHARED' => implode(' ', $sharedDisks),
+            'EDGE_TUNING_CANDIDATES' => implode("\n", self::EDGE_TUNING_FLAGS),
+            'HOST_PROXY_NETWORK' => self::HOST_PROXY_NETWORK,
             ...$this->traefikVars($isProduction, $this->cloudflare->proxies($node)),
         ];
     }
@@ -585,7 +592,7 @@ class NodeService
      */
     private function traefikVars(bool $tls, bool $behindCloudflare = false): array
     {
-        $command = '--api.insecure=true --providers.docker=true --providers.docker.exposedbydefault=false'
+        $command = '--providers.docker=true --providers.docker.exposedbydefault=false'
             .' --entrypoints.web.address=:80';
 
         if ($tls) {
@@ -607,8 +614,13 @@ class NodeService
             }
         }
 
+        // No dashboard and no :8080. `--api.insecure` served Traefik's API unauthenticated on a
+        // port published to the internet — every router, hostname and backend of the node to
+        // anyone who asked — and nothing in the deploy or the panel ever read it.
         $options = [
-            'ports' => $tls ? ['80:80', '443:443', '8080:8080'] : ['80:80', '8080:8080'],
+            'ports' => $tls ? ['80:80', '443:443'] : ['80:80'],
+            // Traefik holds the viewers' sockets, so it is where the TCP tuning matters most.
+            'raw' => ['$EDGE_TUNING'],
             'volumes' => [
                 '/var/run/docker.sock:/var/run/docker.sock:ro',
                 'traefik_certs:/certs',
@@ -619,9 +631,12 @@ class NodeService
         $config = substr(md5($this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, $options)), 0, 12);
 
         return [
+            // The node appends the checksum of the tuning it found the host accepts, which is
+            // decided there and sits in the hashed arguments as a literal: a Traefik created
+            // without BBR would otherwise be kept by every deploy after the kernel gained it.
             'TRAEFIK_RUN_ARGS' => $this->buildDockerRunArgs('nukevideo_traefik', self::TRAEFIK_IMAGE, [
                 ...$options,
-                'labels' => ["nukevideo.config={$config}"],
+                'raw' => [...$options['raw'], '-l "nukevideo.config='.$config.'-$EDGE_TUNING_ID"'],
             ]),
             'TRAEFIK_CONFIG' => $config,
             'TRAEFIK_IMAGE' => self::TRAEFIK_IMAGE,
@@ -843,6 +858,36 @@ class NodeService
      * hand whoever reads the OS disk a week of live links.
      */
     private const PROXY_LOG_OPTS = '--log-opt max-size=20m --log-opt max-file=3';
+
+    /**
+     * The network a reverse proxy of the host's own is expected on, when one holds port 80 in
+     * place of ours — the external network the getting-started guide creates for the
+     * development Traefik. Fixed rather than read off that proxy, so a deploy does not guess.
+     */
+    private const HOST_PROXY_NETWORK = 'traefik';
+
+    /**
+     * Per-container tuning for Traefik and the edge, the sockets that carry video. Candidates:
+     * proxy.sh tries each one alone on the node and keeps those the host accepts, because a
+     * single refused flag stops `docker run` and leaves the node without that container.
+     *
+     *  - slow_start_after_idle: a player fetches a 10 s segment and then waits, and Linux resets
+     *    an idle connection to slow start, so every segment started over at the initial window.
+     *  - notsent_lowat: keeps what waits unsent in the kernel small, so BBR paces it instead of
+     *    it piling up. A new namespace starts it at "unlimited" rather than copying the host's.
+     *  - BBR: CUBIC halves the window on a single loss, and a 10 s segment over a long or lossy
+     *    path never climbs back before it ends. Needs the kernel module, hence the probe.
+     *  - nofile: `worker_rlimit_nofile` can only raise the soft limit to the hard one the daemon
+     *    hands out, which is not the same on every host.
+     *
+     * @var list<string>
+     */
+    private const EDGE_TUNING_FLAGS = [
+        '--sysctl net.ipv4.tcp_slow_start_after_idle=0',
+        '--sysctl net.ipv4.tcp_notsent_lowat=131072',
+        '--sysctl net.ipv4.tcp_congestion_control=bbr',
+        '--ulimit nofile=65535:65535',
+    ];
 
     /**
      * How every container resolves names. glibc sends a lookup's A and AAAA queries at once from

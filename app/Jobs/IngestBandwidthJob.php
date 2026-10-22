@@ -69,7 +69,8 @@ class IngestBandwidthJob implements ShouldQueue
      * What nginx can say about a cache lookup. Clamped to the set rather than stored as received,
      * because the value is parsed out of a log line: an unknown word becomes '' — "unknown" —
      * which the hit-ratio query leaves out, and never a string wider than the column. `OFF` is
-     * the download location (no cache), `BYPASS` the manifests.
+     * the download location (no cache), `BYPASS` the manifests of an edge from before they were
+     * cached.
      */
     private const CACHE_STATUSES = ['HIT', 'MISS', 'EXPIRED', 'STALE', 'UPDATING', 'REVALIDATED', 'BYPASS', 'OFF'];
 

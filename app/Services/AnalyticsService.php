@@ -366,9 +366,11 @@ class AnalyticsService
      * numbers that say whether a node needs more disk (ratio falling with a full pool) or the
      * fleet needs another node (ratio fine, egress at the node's limit).
      *
-     * The ratio counts only the lookups the cache was asked about: `BYPASS` (manifests), `OFF`
-     * (downloads) and '' (an edge from before the field) are left out rather than counted as
-     * misses, or a node serving many downloads would look like it had no cache at all. Origin
+     * The ratio counts only the lookups the cache was asked about: `BYPASS` (manifests, on an
+     * edge from before they were cached), `OFF` (downloads) and '' (an edge from before the
+     * field) are left out rather than counted as misses, or a node serving many downloads would
+     * look like it had no cache at all. `REVALIDATED` counts as a hit: the bytes came off the
+     * pool, and S3 only answered a 304 — which is every manifest each 30 seconds. Origin
      * bytes live under account 0 and their own metric ({@see IngestBandwidthJob}), so
      * the grouping is on the node alone. Node 0 — rows that predate the dimension — is dropped.
      *
@@ -384,7 +386,7 @@ class AnalyticsService
             ->select('node_id')
             ->selectRaw("sum(case when metric in ({$in}) then value else 0 end) as delivered_bytes", $delivery)
             ->selectRaw('sum(case when metric = ? then value else 0 end) as origin_bytes', [IngestBandwidthJob::ORIGIN_METRIC])
-            ->selectRaw("sum(case when metric in ({$in}) and cache = 'HIT' then value else 0 end) as hit_bytes", $delivery)
+            ->selectRaw("sum(case when metric in ({$in}) and cache in ('HIT', 'REVALIDATED') then value else 0 end) as hit_bytes", $delivery)
             ->selectRaw("sum(case when metric in ({$in}) and cache not in ('', 'BYPASS', 'OFF') then value else 0 end) as cached_bytes", $delivery)
             ->groupBy('node_id')
             ->orderBy('node_id')

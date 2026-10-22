@@ -54,7 +54,7 @@ Proxy nodes run a custom nginx build that delivers the **pre-packaged CMAF** fro
 They handle:
 - Validating Akamai-style stream tokens
 - Reading packaged segments from S3 using AWS authentication
-- Local segment caching (manifests bypass the cache)
+- Local segment caching (manifests for 30 seconds, so a playback start skips the trip to S3)
 - Cloudflare real-IP resolution
 - Shipping access-log bandwidth to the API via Vector.dev
 
