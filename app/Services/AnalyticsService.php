@@ -325,18 +325,22 @@ class AnalyticsService
 
     public function topVideos(string $from, string $to, int $limit = self::TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
     {
-        return self::rows(
+        // `sessions` and `unique_ips` are the same count under the names the response has always
+        // carried. Counted once: a distinct count is the expensive part of this query, and asking
+        // for the same one twice made the database do it twice.
+        $rows = self::rows(
             $this->bandwidth($from, $to, $video, $trackingId, $metric, $projectId)
                 ->where('video_ulid', '!=', '')
                 ->select('video_ulid as video')
                 ->selectRaw("'' as external_resource_id")
                 ->selectRaw('sum(value) as bytes')
                 ->selectRaw('count(distinct ip) as sessions')
-                ->selectRaw('count(distinct ip) as unique_ips')
                 ->groupBy('video_ulid')
                 ->orderByDesc('bytes')
                 ->limit($limit)
         );
+
+        return array_map(fn (array $row) => $row + ['unique_ips' => $row['sessions']], $rows);
     }
 
     public function bandwidthByVideo(string $from, string $to, int $limit = self::SERIES_TOP_N_DEFAULT, ?string $video = null, ?string $trackingId = null, ?string $metric = null, ?int $projectId = null): array
@@ -415,13 +419,17 @@ class AnalyticsService
 
     public function usageSummary(string $from, string $to, ?int $projectId = null): array
     {
-        $query = self::usage($from, $to)->select('metric')->selectRaw('sum(value) as total')->groupBy('metric');
+        $usage = ['upload_bytes' => 0, 'encoding_cpu' => 0];
+
+        // Named rather than filtered afterwards: the two metrics are a handful of rows against the
+        // range's millions of delivery rows, and only the metric-led index can skip those.
+        $query = self::usage($from, $to)
+            ->whereIn('metric', array_keys($usage))
+            ->select('metric')->selectRaw('sum(value) as total')->groupBy('metric');
 
         if ($projectId !== null) {
             $query->where('project_id', $projectId);
         }
-
-        $usage = ['upload_bytes' => 0, 'encoding_cpu' => 0];
 
         foreach ($query->get() as $row) {
             if (isset($usage[$row->metric])) {
