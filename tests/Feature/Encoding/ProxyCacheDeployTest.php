@@ -433,6 +433,26 @@ describe('pools on mixed hardware', function () {
         expect(NodeService::deployScript('cache-disks'))->toContain('--chunksize "$(cache_chunk_kib "$CACHE_VG/fast")k"');
     });
 
+    it('tunes a chain with device-mapper volumes in it without ending the deploy', function () {
+        // Recent kernels give a dm volume no scheduler file, and under `set -e` reading it ended
+        // the deploy silently right after the tiered pool was mounted.
+        $sys = sys_get_temp_dir().'/nukevideo-sysblock-'.uniqid();
+        foreach (['dm-0' => null, 'md127' => '[none]', 'sdb' => '[none] mq-deadline'] as $device => $scheduler) {
+            mkdir("{$sys}/{$device}/queue", 0777, true);
+            file_put_contents("{$sys}/{$device}/queue/read_ahead_kb", "128\n");
+            $scheduler === null || file_put_contents("{$sys}/{$device}/queue/scheduler", "{$scheduler}\n");
+        }
+
+        $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'CACHE_SYS_BLOCK' => $sys])
+            ->run(['bash', '-c', 'set -e; SUDO=""; . "$SCRIPT"; for q in dm-0 md127 sdb; do cache_tune_queue "$q"; done; echo DONE']);
+        Process::run(['rm', '-rf', $sys]);
+
+        expect($result->successful())->toBeTrue()
+            ->and($result->output())->toContain('dm-0: readahead 4096 KB')
+            ->toContain('sdb: readahead 4096 KB')
+            ->toContain('DONE');
+    });
+
     it('never leaves a disk out: a kernel without dm-cache gets one pool of every disk', function () {
         $shell = NodeService::deployScript('cache-disks');
 

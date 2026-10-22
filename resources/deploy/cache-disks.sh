@@ -625,9 +625,11 @@ cache_mount_pool() {
 # queue is the OS disk's) and a tier on a single bare disk (an LVM volume, not an array).
 CACHE_UDEV_RULE=/etc/udev/rules.d/99-nukevideo-cache.rules
 CACHE_READ_AHEAD_KB=4096
+# Where the queues are read from; only ever moved by the tests.
+CACHE_SYS_BLOCK=${CACHE_SYS_BLOCK:-/sys/block}
 
 cache_tune_queue() {
-    local queue=/sys/block/$1/queue
+    local queue=$CACHE_SYS_BLOCK/$1/queue
     [ -d "$queue" ] || return 0
     echo "$CACHE_READ_AHEAD_KB" | $SUDO tee "$queue/read_ahead_kb" >/dev/null 2>&1 || true
     case "$1" in
@@ -635,8 +637,11 @@ cache_tune_queue() {
         *) grep -qw mq-deadline "$queue/scheduler" 2>/dev/null \
                && { echo mq-deadline | $SUDO tee "$queue/scheduler" >/dev/null 2>&1 || true; } ;;
     esac
+    # `|| true`: a device-mapper volume — the cached volume and its tiers — has no scheduler
+    # file at all on recent kernels, and under `set -e` this assignment then ended the deploy
+    # without a word, right after the pool was mounted.
     local scheduler
-    scheduler=$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$queue/scheduler" 2>/dev/null)
+    scheduler=$(sed -n 's/.*\[\(.*\)\].*/\1/p' "$queue/scheduler" 2>/dev/null) || true
     echo "  $1: readahead $(cat "$queue/read_ahead_kb" 2>/dev/null) KB, scheduler ${scheduler:-none (array: its members schedule)}"
 }
 
