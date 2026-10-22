@@ -7,6 +7,7 @@ use App\Models\Output;
 use App\Services\Cdn\BunnyProvider;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\SpeedLimit;
 use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapInputName;
 use Spatie\LaravelData\Attributes\Validation\IP;
@@ -46,6 +47,15 @@ class PlayVideoData extends RequestData
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?string $trackingId = null,
+        /**
+         * Caps the transfer rate of every request the session makes — the manifests and each
+         *  segment, which inherit the manifest's token. Per request, not per viewer: a player
+         *  fetching two segments at once gets twice this. An ABR player measures it as its
+         *  throughput and settles on the renditions that fit under it, in kilobits per second ({@see SpeedLimit}). Signed into
+         * the token, so the viewer cannot lift it by editing the URL. Omit it for no limit.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?int $speedLimitKbps = null,
     ) {}
 
     /**
@@ -57,6 +67,7 @@ class PlayVideoData extends RequestData
     {
         return [
             'trackingId' => TrackingId::rules(),
+            'speedLimitKbps' => SpeedLimit::rules(),
         ];
     }
 }

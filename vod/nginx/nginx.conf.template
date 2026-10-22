@@ -1,7 +1,18 @@
 worker_processes  auto;
 
+# The container starts with a soft limit of 1024 descriptors, under the 4096 connections a worker
+# was told it may take — and a cache miss holds four or five at once (the viewer, both ends of the
+# loopback hop, the S3 socket, the cache file), so a worker ran out at a couple of hundred
+# concurrent misses. The master is root and may raise its workers to the hard limit.
+worker_rlimit_nofile 65535;
+
+# Disk reads off the cache pool run here instead of in the worker. A worker that blocks on a cold
+# read of a 10 TB pool stalls every connection it holds, cache hits included; with the pool on
+# spinning disks that was most reads past the page cache.
+thread_pool default threads=32 max_queue=65536;
+
 events {
-    worker_connections  4096;
+    worker_connections  16384;
     multi_accept on;
 }
 http {
@@ -9,6 +20,50 @@ http {
     server_tokens off;
     sendfile on;
     tcp_nopush on;
+    aio threads;
+    aio_write on;
+
+    # The descriptors of hot segments, kept open across requests: a popular video's current
+    # segments are read thousands of times a minute, each one an open() and a stat() otherwise.
+    # Segments never change under a name, so a cached descriptor is never a stale one. Per
+    # worker, and every entry holds a descriptor open: the ceiling stays well under
+    # worker_rlimit_nofile, which the connections need too.
+    open_file_cache max=16384 inactive=60s;
+    open_file_cache_valid 60s;
+    open_file_cache_min_uses 2;
+    open_file_cache_errors off;
+
+    # Manifests and subtitle cues are text, and an MPD of a full AV1 ladder is tens of kB of
+    # repetitive XML. Compressed after `secure_token` has rewritten it, so the tokens survive.
+    # `proxied any` because every request here comes through Traefik, and the media types are
+    # what the bucket answers with ({@see PackageVideoJob} sets them on upload).
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 512;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types application/dash+xml application/vnd.apple.mpegurl application/x-mpegurl text/vtt;
+
+    # The loopback hop to the signing server below. Without a pool every request opened a fresh
+    # TCP connection to it, and the server behind it one more to S3.
+    upstream edge_origin {
+        server 127.0.0.1:8080;
+        keepalive 64;
+    }
+
+    # The bucket, held open between misses: without a pool every cache miss and every download
+    # paid a TCP and a TLS handshake to S3 before its first byte. Re-resolved while running
+    # (`resolve`, nginx 1.27.3+) when the entrypoint found a resolver, so an endpoint that moves
+    # its addresses — most hosted S3 does — is followed instead of pinned to whatever it answered
+    # at boot. The idle timeout stays under the ones S3 servers close on, so nginx drops a pooled
+    # connection before the far end does.
+    resolver ${EDGE_RESOLVER} valid=30s ipv6=off;
+    upstream s3_origin {
+        zone s3_origin 64k;
+        server ${AWS_ENDPOINT_SERVER} ${AWS_ENDPOINT_RESOLVE};
+        keepalive 32;
+        keepalive_timeout 15s;
+    }
 
     map $uri $video_ulid {
         "~^/(?<v>[0-9A-Za-z]{26})/"  $v;
@@ -23,17 +78,23 @@ http {
         default                             "";
     }
 
-    map $uri $is_manifest {
-        "~\.(mpd|m3u8)$"  1;
-        default           0;
-    }
-
     # What the cache did with the request, for the log. Empty means the location had no cache at
-    # all (downloads), which is `OFF` downstream; `BYPASS` is a manifest. Both are excluded from
-    # the hit ratio, and the identity map is what keeps the variable from rendering as `-`.
+    # all (downloads), which is `OFF` downstream and excluded from the hit ratio; the identity
+    # map is what keeps the variable from rendering as `-`.
     map $upstream_cache_status $cache_status {
         ""       "OFF";
         default  $upstream_cache_status;
+    }
+
+    # The per-link speed limit, in bytes per second, read out of the token the request carried.
+    # The API signs it in as a `limit` field (App\Services\Cdn\SelfHostedProvider::sign); the
+    # validator ignores fields it does not know but signs everything before `~hmac=`, so a value
+    # read here passed the HMAC — a viewer who edits it gets a 403, not a faster link. No field
+    # is 0, which `limit_rate` reads as unlimited. Keyed on $link_token rather than the argument
+    # because `strip_token` removes the argument once it validates (see `set $link_token`).
+    map $link_token $link_limit {
+        "~(^|~)limit=(?<l>[0-9]+)(~|$)"  $l;
+        default                          0;
     }
 
     log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
@@ -54,6 +115,9 @@ http {
 
     tcp_nodelay     on;
     keepalive_timeout  65;
+    # Traefik holds a pool of connections to this server and reuses them for every viewer; the
+    # default 1000 requests recycled each of them every few seconds under load.
+    keepalive_requests 10000;
 
     # Sizes are computed by the entrypoint from the filesystem the cache sits on; see there for
     # what each one guards. The loader and manager are sped up from their defaults because the
@@ -78,7 +142,7 @@ http {
     }
 
     server {
-        listen 80;
+        listen 80 reuseport;
 
         include /usr/local/nginx/conf/cloudflare-realip.conf;
 
@@ -143,7 +207,7 @@ http {
             add_header Access-Control-Allow-Origin "*" always;
             add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
 
-            proxy_pass http://127.0.0.1:8080;
+            proxy_pass http://edge_origin;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
         }
@@ -173,8 +237,12 @@ http {
             akamai_token_validate_strip_token ${VOD_TOKEN_NAME};
 
             proxy_buffering on;
-            proxy_buffers 64 64k;
+            proxy_buffers 16 64k;
             proxy_max_temp_file_size 0;
+
+            # Per request, so a download manager opening four ranged connections gets four times
+            # it; the upstream read is paced by the client either way (no temp file, above).
+            limit_rate $link_limit;
 
             add_header X-Cache-Status "OFF" always;
             # A download is meant to land on disk, not in a player tab. The panel lives on another
@@ -192,7 +260,7 @@ http {
             add_header Access-Control-Allow-Origin "*" always;
             add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges, Content-Disposition" always;
 
-            proxy_pass http://127.0.0.1:8080;
+            proxy_pass http://edge_origin;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
         }
@@ -230,15 +298,35 @@ http {
             secure_token_expires_time ${SECURE_TOKEN_EXPIRES_TIME};
             secure_token_query_token_expires_time ${SECURE_TOKEN_QUERY_EXPIRES_TIME};
 
+            # Applies to the segments because they carry the manifest's token (above), so a capped
+            # link caps the whole session. It paces what this edge sends, cache hit or miss alike.
+            limit_rate $link_limit;
+
             # Keyed on the path alone. With the Origin in the key every embedding site got its own
             # copy of every segment, and Vary is ignored for the same reason: the response no
             # longer differs by origin once the CORS headers below replace the bucket's.
+            #
+            # Manifests are cached too, for 30 seconds (the X-Accel-Expires the signing server
+            # sets on them): the cache keeps the bucket's bytes and `secure_token` rewrites them on
+            # the way out, so every viewer still gets their own token. They used to bypass the cache
+            # entirely, which put an S3 round trip in front of every playback start.
+            #
+            # The lock holds the viewers of a segment that is still on its way in from S3 instead
+            # of sending each of them there too. Five seconds, the default, is short for a 10 s
+            # AV1 segment of a top rung — tens of MB — on a slow origin, and past it every waiter
+            # fetches on its own and caches nothing. `revalidate` turns the refetch of a segment
+            # whose 30 days ran out into a 304.
             proxy_cache vod_cache;
             proxy_cache_key "$uri";
+            # A miss is written to the pool as it arrives; 4 KB buffers made that thousands of
+            # small writes for one segment.
+            proxy_buffer_size 64k;
+            proxy_buffers 16 64k;
             proxy_cache_use_stale error timeout updating;
             proxy_cache_lock on;
-            proxy_no_cache $is_manifest;
-            proxy_cache_bypass $is_manifest;
+            proxy_cache_lock_timeout 30s;
+            proxy_cache_lock_age 30s;
+            proxy_cache_revalidate on;
             proxy_ignore_headers Cache-Control Expires Set-Cookie Vary;
             proxy_cache_valid 200 30d;
             proxy_cache_valid 404 1m;
@@ -254,21 +342,46 @@ http {
             add_header Access-Control-Allow-Origin "*" always;
             add_header Access-Control-Expose-Headers "Content-Length, Content-Range, Accept-Ranges" always;
 
-            proxy_pass http://127.0.0.1:8080;
+            proxy_pass http://edge_origin;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
         }
+    }
+
+    # How long the edge may keep a manifest, as the signing server tells it (see `location /`).
+    # Empty for everything else, which `add_header` then leaves out, so segments keep their 30 days.
+    map $uri $manifest_ttl {
+        "~\.(mpd|m3u8)$"  30;
+        default           "";
     }
 
     server {
         listen 127.0.0.1:8080;
 
         access_log off;
+        keepalive_requests 100000;
+        # Compression is the outer server's job, after `secure_token`. Inherited from `http`,
+        # this hop gzipped a manifest for whichever viewer's Accept-Encoding the miss forwarded,
+        # and the outer cached those compressed bytes — which `secure_token` cannot rewrite — for
+        # every viewer after it: segment URLs with no token, and every segment a 403.
+        gzip off;
 
         location / {
             rewrite "^.*$" "/${AWS_BUCKET}$uri?" break;
 
-            proxy_pass ${AWS_ENDPOINT};
+            # Streamed straight through, never buffered here. With buffering on, a download read
+            # slowly by its viewer was spooled by THIS hop into a temp file in the container's
+            # own filesystem — the OS disk — up to a GB per download, which the `download`
+            # location's `proxy_max_temp_file_size 0` was there to prevent and could not reach.
+            # The cache fill does not need it either: that side writes to the pool as it reads.
+            proxy_buffering off;
+            proxy_buffer_size 64k;
+            # Unused while buffering is off, but nginx validates them against the buffer size.
+            proxy_buffers 4 64k;
+
+            add_header X-Accel-Expires $manifest_ttl;
+
+            proxy_pass ${AWS_ENDPOINT_SCHEME}://s3_origin;
             proxy_http_version 1.1;
             proxy_set_header Connection "";
             proxy_ssl_server_name on;

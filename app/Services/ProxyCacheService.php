@@ -8,6 +8,12 @@ use App\Models\Node;
 /**
  * The edge cache disks of a proxy node: finding them, formatting them and mounting them.
  *
+ * Nodes are not alike, and the pool adapts to what each one has (see `cache_create_pool` in the
+ * script): disks of one kind make the RAID 0 described below, and a mix of spinning disks with
+ * SSD/NVMe is built in two tiers — the spinning RAID 0 for capacity and the fast disks as an LVM
+ * dm-cache in front of it — so the fast disks serve the hot segments instead of being striped
+ * down to the speed of the slow ones.
+ *
  * The bash itself is `resources/deploy/cache-disks.sh`; this class holds the constants the
  * rest of the application needs to agree with it, and the panel's read-only listing.
  *
@@ -118,6 +124,9 @@ class ProxyCacheService
                 NodeService::deployScript('cache-disks'),
                 // Onto stderr: stdout is the listing, and only the listing.
                 'ensure_commands sfdisk=fdisk >&2 || true',
+                // What tells a tier of this cache from someone else's LVM disk: without it every
+                // LVM member is listed as unreadable, and so untouchable.
+                'ensure_commands lvcreate=lvm2 >&2 || true',
                 'cache_disk_inventory',
                 '',
             ]),

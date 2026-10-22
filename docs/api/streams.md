@@ -59,12 +59,13 @@ the per-request work this endpoint repeats is per video rather than per track.
 **Request Body:**
 
 ```json
-{ "trackingId": "customer-42" }
+{ "trackingId": "customer-42", "speedLimitKbps": 8000 }
 ```
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `trackingId` | string \| null | Your own tracking id — a customer, a tenant. The bytes of the transfer land against it in the bandwidth analytics. Up to 64 characters of `A-Z a-z 0-9 _ -`. |
+| `speedLimitKbps` | integer \| null | Caps the transfer rate, in **kilobits** per second (divide by 8 for kB/s): `64` to `10000000`. Signed into the token, so it cannot be lifted by editing the URL. Enforced per request, so a download manager opening several ranged connections gets this much per connection. Omit for no limit. See [Speed limits](/guide/streaming#speed-limits). |
 
 The id never enters the link, nor the response. The mint records the link's token against your id
 server-side, and the CDN's access log — which carries the token on every request the link

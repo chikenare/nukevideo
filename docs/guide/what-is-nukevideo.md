@@ -36,7 +36,7 @@ Define reusable encoding configurations with custom video/audio streams, resolut
 ### Flexible Delivery
 Choose per deployment how packaged content reaches viewers:
 
-- **Self-hosted proxy nodes** — A custom nginx build that validates Akamai-style stream tokens, serves the pre-packaged CMAF from S3 with AWS auth, and caches segments locally (manifests bypass the cache).
+- **Self-hosted proxy nodes** — A custom nginx build that validates Akamai-style stream tokens, serves the pre-packaged CMAF from S3 with AWS auth, and caches segments locally (manifests for 30 seconds).
 - **Bunny CDN** — A Bunny pull-zone with HMAC token authentication that pulls directly from your S3 origin, with no proxy nodes to operate.
 
 See [CDN & Delivery](/guide/cdn) for a full comparison.

@@ -82,6 +82,7 @@ class VideoController extends Controller
                 $video,
                 $data->streamUlids,
                 TrackingId::resolve($data->trackingId, $request->user()),
+                $data->speedLimitKbps,
             ),
         ]);
     }
@@ -109,6 +110,7 @@ class VideoController extends Controller
                 // which is right when the player itself is asking.
                 $data->ip ?? $request->ip(),
                 TrackingId::resolve($data->trackingId, $request->user()),
+                $data->speedLimitKbps,
             ),
         ]);
     }

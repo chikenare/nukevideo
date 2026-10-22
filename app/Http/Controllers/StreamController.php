@@ -34,7 +34,12 @@ class StreamController extends Controller
     public function download(Request $request, DownloadStreamData $data, string $ulid)
     {
         return response()->json([
-            'data' => $this->downloads->forStreamUlid($ulid, $request->project(), TrackingId::resolve($data->trackingId, $request->user())),
+            'data' => $this->downloads->forStreamUlid(
+                $ulid,
+                $request->project(),
+                TrackingId::resolve($data->trackingId, $request->user()),
+                $data->speedLimitKbps,
+            ),
         ]);
     }
 

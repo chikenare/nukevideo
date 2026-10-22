@@ -1,7 +1,34 @@
 #!/bin/sh
 set -e
 
-export AWS_ENDPOINT_HOST=$(echo "$AWS_ENDPOINT" | sed 's|https\?://||')
+# The S3 endpoint, taken apart for the `s3_origin` upstream: a `server` there takes host:port
+# with no scheme, and its default port is 80 whatever the scheme — so an https endpoint with no
+# port would have been dialled in TLS on port 80. A trailing path (`https://s3.host/`) is dropped.
+AWS_ENDPOINT_SCHEME=$(echo "$AWS_ENDPOINT" | sed -n 's|^\([A-Za-z]*\)://.*|\1|p' | tr 'A-Z' 'a-z')
+export AWS_ENDPOINT_SCHEME="${AWS_ENDPOINT_SCHEME:-https}"
+export AWS_ENDPOINT_HOST=$(echo "$AWS_ENDPOINT" | sed 's|^[A-Za-z]*://||; s|/.*$||')
+# A port is what follows the last colon — except inside an IPv6 literal's brackets.
+case "$AWS_ENDPOINT_HOST" in
+    \[*\]:*|[!\[]*:*) export AWS_ENDPOINT_SERVER="$AWS_ENDPOINT_HOST" ;;
+    *) [ "$AWS_ENDPOINT_SCHEME" = "https" ] && PORT=443 || PORT=80
+       export AWS_ENDPOINT_SERVER="$AWS_ENDPOINT_HOST:$PORT" ;;
+esac
+
+# Who re-resolves the endpoint while nginx runs: the container's own nameserver (Docker's
+# embedded DNS on the deploy's network). An IPv6 one needs brackets in `resolver`. An endpoint
+# that is an IP address has nothing to re-resolve, and nginx refuses `resolve` on it.
+EDGE_RESOLVER=$(awk '/^nameserver/ { print $2; exit }' /etc/resolv.conf 2>/dev/null)
+case "$EDGE_RESOLVER" in
+    "") EDGE_RESOLVER=127.0.0.11 ;;
+    *:*) EDGE_RESOLVER="[$EDGE_RESOLVER]" ;;
+esac
+export EDGE_RESOLVER
+ENDPOINT_NAME=${AWS_ENDPOINT_SERVER%:*}
+if echo "$ENDPOINT_NAME" | grep -qE '^[0-9.]+$|^\['; then
+    export AWS_ENDPOINT_RESOLVE=""
+else
+    export AWS_ENDPOINT_RESOLVE="resolve"
+fi
 
 # Token signing windows (consumed by nginx-secure-token-module). Defaulted so envsubst never
 # produces an empty directive value when the node didn't set them.
@@ -81,7 +108,7 @@ echo "cache: $CACHE_DIR ${TOTAL_MB}MB total, max_size=$VOD_CACHE_MAX_SIZE min_fr
 # The node id only identifies the edge to the health probe; an edge run by hand has none.
 export NODE_ID="${NODE_ID:-0}"
 
-FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT $AWS_ENDPOINT_HOST $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $SECURE_TOKEN_EXPIRES_TIME $SECURE_TOKEN_QUERY_EXPIRES_TIME $VOD_TOKEN_NAME'
+FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $SECURE_TOKEN_EXPIRES_TIME $SECURE_TOKEN_QUERY_EXPIRES_TIME $VOD_TOKEN_NAME'
 envsubst "$FILTER_VARS" < /usr/local/nginx/conf/nginx.conf.template > /usr/local/nginx/conf/nginx.conf
 
 /usr/local/nginx/sbin/nginx -t

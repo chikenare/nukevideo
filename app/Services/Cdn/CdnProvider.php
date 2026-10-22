@@ -16,8 +16,10 @@ interface CdnProvider
      * ({@see TrackingRegistry}). The URL itself never names the viewer.
      *
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file}), provider-agnostic
+     * @param  int|null  $speedLimitKbps  signed into the token, so it reaches every segment the
+     *                                    manifest lists; only when {@see supportsSpeedLimit}
      */
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local): SignedLink;
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink;
 
     /**
      * Build the fully-qualified, UNSIGNED URL of a thumbnail or storyboard.
@@ -45,5 +47,15 @@ interface CdnProvider
      *
      * @param  string  $key  host-relative object key ({videoUlid}/download/{type}/{file})
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local): SignedLink;
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink;
+
+    /**
+     * Whether a link minted right now can carry a speed limit the edge enforces.
+     *
+     * Asked before minting rather than discovered while signing, so a refusal is one 422 for the
+     * whole request instead of an exception halfway through a batch. Implementations given a
+     * limit they cannot honour must throw, never drop it: an ignored cap is invisible to the
+     * caller who asked for it.
+     */
+    public function supportsSpeedLimit(): bool;
 }

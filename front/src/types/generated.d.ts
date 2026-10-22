@@ -387,6 +387,7 @@ settings?: App.Data.ProjectSettingsData,
 namespace Stream {
 export type DownloadStreamData = {
 trackingId: string | null,
+speedLimitKbps: number | null,
 };
 export type UpdateStreamData = {
 name: string,
@@ -432,6 +433,7 @@ namespace Video {
 export type DownloadVideoTracksData = {
 streamUlids: string[] | null,
 trackingId: string | null,
+speedLimitKbps: number | null,
 };
 export type IndexVideosData = {
 search: string | null,
@@ -446,6 +448,7 @@ export type PlayVideoData = {
 resolution: number | null,
 ip: string | null,
 trackingId: string | null,
+speedLimitKbps: number | null,
 };
 export type UpdateVideoData = {
 name: string,

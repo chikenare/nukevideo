@@ -136,3 +136,48 @@ it('mints distinct tokens for two viewers of the same video in the same second',
     expect($first->token)->not->toBe($second->token)
         ->and($first->tokenHash)->not->toBe($second->tokenHash);
 });
+
+it('signs the speed limit the way the reference does, sorted in with token_path', function () {
+    fakeCdnSettings();
+
+    $url = app(BunnyProvider::class)->manifestUrl(new Video, 'vid-ulid/out-ulid.mpd', '1.2.3.4', false, 3000)->url;
+
+    [$parts, $tail] = bunnyDirParts($url);
+    $tokenPath = $parts['token_path'];
+
+    // `limit` sorts before `token_path`, and both are hashed with raw values after the expiry.
+    $message = $tokenPath.$parts['expires']."limit=375&token_path={$tokenPath}";
+    $expected = 'HS256-'.rtrim(strtr(base64_encode(hash_hmac('sha256', $message, 'test-key', true)), '+/', '-_'), '=');
+
+    expect($parts['limit'])->toBe('375')
+        ->and($parts['bcdn_token'])->toBe($expected)
+        ->and($tail)->toBe('/vid-ulid/out-ulid.mpd');
+});
+
+it('signs the speed limit into a download, between the token and the expiry', function () {
+    fakeCdnSettings();
+
+    $key = '01HTESTVIDEOULID0000000000/download/video/01HTESTFILEULID00000000000.mp4';
+    $url = app(BunnyProvider::class)->downloadUrl('01HTESTVIDEOULID0000000000', $key, false, 8000)->url;
+
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    $expected = 'HS256-'.rtrim(strtr(base64_encode(
+        hash_hmac('sha256', "/{$key}".$query['expires'].'limit=1000', 'test-key', true)
+    ), '+/', '-_'), '=');
+
+    expect(array_keys($query))->toBe(['token', 'limit', 'expires'])
+        ->and($query['limit'])->toBe('1000')
+        ->and($query['token'])->toBe($expected);
+});
+
+it('never rounds a small limit down to Bunny\'s "no limit"', function () {
+    fakeCdnSettings();
+
+    // 7 kbps floors to 0 kB/s, which Bunny reads as unlimited — the opposite of the request.
+    $url = app(BunnyProvider::class)->downloadUrl('01HTESTVIDEOULID0000000000', 'v/download/a.mp4', false, 7)->url;
+
+    parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+    expect($query['limit'])->toBe('1');
+});
