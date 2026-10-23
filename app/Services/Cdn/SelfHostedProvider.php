@@ -27,7 +27,7 @@ class SelfHostedProvider implements CdnProvider
         private ProxyRing $ring,
     ) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $node = $this->ring->for($video->ulid);
 
@@ -37,7 +37,7 @@ class SelfHostedProvider implements CdnProvider
 
         $url = Node::proxyScheme($local)."{$node->hostname}/".ltrim($path, '/');
 
-        return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps);
+        return $this->sign($url, $ip, speedLimitKbps: $speedLimitKbps, expiresIn: $expiresIn);
     }
 
     public function assetUrl(string $videoUlid, string $key, bool $local): string
@@ -57,7 +57,7 @@ class SelfHostedProvider implements CdnProvider
      * against the running edge — the same token on a sibling rendition returns 403, which is the
      * whole point, since the renditions of one video are neighbours in `download/video/`.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $node = $this->ring->for($videoUlid);
 
@@ -72,6 +72,7 @@ class SelfHostedProvider implements CdnProvider
             ip: null,
             acl: $path,
             speedLimitKbps: $speedLimitKbps,
+            expiresIn: $expiresIn,
         );
     }
 
@@ -95,7 +96,7 @@ class SelfHostedProvider implements CdnProvider
      * `map` ({@see vod/nginx/nginx.conf.template}). An edge that predates the map still validates
      * the token and simply serves it unlimited.
      */
-    private function sign(string $url, ?string $ip, ?string $acl = null, ?int $speedLimitKbps = null): SignedLink
+    private function sign(string $url, ?string $ip, ?string $acl = null, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $config = SelfHostedConfigData::from($this->settings->providers['self_hosted'] ?? []);
 
@@ -107,7 +108,7 @@ class SelfHostedProvider implements CdnProvider
             return new SignedLink($url, null);
         }
 
-        $exp = now()->timestamp + $config->tokenWindow;
+        $exp = now()->timestamp + ($expiresIn ?? $config->tokenWindow);
         $acl ??= $this->aclFor($url);
 
         // The edge never parses `ip` (its token_fields are st/exp/acl only), so it is carried purely

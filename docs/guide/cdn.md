@@ -19,7 +19,7 @@ Proxy nodes are servers you run and manage from the admin panel (over SSH — se
 - Resolves the real client IP behind Cloudflare or another reverse proxy.
 - Ships access-log bandwidth to the API through a Vector.dev pipeline.
 
-Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, stream/query token expiry). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
+Token validation is configured in **CDN Settings** under the `self_hosted` provider (token secret, token name, token window). These are injected into the proxy container at deploy time — see [Configuration: Proxy Node Delivery](/guide/configuration#proxy-node-delivery).
 
 **Choose self-hosted when** you want full control over delivery, keep traffic on your own infrastructure, need the built-in bandwidth analytics per node, or already run edge servers.
 
@@ -37,7 +37,7 @@ Configure it in the admin panel under **CDN Settings** with the `bunny` provider
 |---------|-------------|
 | **Host** | The Bunny pull-zone hostname that fronts your S3 origin |
 | **Token key** | The pull-zone's URL-signing key, used to sign the HMAC token |
-| **Token window** | Token validity window, in seconds |
+| **Token window** | How long a link stays valid, in seconds, when the request does not ask for its own with `expiresIn` (up to a week) |
 | **API key** | Account API key, used to pull request logs for bandwidth analytics (optional) |
 | **Pull zone ID** | The pull zone's numeric id, for the same log ingestion (optional) |
 

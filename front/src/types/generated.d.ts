@@ -100,8 +100,6 @@ export type SelfHostedConfigData = {
 tokenSecret: string,
 tokenName: string,
 tokenWindow: number,
-secureTokenExpires: string,
-secureTokenQueryExpires: string,
 };
 export type ServiceStatusData = {
 name: string,
@@ -388,6 +386,7 @@ namespace Stream {
 export type DownloadStreamData = {
 trackingId: string | null,
 speedLimitKbps: number | null,
+expiresIn: number | null,
 };
 export type UpdateStreamData = {
 name: string,
@@ -434,6 +433,7 @@ export type DownloadVideoTracksData = {
 streamUlids: string[] | null,
 trackingId: string | null,
 speedLimitKbps: number | null,
+expiresIn: number | null,
 };
 export type IndexVideosData = {
 search: string | null,
@@ -450,6 +450,7 @@ ip: string | null,
 trackingId: string | null,
 speedLimitKbps: number | null,
 download: boolean | null,
+expiresIn: number | null,
 };
 export type UpdateVideoData = {
 name: string,

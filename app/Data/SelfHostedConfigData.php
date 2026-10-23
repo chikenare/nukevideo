@@ -10,7 +10,5 @@ class SelfHostedConfigData extends Data
         public string $tokenSecret = '',
         public string $tokenName = '__hdnea__',
         public int $tokenWindow = 3600,
-        public string $secureTokenExpires = '100d',
-        public string $secureTokenQueryExpires = '1h',
     ) {}
 }

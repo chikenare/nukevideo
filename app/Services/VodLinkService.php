@@ -15,6 +15,7 @@ use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
 
 /**
@@ -56,6 +57,7 @@ class VodLinkService
      * @param  string  $ip  the address that will fetch the manifests
      * @param  int|null  $speedLimitKbps  per-request cap on every manifest and segment of the session
      * @param  bool  $download  the links are for an offline download, booked as `download_bytes`
+     * @param  int|null  $expiresIn  seconds the links stay valid, null for the token window
      */
     public function forVideo(
         Video $video,
@@ -64,12 +66,14 @@ class VodLinkService
         ?string $trackingId = null,
         ?int $speedLimitKbps = null,
         bool $download = false,
+        ?int $expiresIn = null,
     ): VideoVodLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
         }
 
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
 
         $sources = [];
         $signed = [];
@@ -89,7 +93,7 @@ class VodLinkService
             $audioCodec = $output->audioCodec();
 
             foreach ($formats as $format) {
-                $link = $this->sign($video, $output->manifestPath($format, $cap), $ip, $speedLimitKbps);
+                $link = $this->sign($video, $output->manifestPath($format, $cap), $ip, $speedLimitKbps, $lifetime);
                 $signed[] = $link;
 
                 $sources[] = new VodSourceData(
@@ -103,14 +107,14 @@ class VodLinkService
         }
 
         // One cache round trip for the whole answer rather than one per manifest.
-        $this->tracking->recordMany($signed, $trackingId, $download);
+        $this->tracking->recordMany($signed, $trackingId, $download, $lifetime);
 
         return new VideoVodLinksData(
             // Resolved once, and outside the loop: both are per-video and unsigned, the same two
             // URLs whatever the caller ends up playing.
             thumbnailUrl: $this->assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
             storyboardUrl: $this->assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
-            expiresAt: now()->addSeconds($this->tracking->tokenWindow())->toIso8601String(),
+            expiresAt: now()->addSeconds($lifetime)->toIso8601String(),
             sources: $sources,
         );
     }
@@ -138,10 +142,10 @@ class VodLinkService
      * The node behind this is resolved once per request, not once per call ({@see ProxyRing}),
      * which is what makes signing in a loop cheap.
      */
-    private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps): SignedLink
+    private function sign(Video $video, string $path, string $ip, ?int $speedLimitKbps, int $lifetime): SignedLink
     {
         try {
-            return $this->cdn->manifestUrl($video, $path, $ip, app()->isLocal(), $speedLimitKbps);
+            return $this->cdn->manifestUrl($video, $path, $ip, app()->isLocal(), $speedLimitKbps, $lifetime);
         } catch (NoCdnNodeAvailableException) {
             // The same answer the per-output mint gives: the video exists and the caller is
             // entitled to it, there is just nothing to serve it right now.

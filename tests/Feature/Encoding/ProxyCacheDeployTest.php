@@ -737,7 +737,7 @@ describe('the node env overrides', function () {
     it('cannot replace what the deploy owns', function () {
         // A node's env is a free-text field. Merged last, one line in it re-pointed the edge at
         // another API, another bucket, or a token secret of the editor's choosing.
-        $node = cacheNode(['env' => "VOD_TOKEN_SECRET=mine\nINTERNAL_API_URL=http://evil.example\nAWS_SECRET_ACCESS_KEY=mine\nSECURE_TOKEN_EXPIRES_TIME=5d"]);
+        $node = cacheNode(['env' => "VOD_TOKEN_SECRET=mine\nINTERNAL_API_URL=http://evil.example\nAWS_SECRET_ACCESS_KEY=mine\nVOD_CACHE_INACTIVE=7d"]);
 
         $env = app(NodeService::class)->getEnvironmentVariables($node);
 
@@ -746,7 +746,7 @@ describe('the node env overrides', function () {
             ->and($env)->not->toContain('INTERNAL_API_URL=http://evil.example')
             ->and($env)->not->toContain('AWS_SECRET_ACCESS_KEY=mine')
             // Tuning knobs still override.
-            ->and($env)->toContain('SECURE_TOKEN_EXPIRES_TIME=5d');
+            ->and($env)->toContain('VOD_CACHE_INACTIVE=7d');
     });
 
     it('refuses a device path that is not one', function () {

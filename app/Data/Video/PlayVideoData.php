@@ -7,6 +7,7 @@ use App\Models\Output;
 use App\Services\Cdn\BunnyProvider;
 use App\Services\Cdn\SelfHostedProvider;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
 use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapInputName;
@@ -59,6 +60,12 @@ class PlayVideoData extends RequestData
         /** The links are for an offline download: their bytes count as `download_bytes`
          *  instead of `streaming_bytes`. Omitted or null is streaming. */
         public ?bool $download = null,
+        /**
+         * Seconds the links stay valid ({@see LinkExpiry}): 60 to a week. Omit it for the CDN's
+         * token window — an hour unless the operator changed it.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?int $expiresIn = null,
     ) {}
 
     /**
@@ -71,6 +78,7 @@ class PlayVideoData extends RequestData
         return [
             'trackingId' => TrackingId::rules(),
             'speedLimitKbps' => SpeedLimit::rules(),
+            'expiresIn' => LinkExpiry::rules(),
         ];
     }
 }

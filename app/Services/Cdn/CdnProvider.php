@@ -18,8 +18,9 @@ interface CdnProvider
      * @param  string  $path  host-relative manifest path ({videoUlid}/{file}), provider-agnostic
      * @param  int|null  $speedLimitKbps  signed into the token, so it reaches every segment the
      *                                    manifest lists; only when {@see supportsSpeedLimit}
+     * @param  int|null  $expiresIn  seconds the link stays valid; null for the provider's token window
      */
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink;
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink;
 
     /**
      * Build the fully-qualified, UNSIGNED URL of a thumbnail or storyboard.
@@ -46,8 +47,9 @@ interface CdnProvider
      * between addresses; playback tokens can afford the binding because a session is short.
      *
      * @param  string  $key  host-relative object key ({videoUlid}/download/{type}/{file})
+     * @param  int|null  $expiresIn  seconds the link stays valid; null for the provider's token window
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink;
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink;
 
     /**
      * Whether a link minted right now can carry a speed limit the edge enforces.
