@@ -297,6 +297,56 @@ been served.
 
 See [Streaming & VOD](/guide/streaming#requesting-a-playback-url) for the token model.
 
+## Playback URLs for Many Videos
+
+The same mint for a list of videos in one request — a page of a catalogue, say.
+
+```
+POST /api/videos/play
+```
+
+**Request Body:**
+
+```json
+{
+  "videos": ["01HX...", "01HY..."],
+  "resolution": 1080,
+  "trackingId": "customer-42",
+  "expiresIn": 3600
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `videos` | string[] | The video ULIDs, `1` to `500` of them. Duplicates are answered once. |
+| `resolution`, `ip`, `trackingId`, `speedLimitKbps`, `download`, `expiresIn` | | Exactly as in [Playback URLs](#playback-urls), applied to every video in the list. |
+
+**Response:** a list with one entry per video that can be played, in the order you asked for
+them. Each entry is what [Playback URLs](#playback-urls) answers for that video, with its
+`videoUlid`.
+
+```json
+{
+  "data": [
+    {
+      "videoUlid": "01HX...",
+      "thumbnailUrl": "https://cdn.example.com/01HX.../assets/thumbnail.jpg",
+      "storyboardUrl": "https://cdn.example.com/01HX.../assets/storyboard.vtt",
+      "expiresAt": "2025-01-15T11:30:00+00:00",
+      "sources": [
+        { "url": "https://cdn.example.com/01HX.../play/01HZ....m3u8", "format": "hls", "outputUlid": "01HZ...", "videoCodec": "h264", "audioCodec": "aac" }
+      ]
+    }
+  ]
+}
+```
+
+**A video that cannot be played is simply absent** — one that does not exist, belongs to another
+project, or is still processing — where the single-video mint answers `404` or `409`. One stale
+ULID in a page of a catalogue does not cost the rest of the page its links; compare the
+`videoUlid`s that came back with the list you sent to tell which ones are missing. Responds `503`
+when no delivery node is available.
+
 ## Download Tracks
 
 Mint signed URLs for a video's tracks in **one** request. Prefer this over calling

@@ -6,6 +6,7 @@ use App\Console\Commands\RetryVideos;
 use App\Data\Video\DownloadVideoTracksData;
 use App\Data\Video\IndexVideosData;
 use App\Data\Video\PlayVideoData;
+use App\Data\Video\PlayVideosData;
 use App\Data\Video\UpdateVideoData;
 use App\Data\VideoData;
 use App\Models\Stream;
@@ -109,6 +110,32 @@ class VideoController extends Controller
                 // The address that will actually fetch the manifests, so an integrator minting
                 // from its own backend must name the end viewer; falls back to the caller's own,
                 // which is right when the player itself is asking.
+                $data->ip ?? $request->ip(),
+                TrackingId::resolve($data->trackingId, $request->user()),
+                $data->speedLimitKbps,
+                $data->download ?? false,
+                $data->expiresIn,
+            ),
+        ]);
+    }
+
+    /**
+     * Playback links for many videos in one request: a page of a catalogue, say. The same answer
+     * as {@see play}, one entry per video that can be played, in the order asked. Scoped like
+     * every other lookup — a ULID from another project matches nothing and is simply absent.
+     */
+    public function playMany(Request $request, PlayVideosData $data)
+    {
+        $videos = $request->project()->videos()
+            ->with('outputs.streams')
+            ->whereIn('ulid', $data->videos)
+            ->get();
+
+        return response()->json([
+            'data' => $this->vod->forVideos(
+                $videos,
+                $data->videos,
+                $data->resolution,
                 $data->ip ?? $request->ip(),
                 TrackingId::resolve($data->trackingId, $request->user()),
                 $data->speedLimitKbps,

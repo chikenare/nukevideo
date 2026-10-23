@@ -19,6 +19,8 @@ use Spatie\LaravelData\Data;
 class VideoVodLinksData extends Data
 {
     public function __construct(
+        /** The video these links play — what tells the entries of a batch mint apart. */
+        public string $videoUlid,
         public string $thumbnailUrl,
         public string $storyboardUrl,
         /**

@@ -181,6 +181,7 @@ links: App.Data.DownloadLinkData[],
 skipped: App.Data.SkippedTrackData[],
 };
 export type VideoVodLinksData = {
+videoUlid: string,
 thumbnailUrl: string,
 storyboardUrl: string,
 expiresAt: string,
@@ -445,6 +446,15 @@ direction: string,
 perPage: number,
 };
 export type PlayVideoData = {
+resolution: number | null,
+ip: string | null,
+trackingId: string | null,
+speedLimitKbps: number | null,
+download: boolean | null,
+expiresIn: number | null,
+};
+export type PlayVideosData = {
+videos: string[],
 resolution: number | null,
 ip: string | null,
 trackingId: string | null,
