@@ -4,6 +4,7 @@ namespace App\Data\Stream;
 
 use App\Data\RequestData;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
 use App\Support\TrackingId;
 use Spatie\LaravelData\Attributes\MapInputName;
@@ -31,6 +32,12 @@ class DownloadStreamData extends RequestData
          */
         #[MapInputName(CamelCaseMapper::class)]
         public ?int $speedLimitKbps = null,
+        /**
+         * Seconds the link stays valid ({@see LinkExpiry}): 60 to a week. Omit it for the CDN's
+         * token window — an hour unless the operator changed it.
+         */
+        #[MapInputName(CamelCaseMapper::class)]
+        public ?int $expiresIn = null,
     ) {}
 
     /**
@@ -49,6 +56,7 @@ class DownloadStreamData extends RequestData
         return [
             'trackingId' => TrackingId::rules(),
             'speedLimitKbps' => SpeedLimit::rules(),
+            'expiresIn' => LinkExpiry::rules(),
         ];
     }
 }

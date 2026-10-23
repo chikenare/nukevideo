@@ -118,17 +118,11 @@ onMounted(fetchSettings)
           <div class="grid gap-2">
             <Label for="sh_token_window">Token window (seconds)</Label>
             <Input id="sh_token_window" type="number" v-model.number="form.selfHosted.tokenWindow" />
+            <p class="text-sm text-muted-foreground">
+              How long a playback or download link stays valid when the request does not ask for
+              its own lifetime with <code>expiresIn</code> (up to 7 days).
+            </p>
             <p v-if="errors['selfHosted.tokenWindow']" class="text-sm text-destructive">{{ errors['selfHosted.tokenWindow'][0] }}</p>
-          </div>
-          <div class="grid gap-2">
-            <Label for="sh_secure_expires">Segment token expiry</Label>
-            <Input id="sh_secure_expires" v-model="form.selfHosted.secureTokenExpires" placeholder="e.g. 100d" />
-            <p v-if="errors['selfHosted.secureTokenExpires']" class="text-sm text-destructive">{{ errors['selfHosted.secureTokenExpires'][0] }}</p>
-          </div>
-          <div class="grid gap-2">
-            <Label for="sh_secure_query_expires">Segment query-token expiry</Label>
-            <Input id="sh_secure_query_expires" v-model="form.selfHosted.secureTokenQueryExpires" placeholder="e.g. 1h" />
-            <p v-if="errors['selfHosted.secureTokenQueryExpires']" class="text-sm text-destructive">{{ errors['selfHosted.secureTokenQueryExpires'][0] }}</p>
           </div>
           <p class="text-xs text-muted-foreground">
             The edge cache is not sized here: each proxy node caches into its own disk pool and
@@ -156,6 +150,10 @@ onMounted(fetchSettings)
           <div class="grid gap-2">
             <Label for="bunny_token_window">Token window (seconds)</Label>
             <Input id="bunny_token_window" type="number" v-model.number="form.bunny.tokenWindow" />
+            <p class="text-sm text-muted-foreground">
+              How long a playback or download link stays valid when the request does not ask for
+              its own lifetime with <code>expiresIn</code> (up to 7 days).
+            </p>
             <p v-if="errors['bunny.tokenWindow']" class="text-sm text-destructive">{{ errors['bunny.tokenWindow'][0] }}</p>
           </div>
           <div class="grid gap-2">

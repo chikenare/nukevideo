@@ -295,8 +295,12 @@ http {
             secure_token "${VOD_TOKEN_NAME}=$link_token";
             secure_token_types application/dash+xml application/vnd.apple.mpegurl application/x-mpegurl;
             secure_token_avoid_cookies on;
-            secure_token_expires_time ${SECURE_TOKEN_EXPIRES_TIME};
-            secure_token_query_token_expires_time ${SECURE_TOKEN_QUERY_EXPIRES_TIME};
+            # Browser caching only — Cache-Control/Expires — and not how long a link is valid, which
+            # is the token's `exp`. Segments never change, so a player may keep them for good. A
+            # rewritten manifest carries the token in its URL, so a copy kept past the token's
+            # expiry is never reused by a newer link, which has a URL of its own.
+            secure_token_expires_time 100d;
+            secure_token_query_token_expires_time 1h;
 
             # Applies to the segments because they carry the manifest's token (above), so a capped
             # link caps the whole session. It paces what this edge sends, cache hit or miss alike.

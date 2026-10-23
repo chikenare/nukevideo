@@ -31,10 +31,6 @@ class CdnSettingsController extends Controller
             'selfHosted.tokenSecret' => ['nullable', 'string'],
             'selfHosted.tokenName' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^[a-z0-9_]+$/'],
             'selfHosted.tokenWindow' => [Rule::requiredIf($selfHostedActive), 'integer', 'min:1'],
-            // Both become nginx directive values through envsubst on the edge, so anything but
-            // an nginx time (`100d`, `1h`, `3600`) would break the config — or extend it.
-            'selfHosted.secureTokenExpires' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^\d+[smhd]?$/'],
-            'selfHosted.secureTokenQueryExpires' => [Rule::requiredIf($selfHostedActive), 'string', 'regex:/^\d+[smhd]?$/'],
 
             'bunny' => [Rule::requiredIf($bunnyActive), 'array'],
             'bunny.host' => [Rule::requiredIf($bunnyActive), 'string'],
@@ -51,8 +47,6 @@ class CdnSettingsController extends Controller
                 'token_secret' => $validated['selfHosted']['tokenSecret'] ?? null,
                 'token_name' => $validated['selfHosted']['tokenName'] ?? null,
                 'token_window' => isset($validated['selfHosted']['tokenWindow']) ? (int) $validated['selfHosted']['tokenWindow'] : null,
-                'secure_token_expires' => $validated['selfHosted']['secureTokenExpires'] ?? null,
-                'secure_token_query_expires' => $validated['selfHosted']['secureTokenQueryExpires'] ?? null,
             ], fn ($v) => $v !== null));
         }
 

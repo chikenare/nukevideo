@@ -30,11 +30,6 @@ else
     export AWS_ENDPOINT_RESOLVE="resolve"
 fi
 
-# Token signing windows (consumed by nginx-secure-token-module). Defaulted so envsubst never
-# produces an empty directive value when the node didn't set them.
-export SECURE_TOKEN_EXPIRES_TIME="${SECURE_TOKEN_EXPIRES_TIME:-100d}"
-export SECURE_TOKEN_QUERY_EXPIRES_TIME="${SECURE_TOKEN_QUERY_EXPIRES_TIME:-1h}"
-
 # The query argument carrying the token. Must match what the API signs with; the default is the
 # Akamai name the signer also defaults to, so a node that predates this variable keeps working.
 export VOD_TOKEN_NAME="${VOD_TOKEN_NAME:-__hdnea__}"
@@ -108,7 +103,7 @@ echo "cache: $CACHE_DIR ${TOTAL_MB}MB total, max_size=$VOD_CACHE_MAX_SIZE min_fr
 # The node id only identifies the edge to the health probe; an edge run by hand has none.
 export NODE_ID="${NODE_ID:-0}"
 
-FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $SECURE_TOKEN_EXPIRES_TIME $SECURE_TOKEN_QUERY_EXPIRES_TIME $VOD_TOKEN_NAME'
+FILTER_VARS='$NODE_ID $AWS_ACCESS_KEY_ID $AWS_SECRET_ACCESS_KEY $AWS_DEFAULT_REGION $AWS_ENDPOINT_SCHEME $AWS_ENDPOINT_HOST $AWS_ENDPOINT_SERVER $AWS_ENDPOINT_RESOLVE $EDGE_RESOLVER $AWS_BUCKET $VOD_CACHE_MAX_SIZE $VOD_CACHE_MIN_FREE $VOD_CACHE_KEYS_ZONE $VOD_CACHE_INACTIVE $VOD_TOKEN_SECRET $VOD_TOKEN_NAME'
 envsubst "$FILTER_VARS" < /usr/local/nginx/conf/nginx.conf.template > /usr/local/nginx/conf/nginx.conf
 
 /usr/local/nginx/sbin/nginx -t

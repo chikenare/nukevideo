@@ -47,9 +47,9 @@ class TrackingRegistry
      * records nothing: there is nothing to resolve, and an empty mapping would only shadow a
      * later one.
      */
-    public function record(SignedLink $link, ?string $trackingId): void
+    public function record(SignedLink $link, ?string $trackingId, ?int $lifetime = null): void
     {
-        $this->recordMany([$link], $trackingId);
+        $this->recordMany([$link], $trackingId, lifetime: $lifetime);
     }
 
     /**
@@ -59,10 +59,12 @@ class TrackingRegistry
      *
      * `$download` marks the links as an offline download, so the ingest books their bytes as
      * `download_bytes` rather than `streaming_bytes`: the segments are the same files either way.
+     * `$lifetime` is how long the links were signed for, when not the token window: a mapping
+     * that died before its link would leave the link's last hours unattributed.
      *
      * @param  list<SignedLink>  $links
      */
-    public function recordMany(array $links, ?string $trackingId, bool $download = false): void
+    public function recordMany(array $links, ?string $trackingId, bool $download = false, ?int $lifetime = null): void
     {
         $mapping = [];
 
@@ -79,7 +81,7 @@ class TrackingRegistry
         }
 
         if ($mapping !== []) {
-            Cache::putMany($mapping, $this->tokenWindow() + self::GRACE);
+            Cache::putMany($mapping, ($lifetime ?? $this->tokenWindow()) + self::GRACE);
         }
     }
 

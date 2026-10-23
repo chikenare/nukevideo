@@ -45,13 +45,13 @@ class BunnyProvider implements CdnProvider
 
     public function __construct(private CdnSettings $settings) {}
 
-    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null): SignedLink
+    public function manifestUrl(Video $video, string $path, string $ip, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $urlPath = '/'.ltrim($path, '/'); // /{videoUlid}/play/{file}
 
         // Directory scope: the manifest and the relative segments it lists share a prefix, so one
         // token covers the whole session.
-        return $this->signed($urlPath, $this->directoryOf($urlPath), $speedLimitKbps);
+        return $this->signed($urlPath, $this->directoryOf($urlPath), $speedLimitKbps, $expiresIn);
     }
 
     /**
@@ -60,7 +60,7 @@ class BunnyProvider implements CdnProvider
      * segments it lists share one token; it is a directory PREFIX, and using it here would scope a
      * download link to everything sharing that prefix instead of to the one object.
      */
-    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null): SignedLink
+    public function downloadUrl(string $videoUlid, string $key, bool $local, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
         $urlPath = '/'.ltrim($key, '/');
@@ -71,7 +71,7 @@ class BunnyProvider implements CdnProvider
             return new SignedLink("https://{$config->host}{$urlPath}", null);
         }
 
-        $expires = now()->timestamp + $config->tokenWindow;
+        $expires = now()->timestamp + ($expiresIn ?? $config->tokenWindow);
         $parameters = $this->limitParameters($speedLimitKbps);
 
         // Advanced token auth with no IP: the hashable base is the signature path, the expiry and
@@ -112,7 +112,7 @@ class BunnyProvider implements CdnProvider
             : ['limit' => (string) max(1, SpeedLimit::toKilobytesPerSecond($speedLimitKbps))];
     }
 
-    private function signed(string $urlPath, string $tokenPath, ?int $speedLimitKbps = null): SignedLink
+    private function signed(string $urlPath, string $tokenPath, ?int $speedLimitKbps = null, ?int $expiresIn = null): SignedLink
     {
         $config = BunnyConfigData::from($this->settings->providers['bunny'] ?? []);
 
@@ -130,7 +130,7 @@ class BunnyProvider implements CdnProvider
         $signingData = $this->joinParams($parameters, rawEncode: false);
         $urlData = $this->joinParams($parameters, rawEncode: true);
 
-        [$token, $expires] = $this->tokenFor($tokenPath, $signingData, $config);
+        [$token, $expires] = $this->tokenFor($tokenPath, $signingData, $config->tokenKey, $expiresIn ?? $config->tokenWindow);
 
         return new SignedLink("https://{$config->host}/bcdn_token={$token}&{$urlData}&expires={$expires}{$urlPath}", $token);
     }
@@ -150,16 +150,16 @@ class BunnyProvider implements CdnProvider
      *
      * @return array{string, int}
      */
-    private function tokenFor(string $tokenPath, string $signingData, BunnyConfigData $config): array
+    private function tokenFor(string $tokenPath, string $signingData, string $tokenKey, int $lifetime): array
     {
-        $base = now()->timestamp + $config->tokenWindow;
-        $ttl = $config->tokenWindow + self::EXPIRY_JITTER;
+        $base = now()->timestamp + $lifetime;
+        $ttl = $lifetime + self::EXPIRY_JITTER;
         $expires = $base;
         $token = '';
 
         for ($attempt = 0; $attempt < 5; $attempt++) {
             $expires = $attempt === 0 ? $base : $base + random_int(1, self::EXPIRY_JITTER);
-            $token = $this->token($tokenPath.$expires.$signingData, $config->tokenKey);
+            $token = $this->token($tokenPath.$expires.$signingData, $tokenKey);
 
             if (Cache::add("bunny-token-claim:{$token}", 1, $ttl)) {
                 break;

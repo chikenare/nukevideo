@@ -483,8 +483,8 @@ only axis that names a viewer, and its cost and fragility are the price of askin
 upload label cannot answer.
 
 ::: warning What the fragility costs, concretely
-A mapping lives for the link's token window plus a 35-minute grace — **1h 35m** with the default
-one-hour window ([CDN settings](/guide/cdn)) — and it lives in Redis. Traffic whose log line reaches
+A mapping lives as long as its link plus a 35-minute grace — **1h 35m** with the default one-hour
+window ([CDN settings](/guide/cdn)), longer for a link minted with a longer `expiresIn` — and it lives in Redis. Traffic whose log line reaches
 the ingest after that falls into the unattributed bucket.
 
 In steady state that is the tail of a session near expiry, which the grace is sized for. It becomes

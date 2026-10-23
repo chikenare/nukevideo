@@ -64,8 +64,6 @@ The segment cache normally needs no configuration: the node's deploy builds it f
 |----------|---------|---------|-------------|
 | `VOD_TOKEN_SECRET` | — | Proxy | Secret for signing and validating stream tokens |
 | `VOD_TOKEN_NAME` | `__hdnea__` | Proxy | Query argument carrying the token. Lowercase, digits and `_` only; changing it requires redeploying the proxy, and links already signed with the old name stop validating |
-| `SECURE_TOKEN_EXPIRES_TIME` | `100d` | Proxy | `Cache-Control`/`Expires` the edge puts on responses it does not tokenize (segments), e.g. `100d`, `24h`. Not a token lifetime: the link's token is minted by the API with the provider's token window, and the edge propagates it to the segments |
-| `SECURE_TOKEN_QUERY_EXPIRES_TIME` | `1h` | Proxy | `Cache-Control`/`Expires` on the rewritten manifests, which carry the token in their segment URLs |
 
 ## CDN
 

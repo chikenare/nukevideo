@@ -83,6 +83,7 @@ class VideoController extends Controller
                 $data->streamUlids,
                 TrackingId::resolve($data->trackingId, $request->user()),
                 $data->speedLimitKbps,
+                $data->expiresIn,
             ),
         ]);
     }
@@ -112,6 +113,7 @@ class VideoController extends Controller
                 TrackingId::resolve($data->trackingId, $request->user()),
                 $data->speedLimitKbps,
                 $data->download ?? false,
+                $data->expiresIn,
             ),
         ]);
     }

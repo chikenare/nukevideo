@@ -15,6 +15,7 @@ use App\Services\Cdn\CdnProvider;
 use App\Services\Cdn\ProxyRing;
 use App\Services\Cdn\SignedLink;
 use App\Services\Cdn\TrackingRegistry;
+use App\Support\LinkExpiry;
 use App\Support\SpeedLimit;
 
 /**
@@ -55,16 +56,17 @@ class DownloadLinkService
         Project $project,
         ?string $trackingId = null,
         ?int $speedLimitKbps = null,
+        ?int $expiresIn = null,
     ): DownloadLinkData {
         $stream = Stream::with('video')
             ->whereHas('video', fn ($query) => $query->where('project_id', $project->id))
             ->where('ulid', $ulid)
             ->firstOrFail();
 
-        return $this->forStream($stream, $trackingId, $speedLimitKbps);
+        return $this->forStream($stream, $trackingId, $speedLimitKbps, $expiresIn);
     }
 
-    public function forStream(Stream $stream, ?string $trackingId = null, ?int $speedLimitKbps = null): DownloadLinkData
+    public function forStream(Stream $stream, ?string $trackingId = null, ?int $speedLimitKbps = null, ?int $expiresIn = null): DownloadLinkData
     {
         if (! in_array($stream->type, self::DOWNLOADABLE, true)) {
             abort(422, "A {$stream->type} track cannot be downloaded.");
@@ -91,15 +93,16 @@ class DownloadLinkService
         }
 
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
 
         $key = $stream->storedPath($video);
-        $link = $this->sign($video, $key, $speedLimitKbps);
+        $link = $this->sign($video, $key, $speedLimitKbps, $lifetime);
 
         // The id never enters the URL: the token does, on every request the link produces, and
         // the mint is the only moment anyone knows whose it is.
-        $this->tracking->record($link, $trackingId);
+        $this->tracking->record($link, $trackingId, $lifetime);
 
-        return $this->toData($stream, $key, $link);
+        return $this->toData($stream, $key, $link, $lifetime);
     }
 
     /**
@@ -112,18 +115,21 @@ class DownloadLinkService
      *
      * @param  list<string>|null  $ulids  the tracks to mint, or null for every downloadable one
      * @param  int|null  $speedLimitKbps  applied to each link on its own, not shared across the batch
+     * @param  int|null  $expiresIn  seconds every link stays valid, null for the token window
      */
     public function forVideo(
         Video $video,
         ?array $ulids = null,
         ?string $trackingId = null,
         ?int $speedLimitKbps = null,
+        ?int $expiresIn = null,
     ): VideoDownloadLinksData {
         if ($video->status !== VideoStatus::COMPLETED->value) {
             abort(409, 'The video is still processing.');
         }
 
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
 
         $streams = $video->streams()->get()->keyBy('ulid');
 
@@ -157,14 +163,14 @@ class DownloadLinkService
             }
 
             $key = $stream->storedPath($video);
-            $link = $this->sign($video, $key, $speedLimitKbps);
+            $link = $this->sign($video, $key, $speedLimitKbps, $lifetime);
 
             $signed[] = $link;
-            $links[] = $this->toData($stream, $key, $link);
+            $links[] = $this->toData($stream, $key, $link, $lifetime);
         }
 
         // One cache round trip for the batch rather than one per track.
-        $this->tracking->recordMany($signed, $trackingId);
+        $this->tracking->recordMany($signed, $trackingId, lifetime: $lifetime);
 
         return new VideoDownloadLinksData(links: $links, skipped: $skipped);
     }
@@ -173,10 +179,10 @@ class DownloadLinkService
      * The node behind this is resolved once per request, not once per call
      * ({@see ProxyRing}), which is what makes signing in a loop cheap.
      */
-    private function sign(Video $video, string $key, ?int $speedLimitKbps): SignedLink
+    private function sign(Video $video, string $key, ?int $speedLimitKbps, int $lifetime): SignedLink
     {
         try {
-            return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal(), $speedLimitKbps);
+            return $this->cdn->downloadUrl($video->ulid, $key, app()->isLocal(), $speedLimitKbps, $lifetime);
         } catch (NoCdnNodeAvailableException) {
             // Same answer playback gives ({@see VodLinkService}): the track
             // exists and the caller is entitled to it, there is just nothing to serve it right now.
@@ -184,11 +190,11 @@ class DownloadLinkService
         }
     }
 
-    private function toData(Stream $stream, string $key, SignedLink $link): DownloadLinkData
+    private function toData(Stream $stream, string $key, SignedLink $link, int $lifetime): DownloadLinkData
     {
         return new DownloadLinkData(
             url: $link->url,
-            expiresAt: now()->addSeconds($this->tracking->tokenWindow())->toIso8601String(),
+            expiresAt: now()->addSeconds($lifetime)->toIso8601String(),
             // The stored name as-is: a ULID plus its extension. Unique by construction, so a caller
             // fetching several tracks never has two land on the same name, and there is nothing to
             // sanitise before it touches a filesystem or a Content-Disposition header.

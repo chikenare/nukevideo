@@ -220,7 +220,8 @@ POST /api/videos/{ulid}/play
   "ip": "203.0.113.7",
   "trackingId": "customer-42",
   "speedLimitKbps": 3000,
-  "download": false
+  "download": false,
+  "expiresIn": 3600
 }
 ```
 
@@ -230,7 +231,8 @@ POST /api/videos/{ulid}/play
 | `ip` | string | The viewer's address, when the link is minted from your backend. |
 | `trackingId` | string | Your own label for this viewer. One id for the whole answer — one answer is one viewer opening one video — recorded against every token it hands out. |
 | `speedLimitKbps` | integer | Caps the transfer rate of the whole session — the manifest and every segment — in kilobits per second, the unit renditions are quoted in: `64` to `10000000`. Signed into the token, so it cannot be lifted by editing the URL. An adaptive player measures it as its bandwidth and settles on the renditions that fit under it. Omit for no limit. See [Speed limits](/guide/streaming#speed-limits). |
-| `download` | boolean | `true` when the links are for saving the video to watch offline: your app downloads the manifest and its segments with the platform's own download manager (Media3 `DownloadManager` on Android, `AVAssetDownloadTask` on iOS, Shaka's offline storage on the web) instead of streaming them. Nothing about the links changes; their bytes are booked as `download_bytes` instead of `streaming_bytes` in [analytics](/api/analytics). Omitted or `null` is streaming. The links still expire at `expiresAt`, so a download that outlives it has to mint again and resume. |
+| `download` | boolean | `true` when the links are for saving the video to watch offline: your app downloads the manifest and its segments with the platform's own download manager (Media3 `DownloadManager` on Android, `AVAssetDownloadTask` on iOS, Shaka's offline storage on the web) instead of streaming them. Nothing about the links changes; their bytes are booked as `download_bytes` instead of `streaming_bytes` in [analytics](/api/analytics). Omitted or `null` is streaming. The links still expire at `expiresAt`, so a download that outlives it has to mint again and resume — or ask for a longer `expiresIn`. |
+| `expiresIn` | integer | Seconds the links stay valid: `60` to `604800` (a week). Omit it for the CDN's token window, an hour unless the operator changed it. Signed into the token, and reported back as `expiresAt`. An offline download that may take longer than an hour is the usual reason to ask for more. |
 
 Nothing in the body selects *what* comes back. The answer carries every manifest the video can
 serve, and you pick from it.
@@ -313,7 +315,8 @@ POST /api/videos/{ulid}/downloads
 {
   "streamUlids": ["01KZW4GN1K3B7Y4RFQBGM0KQF6"],
   "trackingId": "customer-42",
-  "speedLimitKbps": 8000
+  "speedLimitKbps": 8000,
+  "expiresIn": 86400
 }
 ```
 
@@ -322,9 +325,10 @@ POST /api/videos/{ulid}/downloads
 | `streamUlids` | string[] \| null | Which tracks to mint. **Omit it to get every downloadable track of the video**, which is the usual call. An empty array is taken literally and returns nothing. Up to 200 entries. |
 | `trackingId` | string \| null | Your own tracking id, applied to every link in the batch. Same rules and same behaviour as the per-track mint. |
 | `speedLimitKbps` | integer \| null | Applied to each link on its own, not shared across the batch. Same rules as the per-track mint. |
+| `expiresIn` | integer \| null | Seconds every link in the batch stays valid. Same rules as the per-track mint. |
 
-The links are the same ones the per-track endpoint returns, signed per object and expiring on the
-same window. Tracks that could not be minted do not fail the request — they come back in `skipped`
+The links are the same ones the per-track endpoint returns, signed per object and expiring
+together. Tracks that could not be minted do not fail the request — they come back in `skipped`
 with a reason, so one stale id in a list does not cost the rest their links.
 
 **Response:**

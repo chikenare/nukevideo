@@ -60,9 +60,9 @@ unattributed.
 
 Playback URLs are signed with a time-limited token so segments can't be fetched without authorization.
 One token covers a whole playback session — the manifest and every segment the player derives from
-it — and it is minted by the API with the provider's **token window** (one hour by default). The
-segments do not get a window of their own: they expire with the link, so a session that outlives
-the window has to request a fresh link.
+it — and it is minted by the API with the provider's **token window** (one hour by default), or with
+the `expiresIn` the request asked for, up to a week. The segments do not get a window of their own:
+they expire with the link, so a session that outlives it has to request a fresh link.
 
 The exact signing scheme depends on the delivery layer:
 

@@ -148,8 +148,6 @@ class NodeService
         $cdnEnv = [
             'VOD_TOKEN_SECRET' => $cdn->tokenSecret,
             'VOD_TOKEN_NAME' => $cdn->tokenName,
-            'SECURE_TOKEN_EXPIRES_TIME' => $cdn->secureTokenExpires,
-            'SECURE_TOKEN_QUERY_EXPIRES_TIME' => $cdn->secureTokenQueryExpires,
         ];
         foreach ($cdnEnv as $key => $value) {
             if ($value !== '') {

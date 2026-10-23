@@ -39,6 +39,7 @@ class StreamController extends Controller
                 $request->project(),
                 TrackingId::resolve($data->trackingId, $request->user()),
                 $data->speedLimitKbps,
+                $data->expiresIn,
             ),
         ]);
     }
