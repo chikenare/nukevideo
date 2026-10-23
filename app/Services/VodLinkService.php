@@ -74,11 +74,79 @@ class VodLinkService
 
         SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
         $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
-
-        $sources = [];
         $signed = [];
 
+        $links = $this->links($video, $resolution, $ip, $speedLimitKbps, $lifetime, now()->addSeconds($lifetime)->toIso8601String(), $signed);
+
+        // One cache round trip for the whole answer rather than one per manifest.
+        $this->tracking->recordMany($signed, $trackingId, $download, $lifetime);
+
+        return $links;
+    }
+
+    /**
+     * The same links for many videos at once, in the order they were asked for — the ones that
+     * can be played. A video that is not here (not in the caller's project, or no such ULID) or
+     * not playable yet is simply absent, as an output that cannot be served is absent from
+     * `sources`: what a caller does about either is the same, and the list it sent says which
+     * ones are missing. The 503 stays whole-request, a condition of the fleet.
+     *
+     * Everything a mint repeats per request is done once for the batch: the speed-limit check,
+     * the lifetime, the expiry every link shares, and the one cache write that attributes them.
+     *
+     * @param  iterable<Video>  $videos  already scoped to the caller's project, outputs and streams loaded
+     * @param  list<string>  $ulids  the order to answer in
+     * @return list<VideoVodLinksData>
+     */
+    public function forVideos(
+        iterable $videos,
+        array $ulids,
+        ?int $resolution,
+        string $ip,
+        ?string $trackingId = null,
+        ?int $speedLimitKbps = null,
+        bool $download = false,
+        ?int $expiresIn = null,
+    ): array {
+        SpeedLimit::ensureSupported($this->cdn, $speedLimitKbps);
+        $lifetime = LinkExpiry::seconds($expiresIn, $this->tracking);
+        $expiresAt = now()->addSeconds($lifetime)->toIso8601String();
+
+        $byUlid = [];
+        foreach ($videos as $video) {
+            $byUlid[$video->ulid] = $video;
+        }
+
+        $answer = [];
+        $signed = [];
+
+        foreach (array_unique($ulids) as $ulid) {
+            $video = $byUlid[$ulid] ?? null;
+
+            if ($video !== null && $video->status === VideoStatus::COMPLETED->value) {
+                $answer[] = $this->links($video, $resolution, $ip, $speedLimitKbps, $lifetime, $expiresAt, $signed);
+            }
+        }
+
+        $this->tracking->recordMany($signed, $trackingId, $download, $lifetime);
+
+        return $answer;
+    }
+
+    /**
+     * One video's answer. Appends every link it signs to `$signed`, for the caller to attribute
+     * all of them in one write.
+     *
+     * @param  list<SignedLink>  $signed
+     */
+    private function links(Video $video, ?int $resolution, string $ip, ?int $speedLimitKbps, int $lifetime, string $expiresAt, array &$signed): VideoVodLinksData
+    {
+        $sources = [];
+
         foreach ($video->outputs as $output) {
+            // The manifest path reads the output's video, which is this one: handed over rather
+            // than lazy-loaded, which was a query per output — per video, in a batch.
+            $output->setRelation('video', $video);
             $formats = $this->playableFormats($output);
 
             if ($formats === []) {
@@ -106,15 +174,12 @@ class VodLinkService
             }
         }
 
-        // One cache round trip for the whole answer rather than one per manifest.
-        $this->tracking->recordMany($signed, $trackingId, $download, $lifetime);
-
         return new VideoVodLinksData(
-            // Resolved once, and outside the loop: both are per-video and unsigned, the same two
-            // URLs whatever the caller ends up playing.
+            videoUlid: $video->ulid,
+            // Per-video and unsigned: the same two URLs whatever the caller ends up playing.
             thumbnailUrl: $this->assets->for($video->ulid, Video::THUMBNAIL_FILENAME),
             storyboardUrl: $this->assets->for($video->ulid, Video::STORYBOARD_VTT_FILENAME),
-            expiresAt: now()->addSeconds($lifetime)->toIso8601String(),
+            expiresAt: $expiresAt,
             sources: $sources,
         );
     }

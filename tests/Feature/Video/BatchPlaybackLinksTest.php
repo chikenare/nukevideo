@@ -10,6 +10,7 @@
  * straight to a player.
  */
 
+use App\Data\Video\PlayVideosData;
 use App\Models\Node;
 use App\Models\Output;
 use App\Models\Project;
@@ -132,7 +133,7 @@ it('answers one flat source per output and format', function () {
 
     // The published contract, pinned: this is what `docs/api/videos.md` documents, and an
     // integrator reads a field that is not here as a field that does not exist.
-    expect(array_keys($data))->toBe(['thumbnailUrl', 'storyboardUrl', 'expiresAt', 'sources'])
+    expect(array_keys($data))->toBe(['videoUlid', 'thumbnailUrl', 'storyboardUrl', 'expiresAt', 'sources'])
         ->and(array_keys($data['sources'][0]))
         ->toBe(['url', 'format', 'outputUlid', 'videoCodec', 'audioCodec']);
 });
@@ -311,4 +312,108 @@ it('validates the body it takes', function () {
     $this->postJson("/api/videos/{$video->ulid}/play", ['ip' => 'nope'])->assertStatus(422);
     $this->postJson("/api/videos/{$video->ulid}/play", ['trackingId' => 'no spaces'])->assertStatus(422);
     $this->postJson("/api/videos/{$video->ulid}/play", ['download' => 'maybe'])->assertStatus(422);
+});
+
+describe('many videos at once', function () {
+    it('answers the playable videos in the order asked, and leaves the rest out', function () {
+        $first = playVideo();
+        playOutput($first);
+        $second = playVideo();
+        playOutput($second, formats: ['dash']);
+        $processing = playVideo('processing');
+        $foreign = Video::create([
+            'user_id' => $this->user->id,
+            'project_id' => Project::factory()->for($this->user)->create()->id,
+            'name' => 'Theirs', 'duration' => 10, 'aspect_ratio' => '16:9', 'status' => 'completed',
+        ]);
+        playOutput($foreign);
+
+        // Absent rather than reported: a video that is not this project's, not ready or not a
+        // video at all is one the caller can tell from the list it sent.
+        $data = $this->postJson('/api/videos/play', ['videos' => [
+            $second->ulid, $processing->ulid, $foreign->ulid, (string) Str::ulid(), $first->ulid, $second->ulid,
+        ]])->assertOk()->json('data');
+
+        expect(array_column($data, 'videoUlid'))->toBe([$second->ulid, $first->ulid])
+            ->and(count($data[0]['sources']))->toBe(1)
+            ->and(count($data[1]['sources']))->toBe(2);
+    });
+
+    it('answers each video exactly as the single-video mint does', function () {
+        $video = playVideo();
+        playOutput($video, heights: [1080, 720]);
+
+        $one = $this->postJson("/api/videos/{$video->ulid}/play", ['resolution' => 720])->assertOk()->json('data');
+        $many = $this->postJson('/api/videos/play', ['videos' => [$video->ulid], 'resolution' => 720])->assertOk()->json('data.0');
+
+        $shape = fn (array $answer) => [
+            $answer['videoUlid'], $answer['thumbnailUrl'], $answer['storyboardUrl'],
+            array_map(fn (array $s) => [parse_url($s['url'], PHP_URL_PATH), $s['format'], $s['outputUlid'], $s['videoCodec'], $s['audioCodec']], $answer['sources']),
+        ];
+
+        expect($shape($many))->toBe($shape($one));
+    });
+
+    it('attributes every link of every video to the tracking id, under one expiry', function () {
+        $a = playVideo();
+        playOutput($a);
+        $b = playVideo();
+        playOutput($b);
+
+        $data = $this->postJson('/api/videos/play', ['videos' => [$a->ulid, $b->ulid], 'trackingId' => 'client-42', 'expiresIn' => 7200])
+            ->assertOk()->json('data');
+
+        $registry = app(TrackingRegistry::class);
+        $urls = collect($data)->flatMap(fn (array $v) => array_column($v['sources'], 'url'));
+
+        expect($urls)->toHaveCount(4)
+            ->and(array_unique(array_column($data, 'expiresAt')))->toHaveCount(1);
+
+        foreach ($urls as $url) {
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+            expect($registry->resolve(hash('sha256', $query['__hdnea__'])))->toBe('client-42');
+        }
+    });
+
+    it('does not query per video', function () {
+        $queries = function (int $count) {
+            $ulids = [];
+            foreach (range(1, $count) as $i) {
+                $video = playVideo();
+                playOutput($video, heights: [1080, 720], audioLanguages: ['en']);
+                $ulids[] = $video->ulid;
+            }
+
+            DB::flushQueryLog();
+            DB::enableQueryLog();
+            $this->postJson('/api/videos/play', ['videos' => $ulids])->assertOk();
+            $count = count(DB::getQueryLog());
+            DB::disableQueryLog();
+
+            return $count;
+        };
+
+        // The first request of a test also resolves what a process resolves once; not per video.
+        $queries(1);
+
+        expect($queries(8))->toBe($queries(2));
+    });
+
+    it('answers 503 for the whole batch when no node can serve it', function () {
+        $video = playVideo();
+        playOutput($video);
+        Node::query()->update(['is_active' => false]);
+
+        $this->postJson('/api/videos/play', ['videos' => [$video->ulid]])->assertStatus(503);
+    });
+
+    it('validates the list it takes', function () {
+        $this->postJson('/api/videos/play', [])->assertStatus(422)->assertJsonValidationErrors('videos');
+        $this->postJson('/api/videos/play', ['videos' => []])->assertStatus(422)->assertJsonValidationErrors('videos');
+        $this->postJson('/api/videos/play', ['videos' => ['short']])->assertStatus(422)->assertJsonValidationErrors('videos.0');
+        $this->postJson('/api/videos/play', ['videos' => array_fill(0, PlayVideosData::MAX_VIDEOS + 1, (string) Str::ulid())])
+            ->assertStatus(422)->assertJsonValidationErrors('videos');
+        $this->postJson('/api/videos/play', ['videos' => [(string) Str::ulid()], 'expiresIn' => 10])
+            ->assertStatus(422)->assertJsonValidationErrors('expiresIn');
+    });
 });
