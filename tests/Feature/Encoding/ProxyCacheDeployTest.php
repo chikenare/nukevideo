@@ -226,7 +226,7 @@ describe('a development proxy deploy', function () {
     it('lists the disks but ticks none of them', function () {
         $node = cacheNode();
         $ssh = Mockery::mock(SSHService::class);
-        $ssh->shouldReceive('run')->once()->andReturn("/dev/sdb\t4000000000000\tDISK\tempty\t\t0");
+        $ssh->shouldReceive('run')->once()->andReturn("/dev/sdb\t4000000000000\tDISK\tempty\t\t0\t0");
         app()->instance(SSHService::class, $ssh);
         Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
 
@@ -290,12 +290,12 @@ describe('the disk inventory', function () {
             ->and(strpos($input, 'cannot sudo without a password'))->toBeLessThan(strpos($input, 'ensure_commands()'));
     });
 
-    it('is written by the script in the six fields the parser reads', function () {
+    it('is written by the script in the seven fields the parser reads', function () {
         // The two sides only meet on a node. A field added to one and not the other drops every
         // disk from the listing, and the panel then has nothing to show.
         $shell = NodeService::deployScript('cache-disks');
 
-        expect($shell)->toContain("printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"\$dev\"");
+        expect($shell)->toContain("printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"\$dev\"");
     });
 
     it('parses what the host reports, one disk per line', function () {
@@ -304,10 +304,10 @@ describe('the disk inventory', function () {
 
         $ssh = Mockery::mock(SSHService::class);
         $ssh->shouldReceive('run')->once()->andReturn(implode("\n", [
-            "/dev/nvme0n1\t512110190592\tSAMSUNG MZVL2512\tsystem\tmounted at /\t0",
-            "/dev/sda\t10000831348736\tST10000NM0016\tempty\t\t0",
-            "/dev/sdb\t10000831348736\tST10000NM0016\tforeign\text4 \"backup\"\t0",
-            "/dev/sdc\t10000831348736\tST10000NM0016\tshared\tmounted at /, with unpartitioned space\t9946070941696",
+            "/dev/nvme0n1\t512110190592\tSAMSUNG MZVL2512\tsystem\tmounted at /\t0\t1",
+            "/dev/sda\t10000831348736\tST10000NM0016\tempty\t\t0\t0",
+            "/dev/sdb\t10000831348736\tST10000NM0016\tforeign\text4 \"backup\"\t0\t0",
+            "/dev/sdc\t10000831348736\tST10000NM0016\tshared\tmounted at /, with unpartitioned space\t9946070941696\t0",
             'not a disk line',
         ]));
         app()->instance(SSHService::class, $ssh);
@@ -322,7 +322,30 @@ describe('the disk inventory', function () {
             ->assertJsonPath('data.disks.1.free', 0)
             ->assertJsonPath('data.disks.2.detail', 'ext4 "backup"')
             ->assertJsonPath('data.disks.3.state', 'shared')
-            ->assertJsonPath('data.disks.3.free', 9946070941696);
+            ->assertJsonPath('data.disks.3.free', 9946070941696)
+            ->assertJsonPath('data.disks.0.fast', true)
+            ->assertJsonPath('data.disks.1.fast', false)
+            ->assertJsonPath('data.tieredPool', false);
+    });
+
+    it('says whether the existing pool has a fast tier new SSD/NVMe space can join', function () {
+        inProduction();
+        $node = cacheNode();
+        Sanctum::actingAs(User::factory()->create(['is_admin' => true]));
+
+        $listing = fn (string $lines) => tap(Mockery::mock(SSHService::class), fn ($ssh) => $ssh->shouldReceive('run')->andReturn($lines));
+
+        // nv-cdn-3 after its root was shrunk: a tiered pool, and the system SSD's free space.
+        app()->instance(SSHService::class, $listing(implode("\n", [
+            "/dev/sda\t960197124096\tSAMSUNG MZ7L3960\tshared\tmounted at /boot, with unpartitioned space\t843000000000\t1",
+            "/dev/sdb\t8001563222016\tHGST HUS728T8TAL\tnukevideo\tnukevideo cache (raid member)\t0\t0",
+            "/dev/sdc\t960197124096\tSAMSUNG MZ7L3960\tnukevideo\tnukevideo cache (tier)\t0\t1",
+        ])));
+        $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', true);
+
+        // One RAID 0, no fast tier: nothing can join it.
+        app()->instance(SSHService::class, $listing("/dev/sdb\t8001563222016\tHGST\tnukevideo\tnukevideo cache (raid member)\t0\t0"));
+        $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', false);
     });
 });
 
@@ -451,6 +474,24 @@ describe('pools on mixed hardware', function () {
             ->and($result->output())->toContain('dm-0: readahead 4096 KB')
             ->toContain('sdb: readahead 4096 KB')
             ->toContain('DONE');
+    });
+
+    it('adds new SSD/NVMe space to the fast tier of an existing pool, and only that', function () {
+        // The free space of a system SSD, or an SSD installed later, joins the cache the pool
+        // already has — it is a writethrough cache, so rebuilding it loses nothing but warmth.
+        // A spinning disk would mean rebuilding the pool itself, and stays a warning.
+        $shell = NodeService::deployScript('cache-disks');
+        $grow = substr($shell, strpos($shell, 'cache_grow_fast_tier() {'));
+
+        expect($shell)->toContain('if [ -n "$FREE_DISKS$SHARED_DISKS" ]; then cache_grow_fast_tier; fi')
+            ->and($grow)->toContain('a spinning disk is not added to an existing pool')
+            ->and($grow)->toContain('[ -z "$CACHE_BULK_DEVICE" ]')
+            // Carved, the one step that can still refuse, before the cache is taken apart.
+            ->and(strpos($grow, 'cache_carve_partitions'))->toBeLessThan(strpos($grow, '--uncache'))
+            // Rebuilt from the old fast devices and the new ones, never from the new ones alone.
+            ->and($grow)->toContain('cache_build_array "$CACHE_FAST_MD" "$CACHE_FAST_NAME" $members $fast_free $CARVED_PARTS')
+            // A rebuilt array whose deploy died before it joined is attached by the next one.
+            ->and($shell)->toContain('The fast tier was rebuilt but never attached');
     });
 
     it('never leaves a disk out: a kernel without dm-cache gets one pool of every disk', function () {

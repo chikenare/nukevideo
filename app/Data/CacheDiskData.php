@@ -20,5 +20,7 @@ class CacheDiskData extends Data
         public string $state,
         public string $detail,
         public int $free,
+        /** SSD/NVMe rather than spinning: what an existing tiered pool can add to its fast tier. */
+        public bool $fast = false,
     ) {}
 }

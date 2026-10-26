@@ -103,7 +103,7 @@ class ProxyCacheService
      * package by hand and come back. A short apt lock wait rather than the deploy's: somebody
      * is looking at a spinner. Failing to install it is not failing to list.
      *
-     * @return array<int, array{device: string, size: int, model: string, state: string, detail: string, free: int}>
+     * @return array<int, array{device: string, size: int, model: string, state: string, detail: string, free: int, fast: bool}>
      */
     public function inventory(Node $node): array
     {
@@ -138,13 +138,31 @@ class ProxyCacheService
         // the disk that matters.
         foreach (explode("\n", trim($output, "\r\n")) as $line) {
             $fields = explode("\t", rtrim($line, "\r"));
-            if (count($fields) !== 6) {
+            if (count($fields) !== 7) {
                 continue;
             }
-            [$device, $size, $model, $state, $detail, $free] = $fields;
-            $disks[] = ['device' => $device, 'size' => (int) $size, 'model' => $model, 'state' => $state, 'detail' => $detail, 'free' => (int) $free];
+            [$device, $size, $model, $state, $detail, $free, $fast] = $fields;
+            $disks[] = ['device' => $device, 'size' => (int) $size, 'model' => $model, 'state' => $state, 'detail' => $detail, 'free' => (int) $free, 'fast' => $fast === '1'];
         }
 
         return $disks;
+    }
+
+    /**
+     * Whether the pool on these disks has a fast tier, the one thing new SSD/NVMe space next to
+     * an existing pool can join (`cache_grow_fast_tier`). Read off the inventory's own words for
+     * a member of a tiered pool: a physical volume of its group, or a member of its fast array.
+     *
+     * @param  array<int, array{state: string, detail: string}>  $disks
+     */
+    public static function hasTieredPool(array $disks): bool
+    {
+        foreach ($disks as $disk) {
+            if ($disk['state'] === 'nukevideo' && str_contains($disk['detail'], 'tier')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

@@ -171,8 +171,13 @@ cache_disk_inventory() {
             [ -n "$sig" ] && { state="foreign"; detail="$sig partition table"; }
         fi
 
-        # `free` goes last and is never blank, so the line cannot lose its tail to a trim.
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$dev" "$SIZE" "$(printf '%b' "$MODEL")" "$state" "$detail" "$free"
+        # SSD/NVMe or spinning: what decides the tier a disk would join, and whether an existing
+        # pool can take it at all ({@see cache_grow_fast_tier}).
+        fast=0
+        if cache_is_fast "$dev"; then fast=1; fi
+
+        # `free` and `fast` go last and are never blank, so the line cannot lose its tail to a trim.
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$dev" "$SIZE" "$(printf '%b' "$MODEL")" "$state" "$detail" "$free" "$fast"
     done
 }
 
@@ -561,6 +566,12 @@ cache_assemble_pool() {
         done
         $SUDO vgchange -q -ay "$CACHE_VG" >/dev/null 2>&1 || true
         cache_repair_tiers
+        # A fast tier rebuilt by {@see cache_grow_fast_tier} whose deploy died before the array
+        # joined the group: ours by its name, and attaching it is what that deploy was doing.
+        if [ -z "$CACHE_FAST_DEVICE" ] && [ -n "$CACHE_BULK_DEVICE" ] && cache_array_active "$CACHE_FAST_MD"; then
+            echo "The fast tier was rebuilt but never attached — attaching it"
+            CACHE_FAST_DEVICE=$CACHE_FAST_MD
+        fi
         if [ -n "$CACHE_BULK_DEVICE" ] && [ -n "$CACHE_FAST_DEVICE" ]; then
             cache_build_tiers
         else
@@ -673,11 +684,80 @@ RULES
     $SUDO udevadm control --reload 2>/dev/null || true
 }
 
+# SSD/NVMe space next to an existing tiered pool, added to its fast tier: a disk installed since
+# the pool was built, or the unpartitioned space an operator freed on the system disk. The pool
+# itself is never rebuilt — growing the RAID 0 under it would mean reformatting it, and a
+# spinning disk is still only reported — but its fast tier is a cache: writethrough, so the
+# spinning tier holds every block, and taking it apart loses what it had warmed and nothing
+# else. It is detached, rebuilt as one RAID 0 of the old fast devices and the new ones (the
+# layout a pool built with all of them gets), and attached again.
+#
+# Each step leaves a state the next deploy finishes: a pool left uncached gets its old fast
+# device back as a tier, a fast device released from the group reads as a spare disk again,
+# and a rebuilt array that never joined the group is attached by cache_assemble_pool.
+cache_grow_fast_tier() {
+    local d fast_free="" fast_shared="" spinning="" members=""
+    for d in $FREE_DISKS; do
+        if cache_is_fast "$d"; then fast_free="$fast_free $d"; else spinning="$spinning $d"; fi
+    done
+    for d in $SHARED_DISKS; do
+        if cache_is_fast "$d"; then fast_shared="$fast_shared $d"; else spinning="$spinning $d"; fi
+    done
+
+    if [ -z "$CACHE_BULK_DEVICE" ] || [ -z "${fast_free// /}${fast_shared// /}" ]; then
+        echo "WARNING: disks not part of the pool are left untouched:" $FREE_DISKS $SHARED_DISKS
+        return 0
+    fi
+    [ -n "${spinning// /}" ] && echo "WARNING: a spinning disk is not added to an existing pool, left untouched:" $spinning
+
+    echo "Adding SSD/NVMe to the pool's fast tier:" $fast_free $fast_shared
+    FREE_DISKS=$fast_free
+    SHARED_DISKS=$fast_shared
+    # Carved before anything is wiped or detached, as for a new pool: it is the step that can
+    # still refuse, and a refusal should find the pool as it was.
+    cache_carve_partitions
+    cache_wipe_disks
+
+    if [ -n "$CACHE_FAST_DEVICE" ]; then
+        if [ "$(readlink -f "$CACHE_FAST_DEVICE")" = "$(readlink -f "$CACHE_FAST_MD" 2>/dev/null || true)" ]; then
+            members=$(cache_array_members "$CACHE_FAST_NAME")
+        else
+            members=$CACHE_FAST_DEVICE
+        fi
+    fi
+
+    if [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" = "cache" ]; then
+        $SUDO lvconvert -q -y --uncache "$CACHE_VG/$CACHE_LV" >/dev/null
+    fi
+    if cache_lvm lvs "$CACHE_VG/fast" >/dev/null; then
+        $SUDO lvremove -q -y "$CACHE_VG/fast" >/dev/null
+    fi
+
+    if [ -n "$CACHE_FAST_DEVICE" ]; then
+        if cache_in_vg "$CACHE_FAST_DEVICE"; then
+            $SUDO vgreduce -q "$CACHE_VG" "$CACHE_FAST_DEVICE" >/dev/null
+        fi
+        $SUDO pvremove -q -y "$CACHE_FAST_DEVICE" >/dev/null 2>&1 || true
+        if [ -n "$members" ] && [ "$members" != "$CACHE_FAST_DEVICE" ]; then
+            $SUDO mdadm --stop "$CACHE_FAST_DEVICE" >/dev/null
+            for d in $members; do $SUDO mdadm --zero-superblock --force "$d" 2>/dev/null || true; done
+        fi
+        for d in $members; do $SUDO wipefs -a -q "$d" >/dev/null; done
+    fi
+
+    # shellcheck disable=SC2086
+    cache_build_array "$CACHE_FAST_MD" "$CACHE_FAST_NAME" $members $fast_free $CARVED_PARTS
+    CACHE_FAST_DEVICE=$CACHE_ARRAY
+    cache_build_tiers
+}
+
 # Leaves CACHE_MOUNT pointing at this node's directory on the pool, or empty when the host
 # has no disk, and no room on its system disks, to give — the caller then falls back to a docker volume. Idempotent on the pool:
 # a redeploy, which is how a node is updated, keeps the cache. Growing a RAID 0 means
 # rebuilding it, which is a decision to take from the panel (wipe the label, redeploy), not a
-# side effect of an update: a spare disk next to an existing pool is reported, not absorbed.
+# side effect of an update: a spare spinning disk next to an existing pool is reported, not
+# absorbed. SSD/NVMe space next to a tiered pool is the exception, because the fast tier is a
+# cache: it joins that ({@see cache_grow_fast_tier}).
 provision_cache_pool() {
     echo "=== Cache disks ==="
     ensure_commands mdadm=mdadm mkfs.xfs=xfsprogs
@@ -695,8 +775,8 @@ provision_cache_pool() {
 
     if [ -n "$POOL_DISKS" ]; then
         echo "Existing cache pool found — keeping it"
-        [ -n "$FREE_DISKS$SHARED_DISKS" ] && echo "WARNING: disks not part of the pool are left untouched:" $FREE_DISKS $SHARED_DISKS
         cache_assemble_pool
+        if [ -n "$FREE_DISKS$SHARED_DISKS" ]; then cache_grow_fast_tier; fi
         cache_mount_pool
     elif [ -n "$FREE_DISKS$SHARED_DISKS" ]; then
         [ -n "$FREE_DISKS" ] && echo "Formatting: ${FREE_DISKS//$'\n'/ }"

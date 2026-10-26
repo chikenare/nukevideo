@@ -74,12 +74,16 @@ class NodeController extends Controller
             return response()->json(['data' => ['preselect' => false, 'disks' => []]]);
         }
 
+        $disks = $cache->inventory($node);
+
         return response()->json(['data' => [
             // Whether the panel ticks every disk the cache can use by default — spare ones and
             // the free space of system disks. Not from a development panel, whose deploy
             // target is often the developer's own machine.
             'preselect' => ! app()->isLocal(),
-            'disks' => CacheDiskData::collect($cache->inventory($node)),
+            // An existing pool with a fast tier, which new SSD/NVMe space can join.
+            'tieredPool' => ProxyCacheService::hasTieredPool($disks),
+            'disks' => CacheDiskData::collect($disks),
         ]]);
     }
 
