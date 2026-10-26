@@ -34,7 +34,7 @@ class NodeService {
         return res.data
     }
 
-    async getCacheDisks(id: number): Promise<{ preselect: boolean; disks: App.Data.CacheDiskData[] }> {
+    async getCacheDisks(id: number): Promise<{ preselect: boolean; tieredPool: boolean; disks: App.Data.CacheDiskData[] }> {
         const res = await this.api.get(`${this.BASE_PATH}/${id}/cache-disks`)
         return res.data.data
     }

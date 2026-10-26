@@ -42,6 +42,7 @@ model: string,
 state: string,
 detail: string,
 free: number,
+fast: boolean,
 };
 export type CdnSettingsData = {
 provider: App.Enums.CdnDriver,

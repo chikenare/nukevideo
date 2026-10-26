@@ -43,15 +43,19 @@ const disksLoading = ref(false)
 const disksError = ref<string | null>(null)
 const cacheDisks = ref<CacheDisk[]>([])
 const disksConfirmed = ref(false)
+const tieredPool = ref(false)
 const poolDisks = computed(() => cacheDisks.value.filter(d => d.state === 'nukevideo'))
-// A host that already has its pool keeps it whatever else is ticked, so nothing is offered
-// there: asking would be a question whose answer the deploy ignores.
+// A host that already has its pool keeps it. The one thing it can still take is SSD/NVMe space
+// for its fast tier, when it has one: that tier is a cache, rebuilt without touching the pool.
+// Anything else would mean rebuilding the pool, so it is not offered — asking would be a
+// question whose answer the deploy ignores.
 const hasPool = computed(() => poolDisks.value.length > 0)
+const usableDisks = computed(() => cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)))
 const offeredDisks = computed(() =>
-  hasPool.value ? [] : cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)),
+  hasPool.value ? (tieredPool.value ? usableDisks.value.filter(d => d.fast) : []) : usableDisks.value,
 )
 const idleDisks = computed(() =>
-  hasPool.value ? cacheDisks.value.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)) : [],
+  hasPool.value ? usableDisks.value.filter(d => !offeredDisks.value.includes(d)) : [],
 )
 const needsDiskConfirmation = computed(() => offeredDisks.value.length > 0 && !disksConfirmed.value)
 // The listing installs sfdisk when the host lacks it; where that failed it cannot tell whether
@@ -131,6 +135,7 @@ const show = async (targetNode: Node) => {
   disksLoading.value = false
   disksError.value = null
   cacheDisks.value = []
+  tieredPool.value = false
   selectedDisks.value = []
   disksConfirmed.value = false
   open.value = true
@@ -140,10 +145,13 @@ const show = async (targetNode: Node) => {
     try {
       const result = await NodeService.getCacheDisks(targetNode.id)
       cacheDisks.value = result.disks
+      tieredPool.value = result.tieredPool
       // A production panel ticks every spare disk; a development one ticks none, because its
-      // deploy target is often the developer's own machine.
+      // deploy target is often the developer's own machine. Next to an existing pool a disk
+      // holding something is not ticked for it: a routine redeploy is not where a disk with
+      // data on it should be erased by default.
       selectedDisks.value = result.preselect
-        ? result.disks.filter(d => ['empty', 'foreign', 'shared'].includes(d.state)).map(d => d.device)
+        ? offeredDisks.value.filter(d => !hasPool.value || d.state !== 'foreign').map(d => d.device)
         : []
     } catch (err) {
       disksError.value = (err as Error).message
@@ -274,17 +282,20 @@ defineExpose({ show })
             <div class="flex flex-col gap-0.5">
               <span>Existing cache pool on {{ poolDisks.map(d => d.device).join(', ') }} — kept as it is.</span>
               <span v-if="idleDisks.length > 0">
-                {{ idleDisks.map(d => d.device).join(', ') }} {{ idleDisks.length === 1 ? 'is' : 'are' }} not part of it and left untouched: a pool only grows by being rebuilt.
+                {{ idleDisks.map(d => d.device).join(', ') }} {{ idleDisks.length === 1 ? 'is' : 'are' }} not part of it and left untouched: only SSD/NVMe space joins an existing pool, in front of it as cache, and only when the pool has a fast tier. Anything else means rebuilding the pool.
               </span>
             </div>
           </div>
-          <div v-else-if="offeredDisks.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
+          <div v-if="!disksLoading && !disksError && offeredDisks.length > 0" class="flex items-start gap-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 p-3">
             <AlertTriangle class="h-5 w-5 text-yellow-500 mt-0.5 shrink-0" />
             <div class="flex flex-col gap-1 flex-1 min-w-0">
               <span class="text-sm font-medium">
-                Disks for the cache pool
+                {{ hasPool ? "SSD/NVMe for the pool's fast cache" : 'Disks for the cache pool' }}
               </span>
-              <span class="text-xs text-muted-foreground">
+              <span v-if="hasPool" class="text-xs text-muted-foreground">
+                Ticked, they join the cache in front of the existing pool, which keeps every file it holds; the fast cache starts empty and refills from it. Everything on a ticked spare disk is erased. A disk shared with the operating system only gives its unpartitioned space.
+              </span>
+              <span v-else class="text-xs text-muted-foreground">
                 Everything on a ticked spare disk is erased; untick one to leave it alone. A disk shared with the operating system only gives its unpartitioned space: a partition is added there and nothing that exists is touched.
               </span>
               <ul class="mt-1 flex flex-col gap-0.5 font-mono text-xs">
@@ -308,12 +319,12 @@ defineExpose({ show })
                   {{ confirmLabel }}
                 </Button>
                 <Button v-else variant="outline" size="sm" @click="disksConfirmed = true">
-                  Skip the disks — cache in a volume
+                  {{ hasPool ? 'Keep the pool as it is' : 'Skip the disks — cache in a volume' }}
                 </Button>
               </div>
             </div>
           </div>
-          <div v-if="sfdiskMissing && !hasPool" class="flex items-start gap-2 text-xs text-muted-foreground">
+          <div v-if="sfdiskMissing && (!hasPool || tieredPool)" class="flex items-start gap-2 text-xs text-muted-foreground">
             <AlertTriangle class="h-4 w-4 shrink-0 text-yellow-500" />
             <span>
               <code>sfdisk</code> is missing on this host and could not be installed, so its system disks could not be checked for unpartitioned space to share. Install the <code>fdisk</code> package and reopen this dialog if one of them should be.
