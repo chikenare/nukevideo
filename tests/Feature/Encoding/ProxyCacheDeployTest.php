@@ -191,7 +191,10 @@ describe('a production proxy deploy', function () {
 
         expect($script)->toContain('${CACHE_EXPECT_POOL:+-e "VOD_CACHE_EXPECT_POOL=$CACHE_EXPECT_POOL"}')
             ->and($script)->toContain('CACHE_EXPECT_POOL=1')
-            ->and($script)->toContain('touch "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"');
+            // A directory: nginx's cache loader deletes any file under the cache that is not
+            // an entry, and the next restart then took a mounted pool for the OS disk.
+            ->and($script)->toContain('mkdir -p "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"')
+            ->and($script)->not->toContain('touch "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"');
     });
 
     it('checks for sudo before anything else runs on the node', function () {
@@ -343,9 +346,167 @@ describe('the disk inventory', function () {
         ])));
         $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', true);
 
+        // The inventory itself, run over the layers nv-cdn-3 really has, not lines written to
+        // match the parser: every disk of that pool ends in the same XFS, which used to overwrite
+        // the fast tier's "(tier)" — the panel then saw no tier, and offered nothing.
+        $stubs = <<<'SH'
+            lsblk() {
+                case "$*" in
+                    *-dn*)
+                        [[ " $DISKS " == *" sdb "* ]] && printf 'NAME="sdb" TYPE="disk" RM="0" SIZE="8001563222016" MODEL="HGST"\n'
+                        [[ " $DISKS " == *" sdc "* ]] && printf 'NAME="sdc" TYPE="disk" RM="0" SIZE="960197124096" MODEL="SAMSUNG"\n'
+                        return 0 ;;
+                    *" /dev/sdb") printf 'KNAME="/dev/sdb" MOUNTPOINT=""\nKNAME="/dev/md127" MOUNTPOINT=""\nKNAME="/dev/dm-3" MOUNTPOINT=""\nKNAME="/dev/dm-5" MOUNTPOINT="/var/lib/nukevideo/cache"\n' ;;
+                    *" /dev/sdc") printf 'KNAME="/dev/sdc" MOUNTPOINT=""\nKNAME="/dev/dm-2" MOUNTPOINT=""\nKNAME="/dev/dm-5" MOUNTPOINT="/var/lib/nukevideo/cache"\n' ;;
+                esac
+            }
+            blkid() {
+                local dev=${!#}
+                case "$*" in
+                    *"-s TYPE"*) case "$dev" in /dev/sdb) echo linux_raid_member ;; /dev/md127|/dev/sdc) echo LVM2_member ;; /dev/dm-5) echo xfs ;; *) return 2 ;; esac ;;
+                    *"-s LABEL"*) case "$dev" in /dev/sdb) echo nv-cdn-3:nukevideo-cache ;; /dev/dm-5) echo nukevideo ;; *) return 2 ;; esac ;;
+                    *) return 2 ;;
+                esac
+            }
+            pvs() { echo "  nukevideo_edge"; }
+            SH;
+        $inventory = function (string $disks) use ($stubs) {
+            $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'DISKS' => $disks])
+                ->run(['bash', '-c', 'SUDO=""; . "$SCRIPT"; '.$stubs.'; cache_disk_inventory']);
+            expect($result->successful())->toBeTrue($result->errorOutput());
+
+            return $result->output();
+        };
+
+        $both = $inventory('sdb sdc');
+        expect($both)->toContain("/dev/sdb\t8001563222016\tHGST\tnukevideo\tnukevideo cache (raid member, tier)\t")
+            ->and($both)->toContain("/dev/sdc\t960197124096\tSAMSUNG\tnukevideo\tnukevideo cache (tier)\t");
+        app()->instance(SSHService::class, $listing($both));
+        $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', true);
+
+        // The same pool once its fast tier is gone — a dead SSD dropped, or a grow cut short
+        // after the old SSD left the group: only the spinning disks are left to say the pool
+        // has tiers, and the panel must still offer SSD space to give it one back.
+        $spinningOnly = $inventory('sdb');
+        expect($spinningOnly)->toContain("\tnukevideo cache (raid member, tier)\t");
+        app()->instance(SSHService::class, $listing($spinningOnly));
+        $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', true);
+
         // One RAID 0, no fast tier: nothing can join it.
         app()->instance(SSHService::class, $listing("/dev/sdb\t8001563222016\tHGST\tnukevideo\tnukevideo cache (raid member)\t0\t0"));
         $this->getJson("/api/nodes/{$node->id}/cache-disks")->assertOk()->assertJsonPath('data.tieredPool', false);
+    });
+});
+
+/**
+ * Runs the deploy's own `cache_drop_unreadable_cache` against a faked LVM and device-mapper: the
+ * volume's segment type, cache mode and attributes live in files the stubs read and write, so
+ * what an activation or an uncache changes is seen by the next command, as on a node.
+ *
+ * @param  array<string, string>  $env  MODE (writethrough|writeback), ATTR (the volume's
+ *                                      attributes to start with), ACTIVATE_ON (the lvchange
+ *                                      attempt that succeeds, if any)
+ * @return array{exit: int, output: string, log: string}
+ */
+function dropUnreadableCache(array $env): array
+{
+    $script = <<<'SH'
+        SUDO=""; . "$SCRIPT"
+        T=$(mktemp -d)
+        echo cache > "$T/seg"; echo "$MODE" > "$T/mode"; echo "$ATTR" > "$T/attr"; : > "$T/log"
+        lvs() { case "$*" in *segtype*) echo "  $(cat "$T/seg")" ;; *cache_mode*) echo "  $(cat "$T/mode")" ;; *lv_attr*) echo "  $(cat "$T/attr")" ;; esac; }
+        lvchange() {
+            local n=$(( $(cat "$T/tries" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$T/tries"; echo "lvchange" >> "$T/log"
+            if [ "$n" -ge "${ACTIVATE_ON:-99}" ]; then echo "Cwi-a-C---" > "$T/attr"; return 0; fi
+            echo "  Activation of logical volume nukevideo_edge/data is prohibited while logical volume nukevideo_edge/fast_cvol is active." >&2
+            return 5
+        }
+        dmsetup() {
+            case "$*" in
+                *"-o name"*) printf 'nukevideo_edge-data_corig\nnukevideo_edge--x-other\nvg0-root\n' ;;
+                *"-o open"*) echo "    0" ;;
+                remove*) echo "remove ${*: -1}" >> "$T/log" ;;
+            esac
+        }
+        lvconvert() { echo "lvconvert $*" >> "$T/log"; echo linear > "$T/seg"; }
+        udevadm() { :; }
+        cache_has_dm_cache() { return 0; }
+        ( cache_drop_unreadable_cache ); echo "EXIT=$?"
+        echo "--- log"; cat "$T/log"; rm -rf "$T"
+        SH;
+
+    $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'ATTR' => 'Cwi---C---', ...$env])
+        ->run(['bash', '-c', $script]);
+    preg_match('/^EXIT=(\d+)$/m', $result->output(), $exit);
+    [$output, $log] = array_pad(explode("--- log\n", $result->output(), 2), 2, '');
+
+    return ['exit' => (int) ($exit[1] ?? -1), 'output' => $output, 'log' => $log];
+}
+
+describe('a cache that will not activate', function () {
+    // An unclean shutdown left a node's fast tier failing LVM's metadata check: the pool would
+    // not activate at boot, and the node served two days off the OS disk.
+
+    it('drops a writethrough cache, clearing only this group\'s leftovers first', function () {
+        $run = dropUnreadableCache(['MODE' => 'writethrough']);
+
+        expect($run['exit'])->toBe(0)
+            ->and($run['log'])->toContain('remove nukevideo_edge-data_corig')
+            // Another group whose name merely starts the same, and the OS's own volumes.
+            ->and($run['log'])->not->toContain('nukevideo_edge--x-other')
+            ->and($run['log'])->not->toContain('vg0-root')
+            ->and($run['log'])->toContain('--uncache')
+            // What LVM said is what the operator reads in the deploy log.
+            ->and($run['output'])->toContain('is prohibited while logical volume nukevideo_edge/fast_cvol is active');
+    });
+
+    it('keeps the cache when releasing the leftovers is all it took', function () {
+        $run = dropUnreadableCache(['MODE' => 'writethrough', 'ACTIVATE_ON' => '2']);
+
+        expect($run['exit'])->toBe(0)
+            ->and($run['log'])->toContain('remove nukevideo_edge-data_corig')
+            ->and($run['log'])->not->toContain('lvconvert')
+            ->and($run['output'])->toContain('the cache is kept');
+    });
+
+    it('leaves a writeback cache alone: it may hold the only copy of recent writes', function () {
+        $run = dropUnreadableCache(['MODE' => 'writeback']);
+
+        expect($run['exit'])->toBe(1)
+            ->and($run['log'])->not->toContain('lvconvert')
+            ->and($run['log'])->not->toContain('remove');
+    });
+
+    it('never touches a volume LVM already reports active, /dev links or not', function () {
+        // Read off /dev, a symlink udev had not written yet would pass for a volume that will
+        // not activate, and a healthy pool would lose its warm cache.
+        $run = dropUnreadableCache(['MODE' => 'writethrough', 'ATTR' => 'Cwi-aoC---']);
+
+        expect($run['exit'])->toBe(0)->and(trim($run['log']))->toBe('');
+    });
+
+    it('runs between repairing the tiers and building them', function () {
+        $script = NodeService::deployScript('cache-disks');
+        $assemble = substr($script, strpos($script, 'cache_assemble_pool() {'));
+
+        expect(strpos($assemble, 'cache_repair_tiers'))->toBeLessThan(strpos($assemble, 'cache_drop_unreadable_cache'))
+            ->and(strpos($assemble, 'cache_drop_unreadable_cache'))->toBeLessThan(strpos($assemble, 'cache_build_tiers'));
+    });
+
+    it('replaces a marker file an older deploy left with a directory nginx will not delete', function () {
+        $dir = sys_get_temp_dir().'/marker-'.uniqid();
+        mkdir($dir);
+        touch("{$dir}/.nukevideo-pool");
+
+        $script = 'SUDO=""; . "$SCRIPT"; CACHE_DIRECTORY="$DIR"; mountpoint() { return 0; }; tee() { cat >/dev/null; };'
+            .' df() { echo "Filesystem Size Used Avail Use% Mounted"; echo "dev 15T 1T 14T 7% /x"; };'
+            .' cache_mount_pool && cache_mount_pool';
+        $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'DIR' => $dir])->run(['bash', '-c', $script]);
+
+        expect($result->successful())->toBeTrue($result->errorOutput())
+            ->and(is_dir("{$dir}/.nukevideo-pool"))->toBeTrue();
+        rmdir("{$dir}/.nukevideo-pool");
+        rmdir($dir);
     });
 });
 

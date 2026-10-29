@@ -57,13 +57,13 @@ export VOD_TOKEN_NAME="${VOD_TOKEN_NAME:-__hdnea__}"
 # nginx does not parse a `t` suffix.
 CACHE_DIR=/var/cache/nginx/vod
 
-# The deploy that mounted a pool into CACHE_DIR leaves a marker file at its root and says so
+# The deploy that mounted a pool into CACHE_DIR leaves a marker at its root and says so
 # with VOD_CACHE_EXPECT_POOL=1. The pool is mounted `nofail`, so a host can boot without it and
 # the bind mount then hands this container the empty mount point directory on the OS disk — and
 # sizing the cache to *that* filesystem would let the edge fill the OS disk. Missing marker with
 # the flag set means exactly that: say so loudly and cap the cache at the fallback size instead.
-# The marker is a hidden file, not a cache entry: nginx's cache loader only indexes files whose
-# names are hex keys under the `levels` directories and ignores anything else in the root.
+# The marker is a hidden directory, not a file: nginx's cache loader deletes every file under
+# the cache that is not a cache entry, so a marker file would be gone by the next restart.
 # The cap mirrors App\Services\ProxyCacheService::FALLBACK_MAX_SIZE, what a host with no pool
 # at all gets.
 POOL_MARKER="$CACHE_DIR/.nukevideo-pool"

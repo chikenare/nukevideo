@@ -147,12 +147,11 @@ const show = async (targetNode: Node) => {
       cacheDisks.value = result.disks
       tieredPool.value = result.tieredPool
       // A production panel ticks every spare disk; a development one ticks none, because its
-      // deploy target is often the developer's own machine. Next to an existing pool a disk
-      // holding something is not ticked for it: a routine redeploy is not where a disk with
-      // data on it should be erased by default.
-      selectedDisks.value = result.preselect
-        ? offeredDisks.value.filter(d => !hasPool.value || d.state !== 'foreign').map(d => d.device)
-        : []
+      // deploy target is often the developer's own machine. Next to an existing pool nothing is
+      // ticked: every redeploy of the node shows this list, and growing its fast tier — which
+      // carves the OS disk and starts the SSD cache cold — is a choice, not a default one click
+      // away from an update.
+      selectedDisks.value = result.preselect && !hasPool.value ? offeredDisks.value.map(d => d.device) : []
     } catch (err) {
       disksError.value = (err as Error).message
     }
