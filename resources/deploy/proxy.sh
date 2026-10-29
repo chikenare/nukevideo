@@ -45,6 +45,7 @@ if [ -z "$CACHE_MOUNT" ]; then
 else
     CACHE_EXPECT_POOL=1
     cache_tune_pool
+    cache_install_boot_recovery
 fi
 
 # What the host needs for an edge whose cache lives on disk. Written to one file of ours, so

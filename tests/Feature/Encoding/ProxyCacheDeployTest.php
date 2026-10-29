@@ -510,6 +510,44 @@ describe('a cache that will not activate', function () {
     });
 });
 
+describe('the pool at boot', function () {
+    // LVM gave up on a pool whose cache failed its metadata check after an unclean shutdown,
+    // and the node served two days off the OS disk with nothing to bring the pool back.
+
+    it('is brought up by a unit ordered before docker, installed whenever there is a pool', function () {
+        $proxy = NodeService::deployScript('proxy');
+        $pool = substr($proxy, strpos($proxy, 'CACHE_EXPECT_POOL=1'), 200);
+
+        expect($pool)->toContain('cache_install_boot_recovery');
+    });
+
+    it('writes a boot script from the deploy\'s own functions that cannot format or create anything', function () {
+        $dir = sys_get_temp_dir().'/boot-'.uniqid();
+        mkdir($dir);
+        $script = 'SUDO=""; . "$SCRIPT"; systemctl() { echo "systemctl $*" >> "$DIR/systemctl"; };'
+            .' CACHE_BOOT_SCRIPT="$DIR/cache-boot.sh"; CACHE_BOOT_UNIT="$DIR/unit"; cache_install_boot_recovery';
+        $result = Process::env(['SCRIPT' => resource_path('deploy/cache-disks.sh'), 'DIR' => $dir])->run(['bash', '-c', $script]);
+
+        $boot = (string) @file_get_contents("{$dir}/cache-boot.sh");
+        $unit = (string) @file_get_contents("{$dir}/unit");
+        $systemctl = (string) @file_get_contents("{$dir}/systemctl");
+        $parses = Process::run(['bash', '-n', "{$dir}/cache-boot.sh"]);
+        array_map('unlink', glob("{$dir}/*"));
+        rmdir($dir);
+
+        expect($result->successful())->toBeTrue($result->errorOutput())
+            ->and($parses->successful())->toBeTrue($parses->errorOutput())
+            ->and($boot)->toContain('cache_drop_unreadable_cache ()')
+            ->and($boot)->toContain('cache_repair_tiers ()')
+            ->and(rtrim($boot))->toEndWith('cache_boot_recover')
+            // At boot a disk that is slow can read as blank: nothing there may write a disk.
+            ->and($boot)->not->toMatch('/mkfs|cache_format|wipefs|mdadm --create|lvcreate|cache_build_tiers/')
+            ->and($unit)->toContain('Before=docker.service')
+            ->and($unit)->toContain("ExecStart=/bin/bash {$dir}/cache-boot.sh")
+            ->and($systemctl)->toContain('enable nukevideo-cache-boot.service');
+    });
+});
+
 describe('traefik in front of the edge', function () {
     it('is deployed from a development panel too, without TLS', function () {
         // A development panel deploys to dedicated servers as well as to the developer's own

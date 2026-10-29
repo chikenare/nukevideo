@@ -797,6 +797,92 @@ RULES
     $SUDO udevadm control --reload 2>/dev/null || true
 }
 
+# The pool brought up at boot, before the edge: what LVM's own autoactivation gives up on. An
+# unclean shutdown can leave the fast tier failing LVM's metadata check, and LVM then refuses to
+# activate the volume at all — the host boots without its pool, `nofail` lets it, and the edge
+# caches on the OS disk until somebody notices and redeploys. That happened, for two days. This
+# does at boot what the deploy does: waits for the disks, drops a writethrough cache that will not
+# activate (the spinning tier holds every block), drops a fast tier whose device is gone, and
+# mounts. It attaches nothing and formats nothing — a fresh cache waits for the next deploy, and
+# a volume that will not come up is left for a person. Never fails the boot: the edge still
+# starts, capped, on whatever it finds.
+cache_boot_recover() {
+    local missing
+    if mountpoint -q "$CACHE_POOL_MOUNT"; then echo "cache pool already mounted"; return 0; fi
+    $SUDO udevadm settle --timeout=60 2>/dev/null || true
+    cache_assemble_array "$CACHE_POOL_MD" "$CACHE_POOL_NAME"
+    cache_assemble_array "$CACHE_FAST_MD" "$CACHE_FAST_NAME"
+
+    if cache_lvm vgs "$CACHE_VG" >/dev/null; then
+        # A disk that is late is not a disk that is gone: a minute for every member to show up
+        # before a missing fast tier is given up on.
+        for _ in $(seq 30); do
+            missing=$(cache_lvm vgs --noheadings -o vg_missing_pv_count "$CACHE_VG" | tr -d ' ')
+            [ "${missing:-0}" -gt 0 ] 2>/dev/null || break
+            sleep 2
+            $SUDO udevadm settle 2>/dev/null || true
+        done
+        $SUDO vgchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG" >/dev/null 2>&1 || true
+        # In subshells: both end with `exit` on what they leave for a person, and this goes on to
+        # mount whatever did come up.
+        ( cache_repair_tiers ) || true
+        ( cache_drop_unreadable_cache ) || true
+        $SUDO lvchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG/$CACHE_LV" >/dev/null 2>&1 || true
+        $SUDO udevadm settle 2>/dev/null || true
+    fi
+
+    # Only what carries the pool's label, through its fstab line; never a device found blank.
+    mountpoint -q "$CACHE_POOL_MOUNT" || $SUDO mount "$CACHE_POOL_MOUNT" 2>/dev/null || true
+    if mountpoint -q "$CACHE_POOL_MOUNT"; then
+        echo "cache pool mounted at $CACHE_POOL_MOUNT"
+    else
+        echo "WARNING: the cache pool could not be brought up — the edge will start capped on the OS disk; redeploy the node"
+    fi
+    return 0
+}
+
+# Installs cache_boot_recover as a oneshot unit ordered before docker, so the edge never starts
+# ahead of its pool. The script is written from the functions this very deploy runs (`declare
+# -f`), not from a second copy that could drift from them, and replaced on every deploy.
+CACHE_BOOT_SCRIPT=${CACHE_BOOT_SCRIPT:-/usr/local/lib/nukevideo/cache-boot.sh}
+CACHE_BOOT_UNIT=${CACHE_BOOT_UNIT:-/etc/systemd/system/nukevideo-cache-boot.service}
+cache_install_boot_recovery() {
+    command -v systemctl >/dev/null 2>&1 || { echo "WARNING: no systemd — the pool is not brought up at boot if LVM gives up on it"; return 0; }
+    $SUDO mkdir -p "$(dirname "$CACHE_BOOT_SCRIPT")"
+    {
+        echo '#!/bin/bash'
+        echo "# Written by the nukevideo deploy (resources/deploy/cache-disks.sh, cache_boot_recover); replaced on every deploy."
+        echo 'SUDO=""'
+        echo 'ensure_commands() { :; }'
+        declare -p CACHE_POOL_MOUNT CACHE_POOL_LABEL CACHE_POOL_MD CACHE_POOL_NAME CACHE_FAST_MD CACHE_FAST_NAME \
+            CACHE_VG CACHE_LV CACHE_LV_DEVICE CACHE_LVM_CONFIG
+        declare -f cache_probe cache_lvm cache_vg_of cache_in_vg cache_is_fast cache_queue_of cache_has_dm_cache \
+            cache_array_members cache_array_active cache_assemble_array cache_repair_tiers \
+            cache_lv_active cache_release_leftovers cache_drop_unreadable_cache cache_boot_recover
+        echo 'cache_boot_recover'
+    } | $SUDO tee "$CACHE_BOOT_SCRIPT" >/dev/null
+    $SUDO chmod 0755 "$CACHE_BOOT_SCRIPT"
+    $SUDO tee "$CACHE_BOOT_UNIT" >/dev/null <<UNIT
+# Written by the nukevideo deploy (resources/deploy/cache-disks.sh, cache_install_boot_recovery).
+[Unit]
+Description=NukeVideo edge cache pool, brought up before the edge
+After=local-fs.target systemd-udev-trigger.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash $CACHE_BOOT_SCRIPT
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    $SUDO systemctl daemon-reload 2>/dev/null || true
+    $SUDO systemctl enable nukevideo-cache-boot.service >/dev/null 2>&1 \
+        || echo "WARNING: could not enable nukevideo-cache-boot.service — the pool is not brought up at boot if LVM gives up on it"
+}
+
 # SSD/NVMe space next to an existing tiered pool, added to its fast tier: a disk installed since
 # the pool was built, or the unpartitioned space an operator freed on the system disk. The pool
 # itself is never rebuilt — growing the RAID 0 under it would mean reformatting it, and a
