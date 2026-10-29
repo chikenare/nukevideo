@@ -429,6 +429,7 @@ function dropUnreadableCache(array $env): array
             esac
         }
         lvconvert() { echo "lvconvert $*" >> "$T/log"; echo linear > "$T/seg"; }
+        vgs() { echo "  ${MISSING:-0}"; }
         udevadm() { :; }
         cache_has_dm_cache() { return 0; }
         ( cache_drop_unreadable_cache ); echo "EXIT=$?"
@@ -467,6 +468,14 @@ describe('a cache that will not activate', function () {
             ->and($run['log'])->toContain('remove nukevideo_edge-data_corig')
             ->and($run['log'])->not->toContain('lvconvert')
             ->and($run['output'])->toContain('the cache is kept');
+    });
+
+    it('drops nothing while the group is missing a disk: a late spinning disk is not a bad cache', function () {
+        $run = dropUnreadableCache(['MODE' => 'writethrough', 'MISSING' => '1']);
+
+        expect($run['exit'])->toBe(1)
+            ->and($run['log'])->not->toContain('lvconvert')
+            ->and($run['log'])->not->toContain('remove');
     });
 
     it('leaves a writeback cache alone: it may hold the only copy of recent writes', function () {
@@ -728,11 +737,17 @@ describe('pools on mixed hardware', function () {
         $shell = NodeService::deployScript('cache-disks');
 
         $check = strpos($shell, 'the spinning tier of the cache pool is missing');
-        $reduce = strpos($shell, 'vgreduce -q --removemissing');
+        $detached = strpos($shell, 'the missing fast tier could not be detached');
+        // With the devices-file override: a host whose devices file leaves the spinning array
+        // out would read it as missing too, and the pool would go with the cache.
+        $reduce = strpos($shell, 'vgreduce -q --config "$CACHE_LVM_CONFIG" --removemissing');
 
         expect($check)->not->toBeFalse()
+            ->and($reduce)->not->toBeFalse()
             ->and($check)->toBeLessThan($reduce)
-            ->and($shell)->toContain('lvconvert -q -y --uncache --force');
+            // And only once the cache is positively detached.
+            ->and($detached)->toBeLessThan($reduce)
+            ->and($shell)->toContain('lvconvert -q -y --config "$CACHE_LVM_CONFIG" --uncache --force');
     });
 
     it('leaves alone an LVM disk whose volume group it cannot read', function () {
