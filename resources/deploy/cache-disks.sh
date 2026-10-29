@@ -95,6 +95,7 @@ cache_disk_inventory() {
         free=0
         system=""
         pool=""
+        tier=""
         foreign=""
 
         # The subtree: partitions, and the md/LVM volumes assembled from them, with whatever is
@@ -114,14 +115,19 @@ cache_disk_inventory() {
                 system=${system:-swap}
             fi
             # mdadm stores the array name as `{homehost}:{name}`, hence the suffix match.
+            # The first match wins: lsblk lists the disk (or its partition) before the volumes
+            # stacked on it, and that one says what the disk is to the pool. Every disk of a
+            # pool ends in the same XFS a few layers up, and letting that overwrite it read a
+            # fast tier as "(xfs)" — and the panel then saw no tier to offer SSD space to.
             if [ "$FSTYPE" = "xfs" ] && [ "$LABEL" = "$CACHE_POOL_LABEL" ]; then
-                pool="nukevideo cache (xfs)"
+                pool=${pool:-"nukevideo cache (xfs)"}
             elif [ "$FSTYPE" = "linux_raid_member" ] && [[ "$LABEL" == *"$CACHE_POOL_NAME" ]]; then
-                pool="nukevideo cache (raid member)"
+                pool=${pool:-"nukevideo cache (raid member)"}
             elif [ "$FSTYPE" = "linux_raid_member" ] && [[ "$LABEL" == *"$CACHE_FAST_NAME" ]]; then
-                pool="nukevideo cache (fast tier, raid member)"
+                pool=${pool:-"nukevideo cache (fast tier, raid member)"}
             elif [ "$FSTYPE" = "LVM2_member" ] && cache_in_vg "$KNAME"; then
-                pool="nukevideo cache (tier)"
+                pool=${pool:-"nukevideo cache (tier)"}
+                tier=1
             elif [ "$FSTYPE" = "LVM2_member" ] && [ "$(cache_vg_of "$KNAME")" = "?" ]; then
                 # A PV nobody could read the group of is somebody's data until shown otherwise:
                 # `foreign` is wiped when ticked, and this may be a tier of this very cache.
@@ -133,6 +139,12 @@ cache_disk_inventory() {
 
         # A disk carrying the pool is the pool's whatever else is on it, and none of the states
         # that get written to: neither `nukevideo` nor `system` is ever formatted or carved.
+        # Anything under the pool's volume group is a disk of a tiered pool, whatever it is to
+        # the pool itself: a member of the spinning array says so too. The panel reads "tier" as
+        # "SSD space can join this pool", and that holds as long as the group does — also once
+        # the fast tier is gone (a dead SSD, a grow cut short), which is exactly when the only
+        # disks left to say it are the spinning ones.
+        if [ -n "$pool" ] && [ -n "$tier" ] && [[ "$pool" != *tier* ]]; then pool="${pool%)}, tier)"; fi
         if [ -n "$pool" ]; then
             state="nukevideo"; detail="$pool${system:+, beside the system}"
         elif [ -n "$system" ]; then
@@ -267,7 +279,7 @@ cache_carve_partitions() {
             nr=$($SUDO partx -g -r -o NR,START "$d" | awk -v start="$((start * unit))" '$2 == start { print $1 }')
             [ -n "$nr" ] || { echo "ERROR: the partition written to $d is not in its table"; exit 1; }
             $SUDO partx -u --nr "$nr" "$d"
-            $SUDO udevadm settle 2>/dev/null || true
+            $SUDO udevadm settle --timeout=10 2>/dev/null || true
 
             for entry in /sys/block/"$name"/*/start; do
                 [ -e "$entry" ] && [ "$(cat "$entry")" = "$((start * unit))" ] && part="/dev/$(basename "$(dirname "$entry")")"
@@ -302,8 +314,9 @@ cache_has_dm_cache() {
 # LVM asked without its devices file. Where one is in use (RHEL 9 and its kin) LVM only sees
 # the disks it lists, and a pool disk missing from it — its ID changed, say — would read as a
 # stranger's. Older LVM, which has no such file, warns about the setting and carries on.
+CACHE_LVM_CONFIG='devices { use_devicesfile = 0 }'
 cache_lvm() {
-    $SUDO "$@" --config 'devices { use_devicesfile = 0 }' 2>/dev/null
+    $SUDO "$@" --config "$CACHE_LVM_CONFIG" 2>/dev/null
 }
 
 # The volume group a physical volume belongs to: its name, nothing for a PV in none, and `?`
@@ -451,7 +464,12 @@ cache_build_tiers() {
     # the data volume over the fast device too.
     cache_lvm lvs "$CACHE_VG/$CACHE_LV" >/dev/null \
         || $SUDO lvcreate -q -y -W y -n "$CACHE_LV" -l 100%PVS "$CACHE_VG" "$CACHE_BULK_DEVICE" >/dev/null
-    if [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" != "cache" ]; then
+    # Without dm-cache in the kernel (a stripped one booted since the pool was built) the attach
+    # would end the deploy on every run, and the volume under it would never mount: it is served
+    # from the spinning tier alone until the kernel has it again.
+    if [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" != "cache" ] && ! cache_has_dm_cache; then
+        echo "WARNING: this kernel has no dm-cache — the pool is served from the spinning tier alone, without its SSD/NVMe cache"
+    elif [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" != "cache" ]; then
         cache_lvm lvs "$CACHE_VG/fast" >/dev/null \
             || $SUDO lvcreate -q -y -W y -n fast -l 100%PVS "$CACHE_VG" "$CACHE_FAST_DEVICE" >/dev/null
         $SUDO lvconvert -q -y --type cache --cachevol "$CACHE_VG/fast" --cachemode writethrough \
@@ -467,7 +485,7 @@ cache_build_tiers() {
 # volume that would not activate gets fixed.
 cache_activate_data() {
     $SUDO lvchange -q -ay "$CACHE_VG/$CACHE_LV" || true
-    $SUDO udevadm settle 2>/dev/null || true
+    $SUDO udevadm settle --timeout=10 2>/dev/null || true
     if [ ! -b "$CACHE_LV_DEVICE" ]; then
         echo "ERROR: the cache volume $CACHE_VG/$CACHE_LV exists but will not activate (see above). Nothing was formatted."
         exit 1
@@ -497,9 +515,20 @@ cache_repair_tiers() {
 
     echo "WARNING: the fast tier of the cache pool is missing — detaching it and serving from the spinning tier"
     if [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" = "cache" ]; then
-        $SUDO lvconvert -q -y --uncache --force "$CACHE_VG/$CACHE_LV" >/dev/null 2>&1 || true
+        $SUDO lvconvert -q -y --config "$CACHE_LVM_CONFIG" --uncache --force "$CACHE_VG/$CACHE_LV" >/dev/null 2>&1 || true
     fi
-    $SUDO vgreduce -q --removemissing --force "$CACHE_VG" >/dev/null 2>&1 || true
+    # Never past a cache that is still attached: `--removemissing --force` removes every volume
+    # with an extent on the missing device, and a cached `data` is one — the whole pool. Asked
+    # positively: an `lvs` that failed answers nothing, and nothing is not "detached".
+    case "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" in
+        linear|striped) ;;
+        *)
+            echo "ERROR: the missing fast tier could not be detached from $CACHE_VG/$CACHE_LV — the pool is left exactly as it is"
+            exit 1 ;;
+    esac
+    # With the devices-file override like every read here: on a host whose devices file leaves
+    # the spinning array out, LVM would take that one for missing too, and remove the pool.
+    $SUDO vgreduce -q --config "$CACHE_LVM_CONFIG" --removemissing --force "$CACHE_VG" >/dev/null 2>&1 || true
     CACHE_FAST_DEVICE=""
 }
 
@@ -528,13 +557,107 @@ cache_array_active() {
 }
 
 cache_assemble_array() {
-    local members
+    local members member holder md stop_inactive=${3:-1}
     members=$(cache_array_members "$2")
     if ! cache_array_active "$1" && [ -n "$members" ]; then
+        # A member that showed up late at boot leaves udev's incremental assembly holding the
+        # others in an inactive array, and `--assemble` is then refused for every one of them
+        # (busy) — the pool would read its fast tier as missing and drop it. An inactive array
+        # serves nothing, so stopping it loses nothing — but only once nothing is still on its
+        # way: at boot, udev may be in the middle of building that very array (third argument 0).
+        [ "$stop_inactive" = 1 ] && for member in $members; do
+            for holder in /sys/class/block/"$(basename "$(readlink -f "$member")")"/holders/md*; do
+                [ -e "$holder" ] || continue
+                md=${holder##*/}
+                if [ "$(cat "/sys/block/$md/md/array_state" 2>/dev/null)" = "inactive" ]; then
+                    $SUDO mdadm --stop "/dev/$md" >/dev/null 2>&1 || true
+                fi
+            done
+        done
         # shellcheck disable=SC2086
         $SUDO mdadm --assemble "$1" $members || true
-        $SUDO udevadm settle 2>/dev/null || true
+        $SUDO udevadm settle --timeout=10 2>/dev/null || true
     fi
+}
+
+# A cached volume whose cache will not activate, with every disk present. LVM checks the fast
+# tier's metadata (`cache_check`) before it activates the volume, and refuses the whole of it
+# when that fails — which an unclean shutdown can leave behind. A node booted like that and
+# served two days off the OS disk, its pool intact and unmounted. The cache is writethrough,
+# so the spinning tier holds every block and dropping the cache loses only what it had warmed:
+# it is detached here, and cache_build_tiers attaches a fresh one. A writeback cache — never
+# one this deploy built — may hold the only copy of recent writes, and is left for a person.
+cache_drop_unreadable_cache() {
+    local err reason missing
+    [ "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" = "cache" ] || return 0
+    # A volume missing a disk will not activate for that reason, which no cache to drop explains.
+    missing=$(cache_lvm vgs --noheadings -o vg_missing_pv_count "$CACHE_VG" | tr -d ' ')
+    if [ "${missing:-1}" != 0 ]; then
+        echo "ERROR: $CACHE_VG is missing a disk (or could not be read) — its cache is left as it is"
+        exit 1
+    fi
+    # Asked of LVM, never read off /dev: a symlink udev has not written yet is not a volume that
+    # will not activate, and dropping the cache of a healthy pool over it would cost it all it
+    # had warmed.
+    cache_lv_active && return 0
+    err=$($SUDO lvchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG/$CACHE_LV" 2>&1) || true
+    cache_lv_active && return 0
+
+    if ! cache_lvm lvs --noheadings -o cache_mode "$CACHE_VG/$CACHE_LV" | grep -qw writethrough; then
+        echo "ERROR: the cache volume $CACHE_VG/$CACHE_LV will not activate, and its cache is not writethrough — left exactly as it is: ${err:-no reason given}"
+        exit 1
+    fi
+    echo "WARNING: the cache volume will not activate: ${err:-no reason given}"
+
+    cache_release_leftovers
+    err=$($SUDO lvchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG/$CACHE_LV" 2>&1) || true
+    if cache_lv_active; then
+        echo "   it activated once what an earlier attempt left mapped was released — the cache is kept"
+        return 0
+    fi
+    # That attempt failed the same way, and left its own mappings behind: the uncache would
+    # find the cache volume busy ("used by another device") and refuse.
+    cache_release_leftovers
+
+    if cache_has_dm_cache; then
+        reason="its fast tier's metadata failed the check, as an unclean shutdown can leave it"
+    else
+        reason="this kernel has no dm-cache"
+    fi
+    echo "WARNING: dropping the cache ($reason): it is writethrough, so the spinning tier holds every block. ${err:+LVM said: $err}"
+    # Plain first; forced only when LVM will not detach a cache it cannot read, which for a
+    # writethrough cache discards nothing the spinning tier does not have.
+    $SUDO lvconvert -q -y --config "$CACHE_LVM_CONFIG" --uncache "$CACHE_VG/$CACHE_LV" >/dev/null 2>&1 \
+        || $SUDO lvconvert -q -y --config "$CACHE_LVM_CONFIG" --uncache --force "$CACHE_VG/$CACHE_LV" >/dev/null
+    case "$(cache_lvm lvs --noheadings -o segtype "$CACHE_VG/$CACHE_LV" | tr -d ' ')" in
+        linear|striped) ;;
+        *)
+            echo "ERROR: the cache could not be detached from $CACHE_VG/$CACHE_LV — the pool is left as it is"
+            exit 1 ;;
+    esac
+}
+
+# What a failed activation leaves mapped, which blocks every later step ("activation is
+# prohibited while ... is active") and may be all that is wrong. Only this group's devices — the
+# VG name escaped as device-mapper does, and an LV name never starts with `-`, so a group whose
+# name merely starts the same is not matched — and only those nothing holds open: the volume
+# itself is not active, so nothing of it is in use. In passes, because one can hold another open
+# until it is gone itself; one that still will not go is left for LVM to name, rather than ending
+# the deploy here.
+cache_release_leftovers() {
+    local dev open
+    for _ in 1 2 3; do
+        for dev in $($SUDO dmsetup info -c --noheadings -o name 2>/dev/null | grep "^${CACHE_VG//-/--}-[^-]" || true); do
+            open=$($SUDO dmsetup info -c --noheadings -o open "$dev" 2>/dev/null | tr -d ' ')
+            if [ "$open" = 0 ]; then $SUDO dmsetup remove "$dev" 2>/dev/null || true; fi
+        done
+        $SUDO udevadm settle --timeout=10 2>/dev/null || true
+    done
+}
+
+# Whether the data volume is active, as LVM sees it: the fifth character of its attributes.
+cache_lv_active() {
+    [ "$(cache_lvm lvs --noheadings -o lv_attr "$CACHE_VG/$CACHE_LV" | tr -d ' ' | cut -c5)" = "a" ]
 }
 
 # Members found are assembled, never rebuilt: udev assembles the arrays and LVM activates the
@@ -566,6 +689,7 @@ cache_assemble_pool() {
         done
         $SUDO vgchange -q -ay "$CACHE_VG" >/dev/null 2>&1 || true
         cache_repair_tiers
+        cache_drop_unreadable_cache
         # A fast tier rebuilt by {@see cache_grow_fast_tier} whose deploy died before the array
         # joined the group: ours by its name, and attaching it is what that deploy was doing.
         if [ -z "$CACHE_FAST_DEVICE" ] && [ -n "$CACHE_BULK_DEVICE" ] && cache_array_active "$CACHE_FAST_MD"; then
@@ -611,9 +735,12 @@ cache_mount_pool() {
 
     $SUDO mkdir -p "$CACHE_DIRECTORY"
     # The marker lives on the pool itself, so it is absent exactly when the pool is not there.
-    # Hidden, and never a cache entry: nginx's cache loader only indexes files whose names are
-    # hex keys under its `levels` directories and ignores anything else it finds in the root.
-    $SUDO touch "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"
+    # A directory, not a file: nginx's cache loader deletes every file it finds under the cache
+    # that is not a cache entry, and a marker file was gone a minute after the edge started —
+    # its next restart then read a mounted pool as the OS disk. Directories it leaves alone.
+    # A marker file an earlier deploy left is replaced.
+    [ -d "$CACHE_DIRECTORY/$CACHE_POOL_MARKER" ] || $SUDO rm -f "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"
+    $SUDO mkdir -p "$CACHE_DIRECTORY/$CACHE_POOL_MARKER"
     CACHE_MOUNT=$CACHE_DIRECTORY
     df -h "$CACHE_POOL_MOUNT" | tail -1 | awk '{ print "Cache pool: " $2 " total, " $4 " free, mounted at " $6 }'
 }
@@ -684,6 +811,112 @@ RULES
     $SUDO udevadm control --reload 2>/dev/null || true
 }
 
+# The pool brought up at boot, before the edge: what LVM's own autoactivation gives up on. An
+# unclean shutdown can leave the fast tier failing LVM's metadata check, and LVM then refuses to
+# activate the volume at all — the host boots without its pool, `nofail` lets it, and the edge
+# caches on the OS disk until somebody notices and redeploys. That happened, for two days. This
+# does at boot what the deploy does: waits for the disks, drops a writethrough cache that will not
+# activate (the spinning tier holds every block), drops a fast tier whose device is gone, and
+# mounts. It attaches nothing and formats nothing — a fresh cache waits for the next deploy, and
+# a volume that will not come up is left for a person. Never fails the boot: the edge still
+# starts, capped, on whatever it finds.
+cache_boot_recover() {
+    local missing
+    if mountpoint -q "$CACHE_POOL_MOUNT"; then echo "cache pool already mounted"; return 0; fi
+    $SUDO udevadm settle --timeout=30 2>/dev/null || true
+
+    # A disk that is late is not a disk that is gone: a minute for every member to show up,
+    # assembling again on every pass for one the kernel had not seen yet. Done once the group is
+    # complete, or — a pool without tiers — once its filesystem is there.
+    local deadline=$(( $(date +%s) + 60 ))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        cache_assemble_array "$CACHE_POOL_MD" "$CACHE_POOL_NAME" 0
+        cache_assemble_array "$CACHE_FAST_MD" "$CACHE_FAST_NAME" 0
+        if cache_lvm vgs "$CACHE_VG" >/dev/null; then
+            missing=$(cache_lvm vgs --noheadings -o vg_missing_pv_count "$CACHE_VG" | tr -d ' ')
+            [ "${missing:-1}" = 0 ] && break
+        elif [ -n "$($SUDO blkid -c /dev/null -o device -t LABEL="$CACHE_POOL_LABEL" 2>/dev/null)" ]; then
+            break
+        fi
+        sleep 2
+        $SUDO udevadm settle --timeout=10 2>/dev/null || true
+    done
+    # Now an inactive half-array is not one still being built.
+    cache_assemble_array "$CACHE_POOL_MD" "$CACHE_POOL_NAME"
+    cache_assemble_array "$CACHE_FAST_MD" "$CACHE_FAST_NAME"
+
+    if cache_lvm vgs "$CACHE_VG" >/dev/null; then
+        $SUDO vgchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG" >/dev/null 2>&1 || true
+        # One subshell, the second only after the first: both end with `exit` on what they leave
+        # for a person — a spinning tier still missing, above all — and a cache is never dropped
+        # past that. In a subshell so that this still goes on to mount whatever did come up.
+        ( cache_repair_tiers && cache_drop_unreadable_cache ) || true
+        $SUDO lvchange -q -ay --config "$CACHE_LVM_CONFIG" "$CACHE_VG/$CACHE_LV" >/dev/null 2>&1 || true
+        $SUDO udevadm settle --timeout=10 2>/dev/null || true
+    fi
+
+    # Only what carries the pool's label, through its fstab line; never a device found blank.
+    mountpoint -q "$CACHE_POOL_MOUNT" || $SUDO mount "$CACHE_POOL_MOUNT" 2>/dev/null || true
+    if mountpoint -q "$CACHE_POOL_MOUNT"; then
+        echo "cache pool mounted at $CACHE_POOL_MOUNT"
+    else
+        echo "WARNING: the cache pool could not be brought up — the edge will start capped on the OS disk; redeploy the node"
+    fi
+    return 0
+}
+
+# Installs cache_boot_recover as a oneshot unit ordered before docker, so the edge never starts
+# ahead of its pool. The script is written from the functions this very deploy runs (`declare
+# -f`), not from a second copy that could drift from them, and replaced on every deploy.
+CACHE_BOOT_SCRIPT=${CACHE_BOOT_SCRIPT:-/usr/local/lib/nukevideo/cache-boot.sh}
+CACHE_BOOT_UNIT=${CACHE_BOOT_UNIT:-/etc/systemd/system/nukevideo-cache-boot.service}
+cache_install_boot_recovery() {
+    command -v systemctl >/dev/null 2>&1 || { echo "WARNING: no systemd — the pool is not brought up at boot if LVM gives up on it"; return 0; }
+    $SUDO mkdir -p "$(dirname "$CACHE_BOOT_SCRIPT")"
+    {
+        echo '#!/bin/bash'
+        echo "# Written by the nukevideo deploy (resources/deploy/cache-disks.sh, cache_boot_recover); replaced on every deploy."
+        echo 'SUDO=""'
+        echo 'ensure_commands() { :; }'
+        declare -p CACHE_POOL_MOUNT CACHE_POOL_LABEL CACHE_POOL_MD CACHE_POOL_NAME CACHE_FAST_MD CACHE_FAST_NAME \
+            CACHE_VG CACHE_LV CACHE_LV_DEVICE CACHE_LVM_CONFIG
+        declare -f cache_probe cache_lvm cache_vg_of cache_in_vg cache_is_fast cache_queue_of cache_has_dm_cache \
+            cache_array_members cache_array_active cache_assemble_array cache_repair_tiers \
+            cache_lv_active cache_release_leftovers cache_drop_unreadable_cache cache_boot_recover
+        echo 'cache_boot_recover'
+    } | $SUDO tee "$CACHE_BOOT_SCRIPT" >/dev/null
+    $SUDO chmod 0755 "$CACHE_BOOT_SCRIPT"
+    $SUDO tee "$CACHE_BOOT_UNIT" >/dev/null <<UNIT
+# Written by the nukevideo deploy (resources/deploy/cache-disks.sh, cache_install_boot_recovery).
+[Unit]
+Description=NukeVideo edge cache pool, brought up before the edge
+After=local-fs.target systemd-udev-trigger.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash $CACHE_BOOT_SCRIPT
+# Bounded well inside this: a minute of waiting for the disks, every udev settle capped at
+# ten seconds. A stop past it would land in the middle of an lvconvert.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+    $SUDO systemctl daemon-reload 2>/dev/null || true
+    $SUDO systemctl enable nukevideo-cache-boot.service >/dev/null 2>&1 \
+        || echo "WARNING: could not enable nukevideo-cache-boot.service — the pool is not brought up at boot if LVM gives up on it"
+}
+
+# A host that no longer has a pool (an operator took it apart) keeps no unit looking for one.
+cache_remove_boot_recovery() {
+    [ -e "$CACHE_BOOT_UNIT" ] || return 0
+    $SUDO systemctl disable nukevideo-cache-boot.service >/dev/null 2>&1 || true
+    $SUDO rm -f "$CACHE_BOOT_UNIT" "$CACHE_BOOT_SCRIPT"
+    $SUDO systemctl daemon-reload 2>/dev/null || true
+}
+
 # SSD/NVMe space next to an existing tiered pool, added to its fast tier: a disk installed since
 # the pool was built, or the unpartitioned space an operator freed on the system disk. The pool
 # itself is never rebuilt — growing the RAID 0 under it would mean reformatting it, and a
@@ -720,7 +953,10 @@ cache_grow_fast_tier() {
 
     if [ -n "$CACHE_FAST_DEVICE" ]; then
         if [ "$(readlink -f "$CACHE_FAST_DEVICE")" = "$(readlink -f "$CACHE_FAST_MD" 2>/dev/null || true)" ]; then
-            members=$(cache_array_members "$CACHE_FAST_NAME")
+            # The array's own members, not every device carrying its name: a former member left
+            # in the box carries it too, and would be zeroed and taken in without being ticked.
+            members=$($SUDO mdadm --detail "$CACHE_FAST_DEVICE" | awk '/active sync/ { print $NF }')
+            [ -n "$members" ] || { echo "ERROR: could not read the members of $CACHE_FAST_DEVICE — the pool is left as it is"; exit 1; }
         else
             members=$CACHE_FAST_DEVICE
         fi
@@ -760,6 +996,17 @@ cache_grow_fast_tier() {
 # cache: it joins that ({@see cache_grow_fast_tier}).
 provision_cache_pool() {
     echo "=== Cache disks ==="
+    # One deploy at a time on the host, whichever panel sent it: the lock the panel takes is per
+    # node row, and a development and a production panel may both deploy to one host. Held
+    # until the deploy exits. /run/lock is writable without sudo; where it is missing the
+    # deploy carries on unlocked, as it always did.
+    if [ -d /run/lock ] && [ -w /run/lock ]; then
+        exec 9>/run/lock/nukevideo-cache-disks.lock
+        if ! flock -w 1800 9; then
+            echo "ERROR: another deploy has held the cache disks of this host for 30 minutes — nothing was changed"
+            exit 1
+        fi
+    fi
     ensure_commands mdadm=mdadm mkfs.xfs=xfsprogs
     # What reads a tier of this cache back, and tells it from somebody else's LVM disk.
     ensure_commands lvcreate=lvm2 || echo "Continuing without LVM: LVM disks are left untouched, and a mix of disk kinds makes one pool"

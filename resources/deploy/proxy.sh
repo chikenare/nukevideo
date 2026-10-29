@@ -42,9 +42,11 @@ provision_cache_pool
 if [ -z "$CACHE_MOUNT" ]; then
     CACHE_MOUNT=$CACHE_VOLUME
     CACHE_MAX_SIZE=$CACHE_FALLBACK_MAX_SIZE
+    cache_remove_boot_recovery
 else
     CACHE_EXPECT_POOL=1
     cache_tune_pool
+    cache_install_boot_recovery
 fi
 
 # What the host needs for an edge whose cache lives on disk. Written to one file of ours, so
